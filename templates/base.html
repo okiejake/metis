@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ title if title else "Metis Finance" }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css?v=20260302a" />
+  </head>
+  <body>
+    <div class="app-glow app-glow-one" aria-hidden="true"></div>
+    <div class="app-glow app-glow-two" aria-hidden="true"></div>
+    <div class="app-grid" aria-hidden="true"></div>
+
+    {% set user_initial = (current_user.display_name[:1] if current_user.display_name else '?')|upper %}
+    {% set active_path = request.url.path %}
+    <header class="site-header">
+      <div class="site-header-main">
+        <div class="brand-block">
+          <p class="brand-kicker">Financial Clarity OS</p>
+          <div class="brand-row">
+            <h1>metis</h1>
+          </div>
+          <nav class="site-nav" aria-label="Primary">
+            <a href="/dashboard" class="{{ 'active' if active_path.startswith('/dashboard') else '' }}">Dashboard</a>
+            <a href="/ledger" class="{{ 'active' if active_path.startswith('/ledger') else '' }}">Ledger Forecast</a>
+            <a href="/recurring" class="{{ 'active' if active_path.startswith('/recurring') else '' }}">Recurring Items</a>
+            <a href="/categories" class="{{ 'active' if active_path.startswith('/categories') else '' }}">Categories</a>
+            <a href="/settings" class="{{ 'active' if active_path.startswith('/settings') else '' }}">Settings</a>
+          </nav>
+        </div>
+
+        <div class="header-actions">
+          <button type="button" class="button-link amount-toggle-button" id="amount-toggle-button">
+            <i data-lucide="eye-off" class="menu-icon" aria-hidden="true"></i>
+            Hide Amounts
+          </button>
+
+          <details class="user-menu">
+            <summary class="user-menu-trigger" aria-label="Open user menu">{{ user_initial }}</summary>
+            <div class="user-menu-dropdown">
+              <p class="user-menu-name">{{ current_user.display_name }}</p>
+              {% if current_user.email %}
+              <p class="user-menu-email">{{ current_user.email }}</p>
+              {% endif %}
+
+              <label class="user-menu-theme">
+                Theme
+                <select name="theme" aria-label="Theme selection">
+                  <option value="light">Light</option>
+                  <option value="dark">Dark</option>
+                </select>
+              </label>
+
+              <a href="/settings?section=user-management" class="user-menu-action">
+                <i data-lucide="settings-2" class="menu-icon" aria-hidden="true"></i>
+                Settings
+              </a>
+              <button type="button" class="user-menu-action buttonless">
+                <i data-lucide="log-out" class="menu-icon" aria-hidden="true"></i>
+                Logout
+              </button>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      {% if show_forecast_window_form %}
+      <form method="get" action="{{ window_form_action }}" class="header-window-form" id="header-window-form">
+        <input type="hidden" name="start" value="{{ start }}" id="header-window-start" />
+        <input type="hidden" name="end" value="{{ end }}" id="header-window-end" />
+
+        <button type="button" class="window-range-trigger" id="open-window-calendar" aria-label="Open date range dialog">
+          <span class="window-range-label" id="window-range-label"></span>
+        </button>
+
+        <p class="window-presets" id="window-presets">
+          <button type="button" class="window-preset-link" data-window-preset="thisyear">This Year</button>
+          <button type="button" class="window-preset-link" data-window-preset="ytd">YTD</button>
+          <button type="button" class="window-preset-link" data-window-preset="rolling12">Rolling 12M</button>
+          <button type="button" class="window-preset-link" data-window-preset="rolling6">Rolling 6M</button>
+          <button type="button" class="window-preset-link" data-window-preset="next90">Next 90D</button>
+        </p>
+      </form>
+      <dialog id="window-calendar-dialog" class="calendar-dialog">
+        <div class="calendar-dialog-shell">
+          <div class="calendar-dialog-head">
+            <h3>Select Date Range</h3>
+            <button type="button" class="button-link" id="calendar-close">Close</button>
+          </div>
+          <div class="calendar-nav">
+            <button type="button" class="button-link" id="calendar-prev">Back</button>
+            <p id="calendar-month-span"></p>
+            <button type="button" class="button-link" id="calendar-next">Forward</button>
+          </div>
+          <p class="calendar-selected-range" id="calendar-selected-range"></p>
+          <div class="calendar-months">
+            <section class="calendar-month" id="calendar-month-1"></section>
+            <section class="calendar-month" id="calendar-month-2"></section>
+          </div>
+          <div class="calendar-actions">
+            <button type="button" class="button-link" id="calendar-cancel">Cancel</button>
+            <button type="button" class="button-emphasis" id="calendar-apply">Apply Range</button>
+          </div>
+        </div>
+      </dialog>
+      {% endif %}
+    </header>
+
+    <main class="container">
+      {% if message %}
+      <div class="flash {{ 'error' if is_error else 'success' }}">{{ message }}</div>
+      {% endif %}
+
+      {% block content %}{% endblock %}
+    </main>
+
+    {% if show_forecast_window_form %}
+    <script>
+      (() => {
+        const form = document.getElementById('header-window-form');
+        const startInput = document.getElementById('header-window-start');
+        const endInput = document.getElementById('header-window-end');
+        const openButton = document.getElementById('open-window-calendar');
+        const label = document.getElementById('window-range-label');
+        const presets = Array.from(document.querySelectorAll('[data-window-preset]'));
+        const presetsWrap = document.getElementById('window-presets');
+        const dialog = document.getElementById('window-calendar-dialog');
+
+        if (!form || !startInput || !endInput || !openButton || !label) {
+          return;
+        }
+
+        function parseIsoDate(value) {
+          if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+            return null;
+          }
+          const [year, month, day] = value.split('-').map((part) => Number.parseInt(part, 10));
+          if (!year || !month || !day) {
+            return null;
+          }
+          return new Date(year, month - 1, day);
+        }
+
+        function startOfMonth(dateValue) {
+          return new Date(dateValue.getFullYear(), dateValue.getMonth(), 1);
+        }
+
+        function addDays(dateValue, days) {
+          return new Date(dateValue.getFullYear(), dateValue.getMonth(), dateValue.getDate() + days);
+        }
+
+        function toIsoDate(dateValue) {
+          const year = String(dateValue.getFullYear());
+          const month = String(dateValue.getMonth() + 1).padStart(2, '0');
+          const day = String(dateValue.getDate()).padStart(2, '0');
+          return `${year}-${month}-${day}`;
+        }
+
+        function fmtDate(dateValue) {
+          return dateValue.toLocaleDateString(undefined, {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+          });
+        }
+
+        function isSameDay(left, right) {
+          return (
+            left.getFullYear() === right.getFullYear()
+            && left.getMonth() === right.getMonth()
+            && left.getDate() === right.getDate()
+          );
+        }
+
+        function isBetween(dateValue, startValue, endValue) {
+          if (!startValue || !endValue) {
+            return false;
+          }
+          const time = dateValue.getTime();
+          return time > startValue.getTime() && time < endValue.getTime();
+        }
+
+        function ensureOrderedRange(startValue, endValue) {
+          if (startValue && endValue && endValue < startValue) {
+            return [endValue, startValue];
+          }
+          return [startValue, endValue];
+        }
+
+        function addMonths(dateValue, count) {
+          return new Date(dateValue.getFullYear(), dateValue.getMonth() + count, 1);
+        }
+
+        function normalizeDate(dateValue) {
+          return new Date(dateValue.getFullYear(), dateValue.getMonth(), dateValue.getDate());
+        }
+
+        function rangeForPreset(preset) {
+          const today = normalizeDate(new Date());
+          let presetStart = today;
+          let presetEnd = today;
+          if (preset === 'thisyear') {
+            presetStart = new Date(today.getFullYear(), 0, 1);
+            presetEnd = new Date(today.getFullYear(), 11, 31);
+          } else if (preset === 'ytd') {
+            presetStart = new Date(today.getFullYear(), 0, 1);
+          } else if (preset === 'rolling12') {
+            presetStart = addDays(today, -364);
+          } else if (preset === 'rolling6') {
+            presetStart = addDays(today, -179);
+          } else if (preset === 'next90') {
+            presetEnd = addDays(today, 89);
+          }
+          return ensureOrderedRange(presetStart, presetEnd);
+        }
+
+        function updatePresetState() {
+          const currentStart = startInput.value;
+          const currentEnd = endInput.value;
+          presets.forEach((presetButton) => {
+            const [presetStart, presetEnd] = rangeForPreset(presetButton.dataset.windowPreset || '');
+            const isActive = currentStart === toIsoDate(presetStart) && currentEnd === toIsoDate(presetEnd);
+            presetButton.classList.toggle('is-active', isActive);
+          });
+        }
+
+        function submitWindow() {
+          if (typeof form.requestSubmit === 'function') {
+            form.requestSubmit();
+          } else {
+            form.submit();
+          }
+        }
+
+        function updateHeaderLabel() {
+          const currentStart = parseIsoDate(startInput.value);
+          const currentEnd = parseIsoDate(endInput.value);
+          if (currentStart && currentEnd) {
+            label.textContent = `${fmtDate(currentStart)} - ${fmtDate(currentEnd)}`;
+          } else {
+            label.textContent = 'Choose a forecast window';
+          }
+          updatePresetState();
+        }
+
+        function applyPreset(preset) {
+          const [presetStart, presetEnd] = rangeForPreset(preset);
+          startInput.value = toIsoDate(presetStart);
+          endInput.value = toIsoDate(presetEnd);
+          updateHeaderLabel();
+          submitWindow();
+        }
+
+        presets.forEach((presetButton) => {
+          presetButton.addEventListener('click', () => {
+            applyPreset(presetButton.dataset.windowPreset || 'ytd');
+          });
+        });
+
+        if (!dialog || typeof dialog.showModal !== 'function') {
+          startInput.type = 'date';
+          endInput.type = 'date';
+          startInput.required = true;
+          endInput.required = true;
+          startInput.classList.add('header-fallback-date');
+          endInput.classList.add('header-fallback-date');
+
+          const fallbackWrap = document.createElement('div');
+          fallbackWrap.className = 'header-fallback-wrap';
+          fallbackWrap.append(startInput, endInput);
+          form.insertBefore(fallbackWrap, presetsWrap);
+
+          openButton.remove();
+
+          const fallbackApply = document.createElement('button');
+          fallbackApply.type = 'submit';
+          fallbackApply.className = 'button-emphasis';
+          fallbackApply.textContent = 'Apply';
+          form.appendChild(fallbackApply);
+          updateHeaderLabel();
+          return;
+        }
+
+        const closeButton = document.getElementById('calendar-close');
+        const cancelButton = document.getElementById('calendar-cancel');
+        const applyButton = document.getElementById('calendar-apply');
+        const prevButton = document.getElementById('calendar-prev');
+        const nextButton = document.getElementById('calendar-next');
+        const monthSpan = document.getElementById('calendar-month-span');
+        const selectedRangeLabel = document.getElementById('calendar-selected-range');
+        const monthOne = document.getElementById('calendar-month-1');
+        const monthTwo = document.getElementById('calendar-month-2');
+
+        if (
+          !closeButton || !cancelButton || !applyButton || !prevButton || !nextButton
+          || !monthSpan || !selectedRangeLabel || !monthOne || !monthTwo
+        ) {
+          return;
+        }
+
+        const weekdayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+        let selectedStart = parseIsoDate(startInput.value);
+        let selectedEnd = parseIsoDate(endInput.value);
+        [selectedStart, selectedEnd] = ensureOrderedRange(selectedStart, selectedEnd);
+        let baseMonth = startOfMonth(selectedStart || new Date());
+
+        function updateSelectedRangeLabel() {
+          if (selectedStart && selectedEnd) {
+            selectedRangeLabel.textContent = `${fmtDate(selectedStart)} - ${fmtDate(selectedEnd)}`;
+            return;
+          }
+          if (selectedStart) {
+            selectedRangeLabel.textContent = `${fmtDate(selectedStart)} - select an end date`;
+            return;
+          }
+          selectedRangeLabel.textContent = 'Pick a start and end date.';
+        }
+
+        function handleDatePick(dateValue) {
+          if (!selectedStart || (selectedStart && selectedEnd)) {
+            selectedStart = dateValue;
+            selectedEnd = null;
+          } else if (dateValue < selectedStart) {
+            selectedStart = dateValue;
+          } else {
+            selectedEnd = dateValue;
+          }
+          [selectedStart, selectedEnd] = ensureOrderedRange(selectedStart, selectedEnd);
+          renderCalendars();
+        }
+
+        function renderMonth(target, monthValue) {
+          const monthStart = new Date(monthValue.getFullYear(), monthValue.getMonth(), 1);
+          const monthName = monthStart.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+          const firstWeekday = monthStart.getDay();
+          const daysInMonth = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0).getDate();
+
+          const fragment = document.createDocumentFragment();
+          const title = document.createElement('h4');
+          title.textContent = monthName;
+          fragment.appendChild(title);
+
+          const weekdayRow = document.createElement('div');
+          weekdayRow.className = 'calendar-weekdays';
+          weekdayLabels.forEach((weekday) => {
+            const cell = document.createElement('span');
+            cell.textContent = weekday;
+            weekdayRow.appendChild(cell);
+          });
+          fragment.appendChild(weekdayRow);
+
+          const grid = document.createElement('div');
+          grid.className = 'calendar-grid';
+          for (let i = 0; i < firstWeekday; i += 1) {
+            const spacer = document.createElement('span');
+            spacer.className = 'calendar-spacer';
+            grid.appendChild(spacer);
+          }
+
+          for (let day = 1; day <= daysInMonth; day += 1) {
+            const dateValue = new Date(monthStart.getFullYear(), monthStart.getMonth(), day);
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'calendar-day';
+            button.textContent = String(day);
+            if (selectedStart && isSameDay(dateValue, selectedStart)) {
+              button.classList.add('is-start');
+            }
+            if (selectedEnd && isSameDay(dateValue, selectedEnd)) {
+              button.classList.add('is-end');
+            }
+            if (isBetween(dateValue, selectedStart, selectedEnd)) {
+              button.classList.add('in-range');
+            }
+            button.addEventListener('click', () => handleDatePick(dateValue));
+            grid.appendChild(button);
+          }
+
+          fragment.appendChild(grid);
+          target.replaceChildren(fragment);
+        }
+
+        function renderCalendars() {
+          const monthA = baseMonth;
+          const monthB = addMonths(baseMonth, 1);
+          monthSpan.textContent = `${monthA.toLocaleDateString(undefined, { month: 'short', year: 'numeric' })} - ${monthB.toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}`;
+          updateSelectedRangeLabel();
+          renderMonth(monthOne, monthA);
+          renderMonth(monthTwo, monthB);
+        }
+
+        prevButton.addEventListener('click', () => {
+          baseMonth = addMonths(baseMonth, -1);
+          renderCalendars();
+        });
+
+        nextButton.addEventListener('click', () => {
+          baseMonth = addMonths(baseMonth, 1);
+          renderCalendars();
+        });
+
+        function closeDialog() {
+          dialog.close();
+        }
+
+        closeButton.addEventListener('click', closeDialog);
+        cancelButton.addEventListener('click', closeDialog);
+
+        openButton.addEventListener('click', () => {
+          selectedStart = parseIsoDate(startInput.value);
+          selectedEnd = parseIsoDate(endInput.value);
+          [selectedStart, selectedEnd] = ensureOrderedRange(selectedStart, selectedEnd);
+          baseMonth = startOfMonth(selectedStart || new Date());
+          renderCalendars();
+          dialog.showModal();
+        });
+
+        applyButton.addEventListener('click', () => {
+          let finalStart = selectedStart || parseIsoDate(startInput.value) || new Date();
+          let finalEnd = selectedEnd || finalStart;
+          [finalStart, finalEnd] = ensureOrderedRange(finalStart, finalEnd);
+          startInput.value = toIsoDate(finalStart);
+          endInput.value = toIsoDate(finalEnd);
+          updateHeaderLabel();
+          dialog.close();
+          submitWindow();
+        });
+
+        updateHeaderLabel();
+      })();
+    </script>
+    {% endif %}
+
+    <script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js"></script>
+    <script>
+      (() => {
+        document.body.classList.add('is-ready');
+
+        const amountToggleButton = document.getElementById('amount-toggle-button');
+        const amountToggleStorageKey = 'metis_hide_amounts';
+        let amountsHidden = window.localStorage.getItem(amountToggleStorageKey) === '1';
+
+        function renderAmountToggle() {
+          if (!amountToggleButton) {
+            return;
+          }
+          document.body.classList.toggle('amounts-hidden', amountsHidden);
+          amountToggleButton.innerHTML = amountsHidden
+            ? '<i data-lucide="eye" class="menu-icon" aria-hidden="true"></i>Show Amounts'
+            : '<i data-lucide="eye-off" class="menu-icon" aria-hidden="true"></i>Hide Amounts';
+        }
+
+        if (amountToggleButton) {
+          amountToggleButton.addEventListener('click', () => {
+            amountsHidden = !amountsHidden;
+            window.localStorage.setItem(amountToggleStorageKey, amountsHidden ? '1' : '0');
+            renderAmountToggle();
+            if (window.lucide && typeof window.lucide.createIcons === 'function') {
+              window.lucide.createIcons();
+            }
+          });
+          renderAmountToggle();
+        }
+
+        if (window.lucide && typeof window.lucide.createIcons === 'function') {
+          window.lucide.createIcons();
+        }
+
+        const allDetails = Array.from(document.querySelectorAll('details'));
+        if (!allDetails.length) {
+          return;
+        }
+
+        document.addEventListener('click', (event) => {
+          allDetails.forEach((detailsEl) => {
+            if (!detailsEl.contains(event.target)) {
+              detailsEl.removeAttribute('open');
+            }
+          });
+        });
+      })();
+    </script>
+  </body>
+</html>

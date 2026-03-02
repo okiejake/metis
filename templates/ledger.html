@@ -1,0 +1,277 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-intro">
+  <div>
+    <p class="page-kicker">Ledger Forecast</p>
+    <h2>Plan day-by-day cash flow with confidence.</h2>
+    <p>Add one-off transactions, monitor monthly summaries, and catch negative trends early.</p>
+  </div>
+  <div class="intro-badge-stack">
+    {% if first_negative_date %}
+    <span class="stat-chip danger">First negative: {{ first_negative_date }}</span>
+    {% else %}
+    <span class="stat-chip success">No projected negative day</span>
+    {% endif %}
+  </div>
+</section>
+
+<section class="summary-grid compact-grid">
+  <article class="card compact-card">
+    <h3>Starting Balance</h3>
+    <p class="amount-value">${{ starting_balance|currency }}</p>
+  </article>
+  <article class="card compact-card">
+    <h3>Total Income</h3>
+    <p class="amount-value positive">${{ total_income|currency }}</p>
+  </article>
+  <article class="card compact-card">
+    <h3>Total Expenses</h3>
+    <p class="amount-value negative">${{ total_expense|currency }}</p>
+  </article>
+  <article class="card compact-card">
+    <h3>Projected End Balance</h3>
+    <p class="amount-value {{ 'negative' if projected_end_balance < 0 else '' }}">${{ projected_end_balance|currency }}</p>
+  </article>
+</section>
+
+{% if first_negative_date %}
+<section class="panel warning">
+  <strong>Cash-flow alert:</strong> projected balance first drops below zero on {{ first_negative_date }}.
+</section>
+{% endif %}
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Ledger</h2>
+    <p>Hover a row and tap + to insert a transaction inline.</p>
+  </div>
+  {% if rows %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Description</th>
+          <th>Category</th>
+          <th>Source</th>
+          <th>Income</th>
+          <th>Expense</th>
+          <th>Running Balance</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        {% set default_insert_date = row.insert_default_date.isoformat() if row.insert_default_date else (row.date.isoformat() if row.date else today_iso) %}
+        {% if row.row_type == 'month_summary' %}
+        <tr class="ledger-row month-summary-row">
+          <td>{{ row.month_label }}</td>
+          <td><strong>Month Summary</strong> ({{ row.tx_count }} tx)</td>
+          <td>-</td>
+          <td>
+            Net:
+            <span class="amount-value {{ 'negative' if row.month_net < 0 else 'positive' }}">
+              ${{ row.month_net|currency }}
+            </span>
+          </td>
+          <td class="amount-value">${{ row.income|currency }}</td>
+          <td class="amount-value">${{ row.expense|currency }}</td>
+          <td class="amount-value {{ 'negative' if row.running_balance < 0 else '' }}">${{ row.running_balance|currency }}</td>
+          <td class="row-action-cell"></td>
+        </tr>
+        {% else %}
+        <tr class="ledger-row">
+          <td>{{ row.date }}</td>
+          <td>{{ row.description }}</td>
+          <td>
+            {% if row.category_name %}
+            <span class="category-pill">
+              <span class="category-dot" style="background: {{ row.category_color if row.category_color else '#64748b' }};"></span>
+              {{ row.category_name }}
+            </span>
+            {% else %}
+            -
+            {% endif %}
+          </td>
+          <td><span class="table-pill">{{ row.source }}</span></td>
+          <td class="amount-value">{% if row.income > 0 %}${{ row.income|currency }}{% else %}-{% endif %}</td>
+          <td class="amount-value">{% if row.expense > 0 %}${{ row.expense|currency }}{% else %}-{% endif %}</td>
+          <td class="amount-value {{ 'negative' if row.running_balance < 0 else '' }}">${{ row.running_balance|currency }}</td>
+          <td class="row-action-cell">
+            {% if row.source == 'manual' %}
+            <details class="row-action-menu">
+              <summary class="row-action-trigger" aria-label="Open transaction actions">
+                <i data-lucide="settings-2" class="menu-icon" aria-hidden="true"></i>
+              </summary>
+              <div class="row-action-dropdown">
+                <a href="/manual/{{ row.id }}/edit?start={{ start }}&end={{ end }}" class="row-action-item">Edit</a>
+                <form method="post" action="/manual/{{ row.id }}/delete" class="row-action-item-form" onsubmit="return confirm('Delete this one-off transaction?')">
+                  <input type="hidden" name="start" value="{{ start }}" />
+                  <input type="hidden" name="end" value="{{ end }}" />
+                  <button type="submit" class="row-action-item danger-link">Delete</button>
+                </form>
+              </div>
+            </details>
+            {% endif %}
+          </td>
+        </tr>
+        {% endif %}
+
+        <tr class="insert-trigger-row" data-default-date="{{ default_insert_date }}">
+          <td colspan="8">
+            <button type="button" class="insert-plus js-insert-trigger" aria-label="Insert transaction on {{ default_insert_date }}">
+              <i data-lucide="plus" class="menu-icon" aria-hidden="true"></i>
+            </button>
+          </td>
+        </tr>
+        {% endfor %}
+
+        <tr id="inline-insert-row" class="inline-insert-row hidden">
+          <td colspan="8">
+            <form method="post" action="/manual" class="inline-insert-form" id="inline-insert-form">
+              <input type="hidden" name="start" value="{{ start }}" />
+              <input type="hidden" name="end" value="{{ end }}" />
+
+              <label class="inline-field inline-field-name">
+                Name
+                <input type="text" name="name" placeholder="Extra income / one-time expense" required />
+              </label>
+
+              <label class="inline-field inline-field-type">
+                Type
+                <select name="kind" required>
+                  <option value="expense">Expense</option>
+                  <option value="income">Income</option>
+                </select>
+              </label>
+
+              <label class="inline-field inline-field-amount">
+                Amount
+                <input type="number" step="0.01" min="0.01" name="amount" required />
+              </label>
+
+              <label class="inline-field inline-field-category">
+                Category
+                <select name="category_id">
+                  <option value="">No category</option>
+                  {% for category in categories %}
+                  <option value="{{ category.id }}">{{ category.name }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+
+              <label class="checkbox-field inline-field inline-field-recurring">
+                <span class="checkbox-input-wrap">
+                  <input type="checkbox" name="make_recurring" value="1" />
+                  Make recurring monthly
+                </span>
+              </label>
+
+              <label class="inline-field inline-field-date">
+                Date
+                <input type="date" name="tx_date" id="inline-tx-date" value="{{ today_iso }}" required />
+              </label>
+
+              <div class="inline-insert-actions">
+                <button type="submit" class="button-emphasis">Add Transaction</button>
+                <button type="button" class="button-link" id="inline-insert-cancel">Cancel</button>
+              </div>
+            </form>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-state">No transactions in this date range.</p>
+  {% endif %}
+</section>
+
+<script>
+  (() => {
+    const insertRow = document.getElementById('inline-insert-row');
+    const insertForm = document.getElementById('inline-insert-form');
+    const triggerButtons = document.querySelectorAll('.js-insert-trigger');
+    const dateInput = document.getElementById('inline-tx-date');
+    const cancelButton = document.getElementById('inline-insert-cancel');
+
+    if (!insertRow || !insertForm || !triggerButtons.length || !dateInput || !cancelButton) {
+      return;
+    }
+
+    const nameInput = insertForm.querySelector('input[name="name"]');
+    let activeTriggerRow = null;
+
+    function parseIsoDate(value) {
+      if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        return null;
+      }
+      const [year, month, day] = value.split('-').map((part) => Number.parseInt(part, 10));
+      if (!year || !month || !day) {
+        return null;
+      }
+      return new Date(year, month - 1, day);
+    }
+
+    function toIsoDate(dateValue) {
+      const year = String(dateValue.getFullYear());
+      const month = String(dateValue.getMonth() + 1).padStart(2, '0');
+      const day = String(dateValue.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+
+    function syncDateDisplay(dateValue) {
+      if (!dateValue) {
+        return;
+      }
+      dateInput.value = toIsoDate(dateValue);
+    }
+
+    function closeComposer() {
+      insertRow.classList.add('hidden');
+      insertRow.classList.remove('open');
+      if (activeTriggerRow) {
+        activeTriggerRow.classList.remove('insert-target');
+      }
+      activeTriggerRow = null;
+    }
+
+    triggerButtons.forEach((button) => {
+      button.addEventListener('click', () => {
+        const triggerRow = button.closest('.insert-trigger-row');
+        if (!triggerRow) {
+          return;
+        }
+
+        const isSameOpenRow = !insertRow.classList.contains('hidden') && activeTriggerRow === triggerRow;
+        if (isSameOpenRow) {
+          closeComposer();
+          return;
+        }
+
+        const defaultDate = parseIsoDate(triggerRow.dataset.defaultDate || '') || parseIsoDate('{{ today_iso }}');
+        triggerRow.after(insertRow);
+        insertRow.classList.remove('hidden');
+        insertRow.classList.add('open');
+        document.querySelectorAll('.insert-trigger-row.insert-target').forEach((row) => row.classList.remove('insert-target'));
+        triggerRow.classList.add('insert-target');
+        activeTriggerRow = triggerRow;
+        syncDateDisplay(defaultDate);
+
+        if (nameInput) {
+          nameInput.focus();
+        }
+      });
+    });
+
+    cancelButton.addEventListener('click', closeComposer);
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !insertRow.classList.contains('hidden')) {
+        closeComposer();
+      }
+    });
+
+    syncDateDisplay(parseIsoDate('{{ today_iso }}'));
+  })();
+</script>
+{% endblock %}

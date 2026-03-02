@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-intro">
+  <div>
+    <p class="page-kicker">Edit Transaction</p>
+    <h2>Update one-off ledger details.</h2>
+    <p>Adjust amount, category, or date and re-run the forecast instantly.</p>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Edit One-Off Transaction</h2>
+    <p>Changes save directly to this forecast window.</p>
+  </div>
+  <form method="post" action="/manual/{{ tx.id }}/edit" class="grid-form compact">
+    <input type="hidden" name="start" value="{{ start }}" />
+    <input type="hidden" name="end" value="{{ end }}" />
+
+    <label>
+      Name
+      <input type="text" name="name" value="{{ tx.name }}" required />
+    </label>
+
+    <label>
+      Type
+      <select name="kind" required>
+        <option value="expense" {{ 'selected' if tx.kind == 'expense' else '' }}>Expense</option>
+        <option value="income" {{ 'selected' if tx.kind == 'income' else '' }}>Income</option>
+      </select>
+    </label>
+
+    <label>
+      Amount
+      <input type="number" step="0.01" min="0.01" name="amount" value="{{ '%.2f'|format(tx.amount) }}" required />
+    </label>
+
+    <label>
+      Category
+      <select name="category_id">
+        <option value="">No category</option>
+        {% for category in categories %}
+        <option value="{{ category.id }}" {{ 'selected' if tx.category_id == category.id else '' }}>{{ category.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label>
+      Date
+      <input type="date" name="tx_date" value="{{ tx.tx_date }}" required />
+    </label>
+
+    <label class="checkbox-field full-row">
+      <span class="checkbox-input-wrap">
+        <input type="checkbox" name="make_recurring" value="1" />
+        Convert to recurring monthly and remove this one-off transaction
+      </span>
+    </label>
+
+    <div class="full-row actions">
+      <button type="submit" class="button-emphasis">Save Changes</button>
+      <a class="button-link" href="/ledger?start={{ start }}&end={{ end }}">Cancel</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

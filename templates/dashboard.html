@@ -1,0 +1,341 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-intro">
+  <div>
+    <p class="page-kicker">Dashboard</p>
+    <h2>See where your cash position is headed.</h2>
+    <p>Forecasted balances, monthly movement, and early warning signals in one view.</p>
+  </div>
+  <div class="intro-badge-stack">
+    {% if first_negative_date %}
+    <span class="stat-chip danger">First negative: {{ first_negative_date }}</span>
+    {% else %}
+    <span class="stat-chip success">No projected negative day</span>
+    {% endif %}
+  </div>
+</section>
+
+<section class="summary-grid">
+  <article class="card metric-card">
+    <h3>Starting Balance</h3>
+    <p class="amount-value">${{ starting_balance|currency }}</p>
+    <span class="card-foot">Opening cash position</span>
+  </article>
+  <article class="card metric-card">
+    <h3>Period Net</h3>
+    <p class="amount-value {{ 'negative' if period_net < 0 else 'positive' }}">${{ period_net|currency }}</p>
+    <span class="card-foot">Income minus expenses</span>
+  </article>
+  <article class="card metric-card">
+    <h3>Projected End Balance</h3>
+    <p class="amount-value {{ 'negative' if projected_end_balance < 0 else '' }}">${{ projected_end_balance|currency }}</p>
+    <span class="card-foot">End of selected window</span>
+  </article>
+  <article class="card metric-card">
+    <h3>Average Monthly Net</h3>
+    <p class="amount-value {{ 'negative' if average_monthly_net < 0 else 'positive' }}">${{ average_monthly_net|currency }}</p>
+    <span class="card-foot">Average month-over-month</span>
+  </article>
+</section>
+
+<section class="summary-grid compact-grid">
+  <article class="card compact-card">
+    <h3>Total Income</h3>
+    <p class="amount-value positive">${{ total_income|currency }}</p>
+  </article>
+  <article class="card compact-card">
+    <h3>Total Expenses</h3>
+    <p class="amount-value negative">${{ total_expense|currency }}</p>
+  </article>
+  <article class="card compact-card">
+    <h3>Transactions</h3>
+    <p>{{ transaction_count }}</p>
+  </article>
+  <article class="card compact-card">
+    <h3>First Negative Date</h3>
+    <p>{{ first_negative_date if first_negative_date else 'None in selected window' }}</p>
+  </article>
+</section>
+
+<section class="panel chart-panel">
+  <div class="panel-head chart-head">
+    <div>
+      <h2>Running Balance Trend</h2>
+      <p>Daily projection for the selected date window.</p>
+    </div>
+  </div>
+  <div class="balance-chart-wrap amount-sensitive">
+    <canvas id="dashboardBalanceChart" aria-label="Running balance line chart"></canvas>
+    <div id="dashboardChartTooltip" class="chart-tooltip hidden"></div>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Monthly Running Totals</h2>
+    <p>Track income, spend, and closing balance at month resolution.</p>
+  </div>
+  {% if monthly_rows %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Month</th>
+          <th>Income</th>
+          <th>Expenses</th>
+          <th>Net</th>
+          <th>Ending Balance</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in monthly_rows %}
+        <tr>
+          <td>{{ row.month_label }}</td>
+          <td class="amount-value positive">${{ row.income|currency }}</td>
+          <td class="amount-value negative">${{ row.expense|currency }}</td>
+          <td class="amount-value {{ 'negative' if row.net < 0 else 'positive' }}">${{ row.net|currency }}</td>
+          <td class="amount-value {{ 'negative' if row.ending_balance < 0 else '' }}">${{ row.ending_balance|currency }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-state">No monthly data for this window.</p>
+  {% endif %}
+</section>
+
+<script>
+  const chartLabels = {{ chart_labels_json|safe }};
+  const chartValues = {{ chart_values_json|safe }};
+  const canvas = document.getElementById('dashboardBalanceChart');
+  const tooltip = document.getElementById('dashboardChartTooltip');
+
+  if (canvas && Array.isArray(chartLabels) && chartLabels.length > 0 && chartLabels.length === chartValues.length) {
+    const ctx = canvas.getContext('2d');
+    const cssVars = getComputedStyle(document.documentElement);
+    const chartLine = cssVars.getPropertyValue('--chart-line').trim() || '#2563eb';
+    const chartAreaTop = cssVars.getPropertyValue('--chart-area-top').trim() || 'rgba(37, 99, 235, 0.34)';
+    const chartAreaBottom = cssVars.getPropertyValue('--chart-area-bottom').trim() || 'rgba(37, 99, 235, 0.04)';
+    const chartGrid = cssVars.getPropertyValue('--chart-grid').trim() || 'rgba(100, 116, 139, 0.24)';
+    const chartAxis = cssVars.getPropertyValue('--chart-axis').trim() || 'rgba(71, 85, 105, 0.92)';
+    const chartZero = cssVars.getPropertyValue('--chart-zero').trim() || 'rgba(217, 70, 98, 0.45)';
+    const chartFillTop = cssVars.getPropertyValue('--chart-bg-top').trim() || 'rgba(37, 99, 235, 0.11)';
+    const chartFillBottom = cssVars.getPropertyValue('--chart-bg-bottom').trim() || 'rgba(37, 99, 235, 0.01)';
+
+    const padding = { top: 18, right: 16, bottom: 34, left: 66 };
+    const moneyFmt = new Intl.NumberFormat('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+    let hoverIndex = -1;
+    let points = [];
+
+    const fmtDate = (iso) => {
+      const d = new Date(`${iso}T00:00:00`);
+      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    };
+
+    function computeBounds() {
+      let min = Math.min(...chartValues);
+      let max = Math.max(...chartValues);
+      if (min === max) {
+        min -= 1;
+        max += 1;
+      }
+      const span = max - min;
+      const pad = Math.max(span * 0.12, Math.abs(max) * 0.03, 25);
+      return { min: min - pad, max: max + pad };
+    }
+
+    function xForIndex(index, width) {
+      if (chartValues.length === 1) {
+        return (padding.left + (width - padding.right)) / 2;
+      }
+      const innerWidth = width - padding.left - padding.right;
+      return padding.left + (index / (chartValues.length - 1)) * innerWidth;
+    }
+
+    function yForValue(value, height, min, max) {
+      const innerHeight = height - padding.top - padding.bottom;
+      return padding.top + ((max - value) / (max - min)) * innerHeight;
+    }
+
+    function resizeCanvas() {
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+      canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      draw();
+    }
+
+    function draw() {
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      const plotLeft = padding.left;
+      const plotRight = width - padding.right;
+      const plotTop = padding.top;
+      const plotBottom = height - padding.bottom;
+      const { min, max } = computeBounds();
+
+      ctx.clearRect(0, 0, width, height);
+
+      const bgGradient = ctx.createLinearGradient(0, plotTop, 0, plotBottom);
+      bgGradient.addColorStop(0, chartFillTop);
+      bgGradient.addColorStop(1, chartFillBottom);
+      ctx.fillStyle = bgGradient;
+      ctx.fillRect(plotLeft, plotTop, plotRight - plotLeft, plotBottom - plotTop);
+
+      ctx.strokeStyle = chartGrid;
+      ctx.lineWidth = 1;
+      ctx.fillStyle = chartAxis;
+      ctx.font = '12px "Manrope", sans-serif';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+
+      const gridCount = 5;
+      for (let i = 0; i <= gridCount; i += 1) {
+        const t = i / gridCount;
+        const y = plotTop + t * (plotBottom - plotTop);
+        const value = max - (max - min) * t;
+        ctx.beginPath();
+        ctx.moveTo(plotLeft, y);
+        ctx.lineTo(plotRight, y);
+        ctx.stroke();
+        ctx.fillText(`$${moneyFmt.format(value)}`, plotLeft - 8, y);
+      }
+
+      if (min < 0 && max > 0) {
+        const yZero = yForValue(0, height, min, max);
+        ctx.setLineDash([5, 4]);
+        ctx.strokeStyle = chartZero;
+        ctx.beginPath();
+        ctx.moveTo(plotLeft, yZero);
+        ctx.lineTo(plotRight, yZero);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      points = chartValues.map((value, index) => ({
+        x: xForIndex(index, width),
+        y: yForValue(value, height, min, max),
+        value,
+        label: chartLabels[index],
+      }));
+
+      const areaGradient = ctx.createLinearGradient(0, plotTop, 0, plotBottom);
+      areaGradient.addColorStop(0, chartAreaTop);
+      areaGradient.addColorStop(1, chartAreaBottom);
+      ctx.beginPath();
+      points.forEach((point, idx) => {
+        if (idx === 0) {
+          ctx.moveTo(point.x, point.y);
+        } else {
+          ctx.lineTo(point.x, point.y);
+        }
+      });
+      ctx.lineTo(points[points.length - 1].x, plotBottom);
+      ctx.lineTo(points[0].x, plotBottom);
+      ctx.closePath();
+      ctx.fillStyle = areaGradient;
+      ctx.fill();
+
+      ctx.beginPath();
+      points.forEach((point, idx) => {
+        if (idx === 0) {
+          ctx.moveTo(point.x, point.y);
+        } else {
+          ctx.lineTo(point.x, point.y);
+        }
+      });
+      ctx.strokeStyle = chartLine;
+      ctx.lineWidth = 2.9;
+      ctx.shadowColor = 'rgba(37, 99, 235, 0.25)';
+      ctx.shadowBlur = 10;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      ctx.fillStyle = chartAxis;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      const labelIndices = [0, Math.floor((points.length - 1) / 2), points.length - 1];
+      [...new Set(labelIndices)].forEach((index) => {
+        ctx.fillText(fmtDate(chartLabels[index]), points[index].x, plotBottom + 8);
+      });
+
+      if (hoverIndex >= 0 && hoverIndex < points.length) {
+        const point = points[hoverIndex];
+        ctx.strokeStyle = 'rgba(37, 99, 235, 0.36)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(point.x, plotTop);
+        ctx.lineTo(point.x, plotBottom);
+        ctx.stroke();
+
+        ctx.fillStyle = '#ffffff';
+        ctx.strokeStyle = chartLine;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+
+    function showTooltip(pointerEvent) {
+      if (!points.length) {
+        return;
+      }
+      const rect = canvas.getBoundingClientRect();
+      const x = pointerEvent.clientX - rect.left;
+      let closest = 0;
+      let closestDistance = Number.POSITIVE_INFINITY;
+      for (let i = 0; i < points.length; i += 1) {
+        const distance = Math.abs(points[i].x - x);
+        if (distance < closestDistance) {
+          closest = i;
+          closestDistance = distance;
+        }
+      }
+
+      hoverIndex = closest;
+      draw();
+
+      const point = points[closest];
+      tooltip.classList.remove('hidden');
+      tooltip.innerHTML = `<strong>${fmtDate(point.label)}</strong><span>$${moneyFmt.format(point.value)}</span>`;
+      tooltip.style.left = `${Math.min(rect.width - 12, Math.max(12, point.x))}px`;
+      tooltip.style.top = `${Math.max(8, point.y - 14)}px`;
+    }
+
+    function hideTooltip() {
+      hoverIndex = -1;
+      tooltip.classList.add('hidden');
+      draw();
+    }
+
+    canvas.addEventListener('mousemove', (event) => showTooltip(event));
+    canvas.addEventListener('mouseleave', hideTooltip);
+    canvas.addEventListener('touchstart', (event) => {
+      if (event.touches[0]) {
+        showTooltip(event.touches[0]);
+      }
+    }, { passive: true });
+    canvas.addEventListener('touchmove', (event) => {
+      if (event.touches[0]) {
+        showTooltip(event.touches[0]);
+      }
+    }, { passive: true });
+    canvas.addEventListener('touchend', hideTooltip);
+
+    if ('ResizeObserver' in window) {
+      const observer = new ResizeObserver(() => resizeCanvas());
+      observer.observe(canvas);
+    } else {
+      window.addEventListener('resize', resizeCanvas);
+    }
+    resizeCanvas();
+  }
+</script>
+{% endblock %}

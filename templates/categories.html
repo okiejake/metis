@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-intro">
+  <div>
+    <p class="page-kicker">Categories</p>
+    <h2>Create a clean tagging system for every transaction.</h2>
+    <p>Use colors to spot spending patterns and keep ledger reports scannable.</p>
+  </div>
+  <div class="intro-badge-stack">
+    <span class="stat-chip">{{ categories|length }} categor{{ 'y' if categories|length == 1 else 'ies' }}</span>
+    <span class="stat-chip">Default {{ default_color }}</span>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Add Category</h2>
+    <p>Give each category a distinctive color for faster visual parsing.</p>
+  </div>
+  <form method="post" action="/categories" class="inline-form">
+    <label>
+      Name
+      <input type="text" name="name" placeholder="Credit Card / Utility / Payback" required />
+    </label>
+    <label>
+      Color
+      <input type="color" name="color" value="{{ default_color }}" required />
+    </label>
+    <button type="submit" class="button-emphasis">Add Category</button>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Categories</h2>
+    <p>Usage counts include both recurring and one-off transactions.</p>
+  </div>
+  {% if categories %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Category</th>
+          <th>Color</th>
+          <th>Usage</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for category in categories %}
+        <tr>
+          <td>
+            <span class="category-pill">
+              <span class="category-dot" style="background: {{ category.color }};"></span>
+              {{ category.name }}
+            </span>
+          </td>
+          <td><code>{{ category.color }}</code></td>
+          <td>{{ category.recurring_count + category.manual_count }} total ({{ category.recurring_count }} recurring, {{ category.manual_count }} one-off)</td>
+          <td>
+            <div class="actions">
+              <form method="get" action="/categories/{{ category.id }}/edit">
+                <button type="submit">Edit</button>
+              </form>
+              <form method="post" action="/categories/{{ category.id }}/delete" onsubmit="return confirm('Delete this category? Linked items will become uncategorized.')">
+                <button type="submit" class="danger">Delete</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-state">No categories yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

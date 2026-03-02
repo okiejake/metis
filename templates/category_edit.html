@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-intro">
+  <div>
+    <p class="page-kicker">Edit Category</p>
+    <h2>Fine-tune naming and visual identity.</h2>
+    <p>Keep labels consistent so filters and reports stay easy to scan.</p>
+  </div>
+  <div class="intro-badge-stack">
+    <span class="stat-chip">Current {{ category.name }}</span>
+    <span class="stat-chip">Color {{ category.color }}</span>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Edit Category</h2>
+    <p>Update category details and return to the full list.</p>
+  </div>
+  <form method="post" action="/categories/{{ category.id }}/edit" class="inline-form">
+    <label>
+      Name
+      <input type="text" name="name" value="{{ category.name }}" required />
+    </label>
+    <label>
+      Color
+      <input type="color" name="color" value="{{ category.color }}" required />
+    </label>
+    <button type="submit" class="button-emphasis">Save Changes</button>
+    <a class="button-link" href="/categories">Cancel</a>
+  </form>
+</section>
+{% endblock %}

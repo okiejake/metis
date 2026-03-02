@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-intro">
+  <div>
+    <p class="page-kicker">Edit Recurring Item</p>
+    <h2>Refine schedule, amount, and cadence.</h2>
+    <p>Changes apply to future projections while preserving your historical model.</p>
+  </div>
+  <div class="intro-badge-stack">
+    <span class="stat-chip">Item {{ item.name }}</span>
+    <span class="stat-chip">Type {{ item.kind }}</span>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Edit Recurring Item</h2>
+    <p>Update details and keep frequency fields synchronized with the selected start date.</p>
+  </div>
+  {% set item_day = item.day_of_month if item.day_of_month else item.start_date.day %}
+  <form method="post" action="/recurring/{{ item.id }}/edit" id="recurring-edit-form" class="grid-form">
+    <label>
+      Name
+      <input type="text" name="name" value="{{ item.name }}" required />
+    </label>
+
+    <label>
+      Type
+      <select name="kind" required>
+        <option value="income" {{ 'selected' if item.kind == 'income' else '' }}>Income</option>
+        <option value="expense" {{ 'selected' if item.kind == 'expense' else '' }}>Expense</option>
+      </select>
+    </label>
+
+    <label>
+      Amount
+      <input type="number" step="0.01" min="0.01" name="amount" value="{{ '%.2f'|format(item.amount) }}" required />
+    </label>
+
+    <label>
+      Category
+      <select name="category_id">
+        <option value="">No category</option>
+        {% for category in categories %}
+        <option value="{{ category.id }}" {{ 'selected' if item.category_id == category.id else '' }}>{{ category.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label>
+      Start Date
+      <input type="date" name="start_date" value="{{ item.start_date }}" required />
+    </label>
+
+    <label>
+      End Date (optional)
+      <input type="date" name="end_date" value="{{ item.end_date if item.end_date else '' }}" />
+    </label>
+
+    <label>
+      Frequency
+      <select name="frequency_type" id="frequency_type" required>
+        <option value="biweekly" {{ 'selected' if item.frequency_type == 'biweekly' else '' }}>Bi-weekly</option>
+        <option value="semimonthly" {{ 'selected' if item.frequency_type == 'semimonthly' else '' }}>Semi-monthly</option>
+        <option value="monthly" {{ 'selected' if item.frequency_type == 'monthly' else '' }}>Monthly</option>
+        <option value="every_x_months" {{ 'selected' if item.frequency_type == 'every_x_months' else '' }}>Every X months</option>
+      </select>
+    </label>
+    <input type="hidden" name="day_of_month_touched" value="{{ 0 if item_day == item.start_date.day else 1 }}" id="day_of_month_touched" />
+
+    <label data-field="interval_months" class="conditional hidden">
+      Every X Months
+      <input type="number" min="1" name="interval_months" value="{{ item.interval_months if item.interval_months else 1 }}" />
+    </label>
+
+    <label data-field="day_of_month" class="conditional hidden">
+      Day of Month
+      <input type="number" min="1" max="31" name="day_of_month" value="{{ item.day_of_month if item.day_of_month else item.start_date.day }}" />
+    </label>
+
+    <label data-field="semimonthly_day1" class="conditional hidden">
+      Semi-monthly Day 1
+      <input type="number" min="1" max="31" name="semimonthly_day1" value="{{ item.semimonthly_day1 if item.semimonthly_day1 else 1 }}" />
+    </label>
+
+    <label data-field="semimonthly_day2" class="conditional hidden">
+      Semi-monthly Day 2
+      <input type="number" min="1" max="31" name="semimonthly_day2" value="{{ item.semimonthly_day2 if item.semimonthly_day2 else 15 }}" />
+    </label>
+
+    <div class="full-row actions">
+      <button type="submit" class="button-emphasis">Save Changes</button>
+      <a class="button-link" href="/recurring">Cancel</a>
+    </div>
+  </form>
+</section>
+
+<script>
+  const frequencySelect = document.getElementById('frequency_type');
+  const startDateInput = document.querySelector('input[name="start_date"]');
+  const dayOfMonthInput = document.querySelector('input[name="day_of_month"]');
+  const dayTouchedInput = document.getElementById('day_of_month_touched');
+  const intervalField = document.querySelector('[data-field="interval_months"]');
+  const dayField = document.querySelector('[data-field="day_of_month"]');
+  const semiDay1Field = document.querySelector('[data-field="semimonthly_day1"]');
+  const semiDay2Field = document.querySelector('[data-field="semimonthly_day2"]');
+
+  function syncDayOfMonthFromStart() {
+    if (!startDateInput || !dayOfMonthInput || !dayTouchedInput || dayTouchedInput.value === '1') {
+      return;
+    }
+    const value = startDateInput.value;
+    if (!value) {
+      return;
+    }
+    const day = Number.parseInt(value.split('-')[2], 10);
+    if (!Number.isNaN(day) && day >= 1 && day <= 31) {
+      dayOfMonthInput.value = String(day);
+    }
+  }
+
+  function updateConditionalFields() {
+    const value = frequencySelect.value;
+    intervalField.classList.toggle('hidden', value !== 'every_x_months');
+    dayField.classList.toggle('hidden', !(value === 'monthly' || value === 'every_x_months'));
+    semiDay1Field.classList.toggle('hidden', value !== 'semimonthly');
+    semiDay2Field.classList.toggle('hidden', value !== 'semimonthly');
+    syncDayOfMonthFromStart();
+  }
+
+  dayOfMonthInput.addEventListener('input', () => {
+    dayTouchedInput.value = '1';
+  });
+  startDateInput.addEventListener('change', syncDayOfMonthFromStart);
+  frequencySelect.addEventListener('change', updateConditionalFields);
+  updateConditionalFields();
+</script>
+{% endblock %}

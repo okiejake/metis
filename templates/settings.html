@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-intro">
+  <div>
+    <p class="page-kicker">Settings</p>
+    <h2>Manage profiles, access, and account-level preferences.</h2>
+    <p>Update personal details and administer workspace users from one control center.</p>
+  </div>
+  <div class="intro-badge-stack">
+    <span class="stat-chip">Active user {{ current_user.display_name }}</span>
+    <span class="stat-chip">{{ managed_users|length }} total user{{ '' if managed_users|length == 1 else 's' }}</span>
+  </div>
+</section>
+
+<section class="settings-layout panel">
+  <aside class="settings-sidebar">
+    <h2>Settings</h2>
+    <nav class="settings-nav">
+      <a href="/settings?section=user-management" class="{{ 'active' if section == 'user-management' else '' }}">User Management</a>
+    </nav>
+  </aside>
+
+  <div class="settings-content">
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Personal</h2>
+        <p>Keep your identity and contact information current.</p>
+      </div>
+      <form method="post" action="/settings/personal" class="grid-form compact">
+        <label>
+          Name
+          <input type="text" name="display_name" value="{{ personal_user.display_name }}" required />
+        </label>
+        <label>
+          Email
+          <input type="email" name="email" value="{{ personal_user.email }}" placeholder="name@example.com" />
+        </label>
+        <div class="full-row">
+          <button type="submit" class="button-emphasis">Save Personal Details</button>
+        </div>
+      </form>
+
+      <form method="post" action="/settings/personal/passkey" class="inline-form">
+        <button type="submit">Add Passkey</button>
+      </form>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Admin Table</h2>
+        <p>Edit, switch, or remove workspace users.</p>
+      </div>
+      {% if managed_users %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Handle</th>
+              <th>Name</th>
+              <th>Email</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for user_row in managed_users %}
+            <tr>
+              <td><code>{{ user_row.slug }}</code></td>
+              <td colspan="3">
+                <div class="settings-user-row-actions">
+                  <form method="post" action="/settings/users/{{ user_row.id }}/edit" class="settings-user-row-form">
+                    <input type="text" name="display_name" value="{{ user_row.display_name }}" required />
+                    <input type="email" name="email" value="{{ user_row.email }}" placeholder="name@example.com" />
+                    <button type="submit">Save</button>
+                    <a href="/dashboard?user={{ user_row.slug }}" class="button-link">{{ 'Active' if user_row.id == current_user.id else 'Use' }}</a>
+                  </form>
+                  <form
+                    method="post"
+                    action="/settings/users/{{ user_row.id }}/delete"
+                    class="settings-user-delete-form js-user-delete-form"
+                    data-user-name="{{ user_row.display_name }}"
+                  >
+                    <input type="hidden" name="confirm_name" value="" />
+                    <button type="submit" class="danger">Delete</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+
+      <h3>Add New User</h3>
+      <form method="post" action="/settings/users" class="inline-form">
+        <label>
+          Name
+          <input type="text" name="display_name" placeholder="New user name" required />
+        </label>
+        <label>
+          Email
+          <input type="email" name="email" placeholder="name@example.com" />
+        </label>
+        <button type="submit" class="button-emphasis">Add User</button>
+      </form>
+    </section>
+  </div>
+</section>
+<script>
+  (() => {
+    const deleteForms = document.querySelectorAll('.js-user-delete-form');
+    if (!deleteForms.length) {
+      return;
+    }
+
+    deleteForms.forEach((form) => {
+      form.addEventListener('submit', (event) => {
+        const expectedName = form.dataset.userName || '';
+        const typedName = window.prompt(
+          `Type "${expectedName}" to permanently delete this user and all of their data.`,
+          '',
+        );
+        if (typedName === null) {
+          event.preventDefault();
+          return;
+        }
+        const normalizedTypedName = typedName.trim();
+        if (normalizedTypedName !== expectedName) {
+          event.preventDefault();
+          window.alert('Name did not match. User was not deleted.');
+          return;
+        }
+        const confirmInput = form.querySelector('input[name="confirm_name"]');
+        if (confirmInput) {
+          confirmInput.value = normalizedTypedName;
+        }
+      });
+    });
+  })();
+</script>
+{% endblock %}
