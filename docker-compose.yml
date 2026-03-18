@@ -1,0 +1,10 @@
+services:
+  metis:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    environment:
+      - FINANCE_DB_PATH=/data/finance.duckdb
+    restart: unless-stopped

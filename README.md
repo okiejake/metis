@@ -37,6 +37,45 @@ uvicorn app:app --reload
 
 Open: <http://127.0.0.1:8000>
 
+## Docker / Synology NAS
+
+### Build and run locally
+
+```bash
+docker compose up --build
+```
+
+Open: <http://localhost:8000>
+
+Data is persisted in a `./data/` folder on the host (mapped to `/data/finance.duckdb` inside the container).
+
+### Deploy to Synology NAS
+
+**Option A — push to a registry (easiest for updates):**
+
+```bash
+docker build -t yourusername/metis .
+docker push yourusername/metis
+```
+
+Then in **Container Manager** on your NAS:
+1. Pull `yourusername/metis`
+2. Create container with port `8000:8000`
+3. Add volume: `/volume1/docker/metis/data` → `/data`
+4. Set env var: `FINANCE_DB_PATH=/data/finance.duckdb`
+5. Enable auto-restart
+
+**Option B — export image directly (no registry needed):**
+
+```bash
+docker build -t metis .
+docker save metis | gzip > metis.tar.gz
+```
+
+Copy `metis.tar.gz` to your NAS, then import it via **Container Manager → Image → Add → Import**.
+
+---
+
 ## Notes
 
 - Data is stored in `finance.duckdb` by default.
