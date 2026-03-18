@@ -1,4 +1,5 @@
 :root {
+  color-scheme: light;
   --bg: #f6f3ee;
   --bg-soft: #efeae3;
   --surface: rgba(255, 252, 248, 0.94);
@@ -109,8 +110,7 @@ body.is-ready .container > *:nth-child(4) {
 }
 
 .site-header {
-  position: sticky;
-  top: 0;
+  position: static;
   z-index: 30;
   display: grid;
   gap: 0.95rem;
@@ -1542,4 +1542,398 @@ body.amounts-hidden .amount-sensitive {
     opacity: 1;
     transform: translate(-50%, -50%) scale(1);
   }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f141c;
+  --bg-soft: #141b24;
+  --surface: rgba(29, 38, 49, 0.92);
+  --surface-solid: #1d2631;
+  --surface-muted: #222e3c;
+  --text: #e3ebf5;
+  --muted: #9caec3;
+  --line: #3a495d;
+  --line-strong: #4f6278;
+  --primary: #5d8ecb;
+  --primary-ink: #c7dcf6;
+  --primary-soft: #223348;
+  --accent: #8cb2de;
+  --success: #6fd4a0;
+  --success-soft: #16352a;
+  --danger: #f08f9d;
+  --danger-soft: #412330;
+  --warning: #efd48f;
+  --warning-soft: #40351a;
+  --shadow-lg: 0 22px 44px rgba(0, 0, 0, 0.42), 0 4px 10px rgba(0, 0, 0, 0.34);
+  --shadow-md: 0 14px 28px rgba(0, 0, 0, 0.34), 0 2px 5px rgba(0, 0, 0, 0.24);
+  --shadow-sm: 0 7px 16px rgba(0, 0, 0, 0.3);
+  --chart-line: #8fb4e9;
+  --chart-area-top: rgba(143, 180, 233, 0.32);
+  --chart-area-bottom: rgba(143, 180, 233, 0.06);
+  --chart-grid: rgba(133, 166, 212, 0.28);
+  --chart-axis: rgba(217, 228, 243, 0.95);
+  --chart-zero: rgba(240, 143, 157, 0.45);
+  --chart-bg-top: rgba(68, 99, 137, 0.3);
+  --chart-bg-bottom: rgba(44, 62, 84, 0.12);
+}
+
+:root[data-theme="dark"] body {
+  background: linear-gradient(165deg, #0b1017 0%, var(--bg) 48%, var(--bg-soft) 100%);
+}
+
+:root[data-theme="dark"] .app-glow {
+  opacity: 0.48;
+}
+
+:root[data-theme="dark"] .app-glow-one {
+  background: radial-gradient(circle, rgba(78, 121, 178, 0.52) 0%, rgba(78, 121, 178, 0) 70%);
+}
+
+:root[data-theme="dark"] .app-glow-two {
+  background: radial-gradient(circle, rgba(63, 99, 143, 0.44) 0%, rgba(63, 99, 143, 0) 72%);
+}
+
+:root[data-theme="dark"] .app-grid {
+  background-image:
+    linear-gradient(rgba(139, 167, 206, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(139, 167, 206, 0.08) 1px, transparent 1px);
+  opacity: 0.2;
+}
+
+:root[data-theme="dark"] .site-header {
+  border-bottom-color: rgba(81, 100, 123, 0.8);
+  background: rgba(14, 20, 28, 0.84);
+  box-shadow: 0 7px 18px rgba(0, 0, 0, 0.26);
+}
+
+:root[data-theme="dark"] .site-header h1 {
+  color: #edf3fb;
+}
+
+:root[data-theme="dark"] .status-pill {
+  border-color: #465971;
+  background: #1d2a3a;
+  color: #c0d5ee;
+}
+
+:root[data-theme="dark"] .status-pill::before {
+  background: linear-gradient(180deg, #92b6e0 0%, #6d96c7 100%);
+  box-shadow: 0 0 0 0.28rem rgba(114, 152, 201, 0.2);
+}
+
+:root[data-theme="dark"] .site-nav a {
+  color: #b7c8dc;
+}
+
+:root[data-theme="dark"] .site-nav a:hover {
+  color: #ecf4ff;
+  background: rgba(65, 82, 101, 0.55);
+  border-color: #4b5f76;
+}
+
+:root[data-theme="dark"] .site-nav a.active {
+  color: #f1f7ff;
+  background: #2a3c53;
+  border-color: #55739b;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 2px 8px rgba(0, 0, 0, 0.22);
+}
+
+:root[data-theme="dark"] .user-menu-trigger {
+  border-color: #5f84b4;
+  background: linear-gradient(160deg, #6f97ca 0%, #5379aa 60%, #456592 100%);
+}
+
+:root[data-theme="dark"] .user-menu[open] .user-menu-trigger {
+  box-shadow: 0 0 0 4px rgba(100, 141, 196, 0.25), 0 12px 26px rgba(12, 25, 39, 0.52);
+}
+
+:root[data-theme="dark"] .user-menu-dropdown {
+  background: rgba(27, 35, 45, 0.96);
+}
+
+:root[data-theme="dark"] .user-menu-action,
+:root[data-theme="dark"] .row-action-item {
+  border-color: #44566d;
+  background: #1f2a37;
+  color: #dce8f5;
+}
+
+:root[data-theme="dark"] .user-menu-action:hover,
+:root[data-theme="dark"] .row-action-item:hover {
+  border-color: #6283ab;
+}
+
+:root[data-theme="dark"] .menu-icon {
+  color: #9db3cc;
+}
+
+:root[data-theme="dark"] .header-window-form {
+  border-color: #4d6077;
+  background: linear-gradient(150deg, rgba(28, 36, 46, 0.95) 0%, rgba(24, 32, 42, 0.95) 100%);
+}
+
+:root[data-theme="dark"] .window-range-label,
+:root[data-theme="dark"] .header-window-form .window-range-trigger {
+  color: #dce9f8;
+}
+
+:root[data-theme="dark"] .window-range-trigger:hover,
+:root[data-theme="dark"] .header-window-form .window-range-trigger:hover,
+:root[data-theme="dark"] .header-window-form .window-preset-link:hover {
+  background: rgba(106, 137, 176, 0.2);
+}
+
+:root[data-theme="dark"] .window-preset-link,
+:root[data-theme="dark"] .header-window-form .window-preset-link {
+  color: #afc2d8;
+}
+
+:root[data-theme="dark"] .window-preset-link.is-active,
+:root[data-theme="dark"] .header-window-form .window-preset-link.is-active {
+  color: #f0f6ff;
+  background: #304862;
+  border-color: #6388b4;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 2px 8px rgba(0, 0, 0, 0.24);
+}
+
+:root[data-theme="dark"] .calendar-dialog {
+  background: rgba(25, 33, 43, 0.98);
+}
+
+:root[data-theme="dark"] .calendar-dialog::backdrop {
+  background: rgba(8, 11, 16, 0.56);
+}
+
+:root[data-theme="dark"] .calendar-nav p,
+:root[data-theme="dark"] .calendar-selected-range {
+  color: #bfd2e8;
+}
+
+:root[data-theme="dark"] .calendar-month {
+  background: linear-gradient(180deg, #1f2b3a 0%, #1a2432 100%);
+}
+
+:root[data-theme="dark"] .calendar-day:hover {
+  border-color: #5d7da5;
+  background: #2a3d54;
+}
+
+:root[data-theme="dark"] .calendar-day.in-range {
+  background: #24374d;
+  border-color: #4f6f95;
+}
+
+:root[data-theme="dark"] .flash.success {
+  border-color: #2f7f5c;
+  color: #9cf0c7;
+}
+
+:root[data-theme="dark"] .flash.error {
+  border-color: #8d4356;
+  color: #ffc1cb;
+}
+
+:root[data-theme="dark"] .page-intro {
+  border-color: #4f637b;
+  background: linear-gradient(170deg, rgba(31, 42, 55, 0.95) 0%, rgba(24, 34, 46, 0.95) 100%);
+}
+
+:root[data-theme="dark"] .page-kicker {
+  color: #9cb6d4;
+}
+
+:root[data-theme="dark"] .page-intro p {
+  color: #b4c6da;
+}
+
+:root[data-theme="dark"] .stat-chip {
+  border-color: #4b5f77;
+  background: rgba(34, 46, 60, 0.9);
+  color: #bfd2e8;
+}
+
+:root[data-theme="dark"] .stat-chip.success {
+  color: #9bf0c6;
+  border-color: #33815d;
+  background: #173a2c;
+}
+
+:root[data-theme="dark"] .stat-chip.danger {
+  color: #ffbec7;
+  border-color: #93475b;
+  background: #472734;
+}
+
+:root[data-theme="dark"] .panel.warning {
+  border-color: #7f6c32;
+  color: #f2db9c;
+}
+
+:root[data-theme="dark"] .card {
+  background: #1f2a38;
+  border-color: #455a73;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.24);
+}
+
+:root[data-theme="dark"] .card:hover {
+  border-color: #6384ad;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
+}
+
+:root[data-theme="dark"] .balance-chart-wrap {
+  border-color: #4d6180;
+  background:
+    radial-gradient(circle at 8% 4%, rgba(112, 153, 210, 0.26), rgba(255, 255, 255, 0)),
+    linear-gradient(180deg, #1f2d3f 0%, #1a2534 100%);
+}
+
+:root[data-theme="dark"] .chart-tooltip {
+  background: rgba(10, 15, 23, 0.96);
+}
+
+:root[data-theme="dark"] input,
+:root[data-theme="dark"] select {
+  border-color: #4a5d74;
+  background: #1a2431;
+  color: var(--text);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+:root[data-theme="dark"] input:hover,
+:root[data-theme="dark"] select:hover {
+  border-color: #6383ab;
+}
+
+:root[data-theme="dark"] input:focus-visible,
+:root[data-theme="dark"] select:focus-visible,
+:root[data-theme="dark"] button:focus-visible,
+:root[data-theme="dark"] .button-link:focus-visible,
+:root[data-theme="dark"] summary:focus-visible {
+  box-shadow: 0 0 0 3px rgba(103, 144, 201, 0.34);
+  border-color: #77a8e7;
+}
+
+:root[data-theme="dark"] button,
+:root[data-theme="dark"] .button-link {
+  background: linear-gradient(165deg, #5d87be 0%, #4d719d 100%);
+}
+
+:root[data-theme="dark"] button:hover,
+:root[data-theme="dark"] .button-link:hover {
+  box-shadow: 0 10px 18px rgba(0, 0, 0, 0.3);
+}
+
+:root[data-theme="dark"] .button-link {
+  background: #223142;
+  border-color: #4d6078;
+  color: #d3e2f2;
+}
+
+:root[data-theme="dark"] .button-emphasis {
+  border-color: #6f97c8;
+  background: linear-gradient(165deg, #739dce 0%, #5a84b7 56%, #486d99 100%);
+}
+
+:root[data-theme="dark"] button.danger,
+:root[data-theme="dark"] .row-action-item.danger-link {
+  border-color: #9b4f62;
+  color: #ffbec8;
+  background: linear-gradient(180deg, #472836 0%, #3b202c 100%);
+}
+
+:root[data-theme="dark"] .table-wrap {
+  border-color: #445870;
+  background: linear-gradient(180deg, rgba(32, 43, 57, 0.92) 0%, rgba(24, 33, 44, 0.92) 100%);
+}
+
+:root[data-theme="dark"] th,
+:root[data-theme="dark"] td {
+  border-bottom-color: #3b4e66;
+}
+
+:root[data-theme="dark"] th {
+  color: #c9dbee;
+  background: rgba(64, 82, 104, 0.5);
+}
+
+:root[data-theme="dark"] tbody tr:hover {
+  background: rgba(61, 79, 102, 0.34);
+}
+
+:root[data-theme="dark"] .month-summary-row td {
+  background: #25364a;
+  border-bottom-color: #425975;
+}
+
+:root[data-theme="dark"] .table-pill {
+  border-color: #4a5d74;
+  background: #1e2a39;
+  color: #bed1e7;
+}
+
+:root[data-theme="dark"] .table-pill.neutral {
+  border-color: #4a5d74;
+  background: #28384c;
+  color: #bad0e9;
+}
+
+:root[data-theme="dark"] code {
+  background: #223142;
+  border-color: #4d6078;
+  color: #c8dcf3;
+}
+
+:root[data-theme="dark"] .category-pill {
+  border-color: #4d6078;
+  background: #1d2a39;
+}
+
+:root[data-theme="dark"] .row-action-trigger {
+  border-color: #4a5f78;
+  background: #1f2a37;
+}
+
+:root[data-theme="dark"] .row-action-menu[open] .row-action-trigger {
+  box-shadow: 0 0 0 3px rgba(101, 142, 197, 0.25);
+}
+
+:root[data-theme="dark"] .row-action-dropdown {
+  background: rgba(28, 37, 48, 0.97);
+}
+
+:root[data-theme="dark"] .insert-trigger-row.insert-target td::before,
+:root[data-theme="dark"] .ledger-row:hover + .insert-trigger-row td::before,
+:root[data-theme="dark"] .ledger-row:focus-within + .insert-trigger-row td::before {
+  background: #6388b6;
+}
+
+:root[data-theme="dark"] .insert-plus {
+  border-color: #4d6078;
+  background: #223142;
+  color: #c7dcf3;
+}
+
+:root[data-theme="dark"] .inline-insert-row td {
+  background: #1b2734;
+}
+
+:root[data-theme="dark"] .inline-insert-form {
+  border-color: #4d6078;
+  background: #202d3d;
+}
+
+:root[data-theme="dark"] .settings-sidebar {
+  border-color: #44576f;
+}
+
+:root[data-theme="dark"] .settings-nav a:hover {
+  border-color: #4f637b;
+  background: #25374c;
+}
+
+:root[data-theme="dark"] .settings-nav a.active {
+  border-color: #678cb7;
+  background: #304863;
+  color: #eaf3ff;
 }

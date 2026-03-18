@@ -10,7 +10,28 @@
       href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/styles.css?v=20260302a" />
+    <script>
+      (() => {
+        const themeStorageKey = 'metis_theme';
+        let preferredTheme = null;
+
+        try {
+          preferredTheme = window.localStorage.getItem(themeStorageKey);
+        } catch (error) {
+          preferredTheme = null;
+        }
+
+        if (preferredTheme !== 'light' && preferredTheme !== 'dark') {
+          const mediaQuery = typeof window.matchMedia === 'function'
+            ? window.matchMedia('(prefers-color-scheme: dark)')
+            : null;
+          preferredTheme = mediaQuery && mediaQuery.matches ? 'dark' : 'light';
+        }
+
+        document.documentElement.setAttribute('data-theme', preferredTheme);
+      })();
+    </script>
+    <link rel="stylesheet" href="/static/styles.css?v=20260310c" />
   </head>
   <body>
     <div class="app-glow app-glow-one" aria-hidden="true"></div>
@@ -51,7 +72,7 @@
 
               <label class="user-menu-theme">
                 Theme
-                <select name="theme" aria-label="Theme selection">
+                <select name="theme" id="theme-select" aria-label="Theme selection">
                   <option value="light">Light</option>
                   <option value="dark">Dark</option>
                 </select>
@@ -443,9 +464,57 @@
       (() => {
         document.body.classList.add('is-ready');
 
+        const themeStorageKey = 'metis_theme';
+        const themeSelect = document.getElementById('theme-select');
         const amountToggleButton = document.getElementById('amount-toggle-button');
         const amountToggleStorageKey = 'metis_hide_amounts';
         let amountsHidden = window.localStorage.getItem(amountToggleStorageKey) === '1';
+
+        function isThemeValue(value) {
+          return value === 'light' || value === 'dark';
+        }
+
+        function systemTheme() {
+          if (typeof window.matchMedia !== 'function') {
+            return 'light';
+          }
+          return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+
+        function readStoredTheme() {
+          try {
+            const value = window.localStorage.getItem(themeStorageKey);
+            return isThemeValue(value) ? value : null;
+          } catch (error) {
+            return null;
+          }
+        }
+
+        function writeStoredTheme(value) {
+          try {
+            window.localStorage.setItem(themeStorageKey, value);
+          } catch (error) {
+            // Ignore localStorage failures (private mode, disabled storage, etc).
+          }
+        }
+
+        function applyTheme(value) {
+          const nextTheme = isThemeValue(value) ? value : systemTheme();
+          document.documentElement.setAttribute('data-theme', nextTheme);
+          if (themeSelect) {
+            themeSelect.value = nextTheme;
+          }
+        }
+
+        applyTheme(readStoredTheme() || document.documentElement.getAttribute('data-theme') || systemTheme());
+
+        if (themeSelect) {
+          themeSelect.addEventListener('change', () => {
+            const nextTheme = themeSelect.value === 'dark' ? 'dark' : 'light';
+            writeStoredTheme(nextTheme);
+            applyTheme(nextTheme);
+          });
+        }
 
         function renderAmountToggle() {
           if (!amountToggleButton) {
