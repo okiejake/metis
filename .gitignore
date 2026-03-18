@@ -24,6 +24,7 @@ dist/
 htmlcov/
 
 # Local runtime files
+*.tar.gz
 *.log
 *.pid
 *.pid.lock
