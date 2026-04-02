@@ -165,6 +165,7 @@ def init_db() -> None:
         conn.execute("CREATE SEQUENCE IF NOT EXISTS categories_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS recurring_items_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS manual_transactions_id_seq START 1")
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS amount_overrides_id_seq START 1")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -242,6 +243,17 @@ def init_db() -> None:
                 tx_date DATE NOT NULL,
                 category_id BIGINT,
                 user_id BIGINT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS amount_overrides (
+                id BIGINT PRIMARY KEY DEFAULT nextval('amount_overrides_id_seq'),
+                recurring_item_id BIGINT NOT NULL,
+                effective_date DATE NOT NULL,
+                amount DOUBLE NOT NULL,
                 created_at TIMESTAMP NOT NULL DEFAULT NOW()
             )
             """
@@ -685,10 +697,26 @@ def iter_semimonthly(start_anchor: date, window_start: date, window_end: date, d
         month_cursor = add_months(month_cursor, 1)
 
 
+def _resolve_amount(
+    base_amount: float, overrides: List[Dict[str, Any]], occurrence_date: date
+) -> float:
+    effective = base_amount
+    for ovr in overrides:
+        ovr_date = ovr["effective_date"]
+        if isinstance(ovr_date, datetime):
+            ovr_date = ovr_date.date()
+        if ovr_date <= occurrence_date:
+            effective = float(ovr["amount"])
+        else:
+            break
+    return effective
+
+
 def generate_recurring_transactions(
     item: Dict[str, Any],
     window_start: date,
     window_end: date,
+    overrides: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     item_start = item["start_date"]
     item_end = item["end_date"]
@@ -704,7 +732,7 @@ def generate_recurring_transactions(
         return []
 
     kind = item["kind"]
-    amount = float(item["amount"])
+    base_amount = float(item["amount"])
     frequency = item["frequency_type"]
 
     if frequency == "biweekly":
@@ -723,6 +751,7 @@ def generate_recurring_transactions(
 
     rows: List[Dict[str, Any]] = []
     for occurrence_date in occurrences:
+        amount = _resolve_amount(base_amount, overrides or [], occurrence_date)
         delta = amount if kind == "income" else -amount
         rows.append(
             {
@@ -871,6 +900,51 @@ def load_recurring_item_by_id(user_id: int, item_id: int) -> Optional[Dict[str, 
     return rows[0]
 
 
+def load_amount_overrides(recurring_item_id: int) -> List[Dict[str, Any]]:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "SELECT id, recurring_item_id, effective_date, amount FROM amount_overrides "
+            "WHERE recurring_item_id = ? ORDER BY effective_date ASC",
+            [recurring_item_id],
+        )
+        return rows_to_dicts(cursor)
+
+
+def load_amount_overrides_for_items(item_ids: List[int]) -> Dict[int, List[Dict[str, Any]]]:
+    if not item_ids:
+        return {}
+    placeholders = ", ".join("?" for _ in item_ids)
+    with get_connection() as conn:
+        cursor = conn.execute(
+            f"SELECT id, recurring_item_id, effective_date, amount FROM amount_overrides "
+            f"WHERE recurring_item_id IN ({placeholders}) ORDER BY effective_date ASC",
+            item_ids,
+        )
+        rows = rows_to_dicts(cursor)
+    result: Dict[int, List[Dict[str, Any]]] = {}
+    for row in rows:
+        rid = int(row["recurring_item_id"])
+        result.setdefault(rid, []).append(row)
+    return result
+
+
+def save_amount_override(recurring_item_id: int, effective_date: date, amount: float) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "DELETE FROM amount_overrides WHERE recurring_item_id = ? AND effective_date = ?",
+            [recurring_item_id, effective_date],
+        )
+        conn.execute(
+            "INSERT INTO amount_overrides (recurring_item_id, effective_date, amount) VALUES (?, ?, ?)",
+            [recurring_item_id, effective_date, amount],
+        )
+
+
+def delete_overrides_for_item(recurring_item_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM amount_overrides WHERE recurring_item_id = ?", [recurring_item_id])
+
+
 def summarize_frequency(item: Dict[str, Any]) -> str:
     frequency = item["frequency_type"]
     if frequency == "biweekly":
@@ -885,8 +959,12 @@ def summarize_frequency(item: Dict[str, Any]) -> str:
 
 def collect_window_transactions(user_id: int, window_start: date, window_end: date) -> List[Dict[str, Any]]:
     transactions: List[Dict[str, Any]] = []
-    for item in load_active_recurring(user_id):
-        transactions.extend(generate_recurring_transactions(item, window_start, window_end))
+    active_items = load_active_recurring(user_id)
+    item_ids = [int(item["id"]) for item in active_items]
+    overrides_by_id = load_amount_overrides_for_items(item_ids)
+    for item in active_items:
+        item_overrides = overrides_by_id.get(int(item["id"]), [])
+        transactions.extend(generate_recurring_transactions(item, window_start, window_end, overrides=item_overrides))
     transactions.extend(load_manual_transactions(user_id, window_start, window_end))
 
     transactions.sort(

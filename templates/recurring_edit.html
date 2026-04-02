@@ -34,8 +34,20 @@
 
     <label>
       Amount
-      <input type="number" step="0.01" min="0.01" name="amount" value="{{ '%.2f'|format(item.amount) }}" required />
+      <input type="number" step="0.01" min="0.01" name="amount" value="{{ '%.2f'|format(current_amount) }}" required />
     </label>
+
+    <fieldset class="amount-scope full-row">
+      <legend>When changing the amount:</legend>
+      <label class="radio-label">
+        <input type="radio" name="amount_change_scope" value="all" checked />
+        Apply to all occurrences
+      </label>
+      <label class="radio-label">
+        <input type="radio" name="amount_change_scope" value="future" />
+        Apply from today forward only
+      </label>
+    </fieldset>
 
     <label>
       Category
