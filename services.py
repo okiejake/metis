@@ -1687,6 +1687,189 @@ def card_balance_summary(user_id: int, card: Dict[str, Any]) -> Optional[Dict[st
     }
 
 
+BUDGET_WINDOW_SETTINGS_KEY = "budget_window"
+
+
+def _month_bounds(anchor: date) -> tuple[date, date]:
+    start = date(anchor.year, anchor.month, 1)
+    end = add_months(start, 1) - timedelta(days=1)
+    return start, end
+
+
+def resolve_budget_window(user_id: int, start: str = "", end: str = "") -> tuple[date, date, bool]:
+    """Budget's own saved window (default = current month). Kept under a separate
+    settings key so it never clobbers the shared Dashboard/Ledger window."""
+    today = date.today()
+    saved_start = saved_end = None
+    stored = get_setting_value(user_id, BUDGET_WINDOW_SETTINGS_KEY)
+    if stored:
+        try:
+            parsed = json.loads(stored)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            saved_start = parse_optional_iso_date(parsed.get("start"))
+            saved_end = parse_optional_iso_date(parsed.get("end"))
+
+    month_start, month_end = _month_bounds(today)
+    default_start = saved_start or month_start
+    default_end = saved_end or month_end
+
+    invalid = False
+    try:
+        window_start = parse_iso_date(start) if start else default_start
+        window_end = parse_iso_date(end) if end else default_end
+    except ValueError:
+        window_start, window_end, invalid = default_start, default_end, True
+
+    if window_end < window_start:
+        window_start, window_end = window_end, window_start
+
+    set_setting_value(
+        user_id,
+        BUDGET_WINDOW_SETTINGS_KEY,
+        json.dumps({"start": window_start.isoformat(), "end": window_end.isoformat()}),
+    )
+    return window_start, window_end, invalid
+
+
+def _budget_actuals_by_category(
+    user_id: int, window_start: date, window_end: date
+) -> Dict[str, Dict[str, Any]]:
+    """Actual imported spend/income in the window grouped by *effective* category
+    (COALESCE reconciled item's category, import category). Transfers excluded so
+    card payments never count as spending. Returns keyed by lower(name) ('' = none)."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT COALESCE(ec.name, ic.name) AS cat_name,
+                   COALESCE(ec.color, ic.color) AS cat_color,
+                   COALESCE(SUM(i.amount), 0) AS total
+            FROM imported_transactions i
+            LEFT JOIN expected_reconciliations r
+                   ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
+            LEFT JOIN recurring_items ri
+                   ON r.source_type = 'recurring' AND ri.id = r.source_id AND ri.user_id = i.user_id
+            LEFT JOIN manual_transactions mt
+                   ON r.source_type = 'one_time' AND mt.id = r.source_id AND mt.user_id = i.user_id
+            LEFT JOIN categories ec
+                   ON ec.id = COALESCE(ri.category_id, mt.category_id) AND ec.user_id = i.user_id
+            LEFT JOIN categories ic
+                   ON ic.id = i.category_id AND ic.user_id = i.user_id
+            WHERE i.user_id = ? AND NOT i.is_transfer
+              AND i.tx_date >= ? AND i.tx_date <= ?
+            GROUP BY 1, 2
+            """,
+            [user_id, window_start, window_end],
+        ).fetchall()
+
+    result: Dict[str, Dict[str, Any]] = {}
+    for cat_name, cat_color, total in rows:
+        key = (cat_name or "").strip().lower()
+        bucket = result.setdefault(
+            key, {"name": cat_name or "Uncategorized", "color": safe_hex_color(cat_color), "expense": 0.0, "income": 0.0}
+        )
+        total = float(total)
+        if total < 0:
+            bucket["expense"] += -total
+        else:
+            bucket["income"] += total
+    return result
+
+
+def build_budget_summary(user_id: int, window_start: date, window_end: date) -> Dict[str, Any]:
+    """Budget vs actual vs difference by category for the window. Budgeted =
+    recurring occurrences + one-time items in the window; actual = imported spend
+    grouped by effective category. Expense-focused, with income shown separately."""
+    # --- Budgeted, grouped by category ---
+    budget_cats: Dict[str, Dict[str, Any]] = {}
+    income_budgeted = 0.0
+
+    def _cat_bucket(name: Optional[str], color: Optional[str]) -> Dict[str, Any]:
+        key = (name or "").strip().lower()
+        return budget_cats.setdefault(
+            key,
+            {
+                "name": name or "Uncategorized",
+                "color": safe_hex_color(color),
+                "budgeted": 0.0,
+                "items": [],
+            },
+        )
+
+    active_items = load_active_recurring(user_id)
+    item_ids = [int(item["id"]) for item in active_items]
+    overrides_by_id = load_amount_overrides_for_items(item_ids)
+    for item in active_items:
+        occurrences = generate_recurring_transactions(
+            item, window_start, window_end, overrides=overrides_by_id.get(int(item["id"]), [])
+        )
+        total = sum(abs(float(row["delta"])) for row in occurrences)
+        if total <= 0:
+            continue
+        if item["kind"] == "income":
+            income_budgeted += total
+            continue
+        bucket = _cat_bucket(item.get("category_name"), item.get("category_color"))
+        bucket["budgeted"] += total
+        bucket["items"].append({"name": item["name"], "budgeted": round(total, 2), "source": "recurring"})
+
+    for row in load_manual_transactions(user_id, window_start, window_end):
+        amount = abs(float(row["delta"]))
+        if amount <= 0:
+            continue
+        if row["kind"] == "income":
+            income_budgeted += amount
+            continue
+        bucket = _cat_bucket(row.get("category_name"), row.get("category_color"))
+        bucket["budgeted"] += amount
+        bucket["items"].append({"name": row["description"], "budgeted": round(amount, 2), "source": "one_time"})
+
+    # --- Actuals, grouped by effective category ---
+    actuals = _budget_actuals_by_category(user_id, window_start, window_end)
+    actual_income = sum(bucket["income"] for bucket in actuals.values())
+
+    # --- Merge expense categories from both sides ---
+    keys = set(budget_cats) | {k for k, v in actuals.items() if v["expense"] > 0.005}
+    categories: List[Dict[str, Any]] = []
+    for key in keys:
+        budgeted = round(budget_cats.get(key, {}).get("budgeted", 0.0), 2)
+        actual = round(actuals.get(key, {}).get("expense", 0.0), 2)
+        name = budget_cats.get(key, {}).get("name") or actuals.get(key, {}).get("name") or "Uncategorized"
+        color = budget_cats.get(key, {}).get("color") or actuals.get(key, {}).get("color")
+        categories.append(
+            {
+                "name": name,
+                "color": safe_hex_color(color),
+                "budgeted": budgeted,
+                "actual": actual,
+                "difference": round(budgeted - actual, 2),
+                "items": sorted(
+                    budget_cats.get(key, {}).get("items", []), key=lambda i: -i["budgeted"]
+                ),
+            }
+        )
+    categories.sort(key=lambda c: (-max(c["budgeted"], c["actual"]), c["name"].lower()))
+
+    total_budgeted = round(sum(c["budgeted"] for c in categories), 2)
+    total_actual = round(sum(c["actual"] for c in categories), 2)
+    return {
+        "window_start": window_start,
+        "window_end": window_end,
+        "categories": categories,
+        "totals": {
+            "budgeted": total_budgeted,
+            "actual": total_actual,
+            "difference": round(total_budgeted - total_actual, 2),
+        },
+        "income": {
+            "budgeted": round(income_budgeted, 2),
+            "actual": round(actual_income, 2),
+            "difference": round(income_budgeted - actual_income, 2),
+        },
+    }
+
+
 def collect_blended_transactions(user_id: int, window_start: date, window_end: date) -> List[Dict[str, Any]]:
     """Actual checking transactions up to the latest CSV date, then the expected
     forecast after it — one coherent, non-double-counted cash timeline."""
