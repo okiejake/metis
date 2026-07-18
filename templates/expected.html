@@ -1,0 +1,425 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-intro">
+  <div>
+    <p class="page-kicker">Expected Transactions</p>
+    <h2>Plan what you expect — then reconcile it against reality.</h2>
+    <p>Recurring bills, income, and one-time payments you expect. Mark them paid as they show up in your imported CSV data.</p>
+  </div>
+  <div class="intro-badge-stack">
+    <span class="stat-chip">Today {{ today_iso }}</span>
+    {% if suggestions %}<span class="stat-chip success">{{ suggestions|length }} suggested</span>{% endif %}
+    <span class="stat-chip">{{ recurring_items|length }} recurring</span>
+    <span class="stat-chip">{{ one_time_items|length }} one-time</span>
+  </div>
+</section>
+
+{% if suggestions or dismissed_count %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>Suggested Recurring</h2>
+    <p>
+      Detected from your imported transactions. Check the account, tweak if needed, then confirm —
+      or dismiss ones you don't want tracked.
+    </p>
+  </div>
+  {% if suggestions %}
+  <div class="suggestions-grid">
+    {% for s in suggestions %}
+    <article class="suggestion-card">
+      <div class="suggestion-head">
+        <span class="table-pill {{ 'success' if s.kind == 'income' else 'neutral' }}">{{ s.kind }}</span>
+        <span class="suggestion-confidence" title="Detection confidence">{{ (s.confidence * 100)|round|int }}% match</span>
+      </div>
+
+      <p class="suggestion-evidence">
+        {{ s.frequency_label }} · {{ s.count }} seen since {{ s.first_date }}
+        {% if s.account_name %}· from <strong>{{ s.account_name }}</strong>{% endif %}
+      </p>
+
+      <form method="post" action="/recurring" class="suggestion-form">
+        <input type="hidden" name="kind" value="{{ s.kind }}" />
+        <input type="hidden" name="suggestion_key" value="{{ s.key }}" />
+        <input type="hidden" name="start_date" value="{{ s.start_date }}" />
+        <input type="hidden" name="end_date" value="" />
+        <input type="hidden" name="day_of_month" value="{{ s.day_of_month }}" />
+        <input type="hidden" name="day_of_month_touched" value="1" />
+        <input type="hidden" name="interval_months" value="{{ s.interval_months }}" />
+        <input type="hidden" name="semimonthly_day1" value="{{ s.semimonthly_day1 }}" />
+        <input type="hidden" name="semimonthly_day2" value="{{ s.semimonthly_day2 }}" />
+
+        <label class="suggestion-field suggestion-field-name">
+          Name
+          <input type="text" name="name" value="{{ s.name }}" required />
+        </label>
+        <label class="suggestion-field suggestion-field-amount">
+          Amount
+          <input type="number" step="0.01" min="0.01" name="amount" value="{{ '%.2f'|format(s.amount) }}" required />
+        </label>
+        <label class="suggestion-field">
+          Frequency
+          <select name="frequency_type">
+            <option value="weekly" {{ 'selected' if s.frequency_type == 'weekly' else '' }}>Weekly</option>
+            <option value="biweekly" {{ 'selected' if s.frequency_type == 'biweekly' else '' }}>Bi-weekly</option>
+            <option value="semimonthly" {{ 'selected' if s.frequency_type == 'semimonthly' else '' }}>Semi-monthly</option>
+            <option value="monthly" {{ 'selected' if s.frequency_type == 'monthly' else '' }}>Monthly</option>
+            <option value="yearly" {{ 'selected' if s.frequency_type == 'yearly' else '' }}>Yearly</option>
+            <option value="every_x_months" {{ 'selected' if s.frequency_type == 'every_x_months' else '' }}>Every {{ s.interval_months }} months</option>
+          </select>
+        </label>
+        <label class="suggestion-field">
+          Account
+          <select name="account_id">
+            <option value="">Unassigned (immediate)</option>
+            {% for account in accounts %}
+            <option value="{{ account.id }}" {{ 'selected' if account.id == s.account_id else '' }}>{{ account.name }}{{ ' (card)' if account.account_type == 'credit_card' else '' }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="suggestion-field">
+          Category
+          <select name="category_id">
+            <option value="">No category</option>
+            {% for category in categories %}
+            <option value="{{ category.id }}" {{ 'selected' if category.id == s.category_id else '' }}>{{ category.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+
+        <div class="suggestion-actions">
+          <button type="submit" class="button-emphasis">Add to Recurring</button>
+        </div>
+      </form>
+
+      <form method="post" action="/expected/suggestions/dismiss" class="suggestion-dismiss-form">
+        <input type="hidden" name="suggestion_key" value="{{ s.key }}" />
+        <button type="submit" class="button-link danger-link">Dismiss</button>
+      </form>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty-state">No new suggestions right now — you've reviewed everything detected in your imports.</p>
+  {% endif %}
+  {% if dismissed_count %}
+  <form method="post" action="/expected/suggestions/reset" class="suggestions-reset-form">
+    <button type="submit" class="button-link">Restore {{ dismissed_count }} dismissed suggestion{{ '' if dismissed_count == 1 else 's' }}</button>
+  </form>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Add Expected Transaction</h2>
+    <p>Choose recurring for repeating items, or one-time for a single expected payment.</p>
+  </div>
+
+  <div class="expected-type-toggle" role="tablist">
+    <button type="button" class="type-toggle-btn is-active" data-mode="recurring" role="tab">Recurring</button>
+    <button type="button" class="type-toggle-btn" data-mode="one_time" role="tab">One-time</button>
+  </div>
+
+  <form method="post" action="/recurring" id="recurring-form" class="grid-form expected-add-form" data-mode-form="recurring">
+    <label>
+      Name
+      <input type="text" name="name" placeholder="Paycheck / Rent / Utilities" />
+    </label>
+    <label>
+      Type
+      <select name="kind">
+        <option value="income">Income</option>
+        <option value="expense">Expense</option>
+      </select>
+    </label>
+    <label>
+      Amount
+      <input type="number" step="0.01" min="0.01" name="amount" />
+    </label>
+    <label>
+      Category
+      <select name="category_id">
+        <option value="">No category</option>
+        {% for category in categories %}
+        <option value="{{ category.id }}">{{ category.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Account
+      <select name="account_id">
+        <option value="">Unassigned (immediate)</option>
+        {% for account in accounts %}
+        <option value="{{ account.id }}">{{ account.name }}{{ ' (card)' if account.account_type == 'credit_card' else '' }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Start Date
+      <input type="date" name="start_date" value="{{ today_iso }}" />
+    </label>
+    <label>
+      End Date (optional)
+      <input type="date" name="end_date" />
+    </label>
+    <label>
+      Frequency
+      <select name="frequency_type" id="frequency_type">
+        <option value="weekly">Weekly</option>
+        <option value="biweekly">Bi-weekly</option>
+        <option value="semimonthly">Semi-monthly</option>
+        <option value="monthly">Monthly</option>
+        <option value="yearly">Yearly</option>
+        <option value="every_x_months">Every X months</option>
+      </select>
+    </label>
+    <input type="hidden" name="day_of_month_touched" value="0" id="day_of_month_touched" />
+    <label data-field="interval_months" class="conditional hidden">
+      Every X Months
+      <input type="number" min="1" name="interval_months" value="2" />
+    </label>
+    <label data-field="day_of_month" class="conditional hidden">
+      Day of Month
+      <input type="number" min="1" max="31" name="day_of_month" value="1" />
+    </label>
+    <label data-field="semimonthly_day1" class="conditional hidden">
+      Semi-monthly Day 1
+      <input type="number" min="1" max="31" name="semimonthly_day1" value="1" />
+    </label>
+    <label data-field="semimonthly_day2" class="conditional hidden">
+      Semi-monthly Day 2
+      <input type="number" min="1" max="31" name="semimonthly_day2" value="15" />
+    </label>
+    <div class="full-row">
+      <button type="submit" class="button-emphasis">Add Recurring Item</button>
+    </div>
+  </form>
+
+  <form method="post" action="/expected/one-time" id="one-time-form" class="grid-form expected-add-form hidden" data-mode-form="one_time">
+    <label>
+      Name
+      <input type="text" name="name" placeholder="Vet bill / Car repair / Bonus" />
+    </label>
+    <label>
+      Type
+      <select name="kind">
+        <option value="expense">Expense</option>
+        <option value="income">Income</option>
+      </select>
+    </label>
+    <label>
+      Amount
+      <input type="number" step="0.01" min="0.01" name="amount" />
+    </label>
+    <label>
+      Category
+      <select name="category_id">
+        <option value="">No category</option>
+        {% for category in categories %}
+        <option value="{{ category.id }}">{{ category.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Account
+      <select name="account_id">
+        <option value="">Unassigned (immediate)</option>
+        {% for account in accounts %}
+        <option value="{{ account.id }}">{{ account.name }}{{ ' (card)' if account.account_type == 'credit_card' else '' }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Expected Date
+      <input type="date" name="tx_date" value="{{ today_iso }}" />
+    </label>
+    <div class="full-row">
+      <button type="submit" class="button-emphasis">Add One-time Item</button>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Recurring</h2>
+    <p>Repeating expected income and bills. Reconcile to mark occurrences paid.</p>
+  </div>
+  {% if recurring_items %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Category</th>
+          <th>Type</th>
+          <th>Amount</th>
+          <th>Account</th>
+          <th>Cadence</th>
+          <th>Matched</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in recurring_items %}
+        <tr>
+          <td>{{ item.name }}</td>
+          <td>
+            {% if item.category_name %}
+            <span class="category-pill">
+              <span class="category-dot" style="background: {{ item.category_color }};"></span>
+              {{ item.category_name }}
+            </span>
+            {% else %}-{% endif %}
+          </td>
+          <td>{{ item.kind }}</td>
+          <td class="amount-value">${{ item.amount|currency }}</td>
+          <td>{{ item.account_name or '—' }}</td>
+          <td>{{ item.cadence }}</td>
+          <td>
+            {% if item.recon_count %}
+            <span class="table-pill success">{{ item.recon_count }} paid</span>
+            {% else %}
+            <span class="table-pill neutral">none</span>
+            {% endif %}
+          </td>
+          <td>
+            <span class="table-pill {{ 'success' if item.active else 'neutral' }}">
+              {{ 'Active' if item.active else 'Paused' }}
+            </span>
+          </td>
+          <td class="row-action-cell">
+            <div class="row-action-inline">
+              <a href="/expected/recurring/{{ item.id }}/reconcile" class="button-link reconcile-link">Reconcile</a>
+              <details class="row-action-menu">
+                <summary class="row-action-trigger" aria-label="Open item actions">
+                  <i data-lucide="settings-2" class="menu-icon" aria-hidden="true"></i>
+                </summary>
+                <div class="row-action-dropdown">
+                  <a href="/recurring/{{ item.id }}/edit" class="row-action-item">Edit</a>
+                  <form method="post" action="/recurring/{{ item.id }}/toggle" class="row-action-item-form">
+                    <button type="submit" class="row-action-item">{{ 'Pause' if item.active else 'Resume' }}</button>
+                  </form>
+                  <form method="post" action="/recurring/{{ item.id }}/delete" class="row-action-item-form" onsubmit="return confirm('Delete this recurring item?')">
+                    <button type="submit" class="row-action-item danger-link">Delete</button>
+                  </form>
+                </div>
+              </details>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-state">No recurring expected items yet.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>One-time</h2>
+    <p>Single expected payments. Reconcile to mark them paid when detected in the CSV data.</p>
+  </div>
+  {% if one_time_items %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Category</th>
+          <th>Type</th>
+          <th>Amount</th>
+          <th>Account</th>
+          <th>Expected Date</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in one_time_items %}
+        <tr>
+          <td>{{ item.name }}</td>
+          <td>
+            {% if item.category_name %}
+            <span class="category-pill">
+              <span class="category-dot" style="background: {{ item.category_color }};"></span>
+              {{ item.category_name }}
+            </span>
+            {% else %}-{% endif %}
+          </td>
+          <td>{{ item.kind }}</td>
+          <td class="amount-value">${{ item.amount|currency }}</td>
+          <td>{{ item.account_name or '—' }}</td>
+          <td>{{ item.date }}</td>
+          <td>
+            {% if item.recon_count %}
+            <span class="table-pill success">paid ✓</span>
+            {% else %}
+            <span class="table-pill neutral">expected</span>
+            {% endif %}
+          </td>
+          <td class="row-action-cell">
+            <div class="row-action-inline">
+              <a href="/expected/one_time/{{ item.id }}/reconcile" class="button-link reconcile-link">Reconcile</a>
+              <form method="post" action="/expected/one-time/{{ item.id }}/delete" class="row-action-item-form" onsubmit="return confirm('Delete this one-time expected item?')">
+                <button type="submit" class="button-link danger-link">Delete</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-state">No one-time expected items yet.</p>
+  {% endif %}
+</section>
+
+<script>
+  (() => {
+    // Add-form type toggle (recurring vs one-time).
+    const toggleButtons = Array.from(document.querySelectorAll('.type-toggle-btn'));
+    const forms = Array.from(document.querySelectorAll('[data-mode-form]'));
+    function setMode(mode) {
+      toggleButtons.forEach((btn) => btn.classList.toggle('is-active', btn.dataset.mode === mode));
+      forms.forEach((form) => form.classList.toggle('hidden', form.dataset.modeForm !== mode));
+    }
+    toggleButtons.forEach((btn) => btn.addEventListener('click', () => setMode(btn.dataset.mode)));
+
+    // Conditional frequency fields for the recurring form.
+    const frequencySelect = document.getElementById('frequency_type');
+    const startDateInput = document.querySelector('#recurring-form input[name="start_date"]');
+    const dayOfMonthInput = document.querySelector('#recurring-form input[name="day_of_month"]');
+    const dayTouchedInput = document.getElementById('day_of_month_touched');
+    const intervalField = document.querySelector('[data-field="interval_months"]');
+    const dayField = document.querySelector('[data-field="day_of_month"]');
+    const semiDay1Field = document.querySelector('[data-field="semimonthly_day1"]');
+    const semiDay2Field = document.querySelector('[data-field="semimonthly_day2"]');
+
+    function syncDayOfMonthFromStart() {
+      if (!startDateInput || !dayOfMonthInput || !dayTouchedInput || dayTouchedInput.value === '1') return;
+      const value = startDateInput.value;
+      if (!value) return;
+      const day = Number.parseInt(value.split('-')[2], 10);
+      if (!Number.isNaN(day) && day >= 1 && day <= 31) dayOfMonthInput.value = String(day);
+    }
+    function updateConditionalFields() {
+      const value = frequencySelect.value;
+      intervalField.classList.toggle('hidden', value !== 'every_x_months');
+      dayField.classList.toggle('hidden', !(value === 'monthly' || value === 'every_x_months' || value === 'yearly'));
+      semiDay1Field.classList.toggle('hidden', value !== 'semimonthly');
+      semiDay2Field.classList.toggle('hidden', value !== 'semimonthly');
+      syncDayOfMonthFromStart();
+    }
+    if (frequencySelect) {
+      dayOfMonthInput.addEventListener('input', () => { dayTouchedInput.value = '1'; });
+      startDateInput.addEventListener('change', syncDayOfMonthFromStart);
+      frequencySelect.addEventListener('change', updateConditionalFields);
+      updateConditionalFields();
+    }
+  })();
+</script>
+{% endblock %}

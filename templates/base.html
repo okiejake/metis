@@ -50,7 +50,9 @@
           <nav class="site-nav" aria-label="Primary">
             <a href="/dashboard" class="{{ 'active' if active_path.startswith('/dashboard') else '' }}">Dashboard</a>
             <a href="/ledger" class="{{ 'active' if active_path.startswith('/ledger') else '' }}">Ledger Forecast</a>
-            <a href="/recurring" class="{{ 'active' if active_path.startswith('/recurring') else '' }}">Recurring Items</a>
+            <a href="/expected" class="{{ 'active' if active_path.startswith('/expected') or active_path.startswith('/recurring') else '' }}">Expected Transactions</a>
+            <a href="/import" class="{{ 'active' if active_path.startswith('/import') else '' }}">Import</a>
+            <a href="/accounts" class="{{ 'active' if active_path.startswith('/accounts') else '' }}">Accounts</a>
             <a href="/categories" class="{{ 'active' if active_path.startswith('/categories') else '' }}">Categories</a>
             <a href="/settings" class="{{ 'active' if active_path.startswith('/settings') else '' }}">Settings</a>
           </nav>

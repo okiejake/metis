@@ -7,9 +7,11 @@ from services import (
     VALID_FREQUENCIES,
     VALID_KINDS,
     delete_overrides_for_item,
+    dismiss_suggestion,
     get_connection,
     get_current_user,
     get_setting_float,
+    load_accounts,
     load_all_recurring,
     load_amount_overrides,
     load_categories,
@@ -17,6 +19,7 @@ from services import (
     parse_day,
     parse_form_bool,
     parse_iso_date,
+    parse_optional_account_id,
     parse_optional_category_id,
     parse_optional_date,
     parse_positive_float,
@@ -72,6 +75,7 @@ def create_recurring_item(
     kind: str = Form(...),
     amount: str = Form(...),
     category_id: str = Form(""),
+    account_id: str = Form(""),
     start_date: str = Form(...),
     end_date: str = Form(""),
     frequency_type: str = Form(...),
@@ -80,8 +84,10 @@ def create_recurring_item(
     day_of_month_touched: str = Form("0"),
     semimonthly_day1: str = Form("1"),
     semimonthly_day2: str = Form("15"),
+    suggestion_key: str = Form(""),
 ):
     user = get_current_user(request)
+    redirect_target = "/expected" if suggestion_key.strip() else "/recurring"
     try:
         cleaned_name = name.strip()
         if not cleaned_name:
@@ -100,20 +106,22 @@ def create_recurring_item(
 
         parsed_interval = parse_positive_int(interval_months, fallback=1)
         parsed_day_of_month = parse_day(day_of_month, fallback=parsed_start_date.day)
-        if frequency_type in {"monthly", "every_x_months"} and not parse_form_bool(day_of_month_touched):
+        if frequency_type in {"monthly", "every_x_months", "yearly"} and not parse_form_bool(day_of_month_touched):
             parsed_day_of_month = parsed_start_date.day
         parsed_day1 = parse_day(semimonthly_day1, fallback=1)
         parsed_day2 = parse_day(semimonthly_day2, fallback=15)
         parsed_category_id = parse_optional_category_id(user["id"], category_id)
+        parsed_account_id = parse_optional_account_id(user["id"], account_id)
 
         with get_connection() as conn:
             conn.execute(
                 """
                 INSERT INTO recurring_items (
                     name, kind, amount, start_date, end_date, frequency_type,
-                    interval_months, semimonthly_day1, semimonthly_day2, day_of_month, category_id, user_id, active
+                    interval_months, semimonthly_day1, semimonthly_day2, day_of_month,
+                    category_id, account_id, user_id, active
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)
                 """,
                 [
                     cleaned_name,
@@ -127,12 +135,19 @@ def create_recurring_item(
                     parsed_day2,
                     parsed_day_of_month,
                     parsed_category_id,
+                    parsed_account_id,
                     user["id"],
                 ],
             )
     except ValueError as exc:
-        return redirect_with_message("/recurring", str(exc), is_error=True)
+        return redirect_with_message(redirect_target, str(exc), is_error=True)
 
+    if suggestion_key.strip():
+        # Remember the confirmed suggestion so it stops being suggested.
+        dismiss_suggestion(user["id"], suggestion_key, reason="added")
+        return redirect_with_message(
+            "/expected", f"Added recurring item “{cleaned_name}” from suggestion"
+        )
     return redirect_with_message("/recurring", "Recurring item added")
 
 
@@ -156,6 +171,7 @@ def edit_recurring_item_page(request: Request, item_id: int, msg: str = "", err:
             request, msg, err,
             item=item,
             categories=load_categories(user["id"]),
+            accounts=load_accounts(user["id"]),
             current_amount=current_amount,
             has_overrides=len(overrides) > 0,
         ),
@@ -170,6 +186,7 @@ def edit_recurring_item(
     kind: str = Form(...),
     amount: str = Form(...),
     category_id: str = Form(""),
+    account_id: str = Form(""),
     start_date: str = Form(...),
     end_date: str = Form(""),
     frequency_type: str = Form(...),
@@ -203,11 +220,12 @@ def edit_recurring_item(
 
         parsed_interval = parse_positive_int(interval_months, fallback=1)
         parsed_day_of_month = parse_day(day_of_month, fallback=parsed_start_date.day)
-        if frequency_type in {"monthly", "every_x_months"} and not parse_form_bool(day_of_month_touched):
+        if frequency_type in {"monthly", "every_x_months", "yearly"} and not parse_form_bool(day_of_month_touched):
             parsed_day_of_month = parsed_start_date.day
         parsed_day1 = parse_day(semimonthly_day1, fallback=1)
         parsed_day2 = parse_day(semimonthly_day2, fallback=15)
         parsed_category_id = parse_optional_category_id(user["id"], category_id)
+        parsed_account_id = parse_optional_account_id(user["id"], account_id)
 
         amount_changed = parsed_amount != float(existing_item["amount"])
 
@@ -218,7 +236,8 @@ def edit_recurring_item(
                     """
                     UPDATE recurring_items
                     SET name = ?, kind = ?, start_date = ?, end_date = ?, frequency_type = ?,
-                        interval_months = ?, semimonthly_day1 = ?, semimonthly_day2 = ?, day_of_month = ?, category_id = ?
+                        interval_months = ?, semimonthly_day1 = ?, semimonthly_day2 = ?, day_of_month = ?,
+                        category_id = ?, account_id = ?
                     WHERE id = ? AND user_id = ?
                     """,
                     [
@@ -232,6 +251,7 @@ def edit_recurring_item(
                         parsed_day2,
                         parsed_day_of_month,
                         parsed_category_id,
+                        parsed_account_id,
                         item_id,
                         user["id"],
                     ],
@@ -244,7 +264,8 @@ def edit_recurring_item(
                     """
                     UPDATE recurring_items
                     SET name = ?, kind = ?, amount = ?, start_date = ?, end_date = ?, frequency_type = ?,
-                        interval_months = ?, semimonthly_day1 = ?, semimonthly_day2 = ?, day_of_month = ?, category_id = ?
+                        interval_months = ?, semimonthly_day1 = ?, semimonthly_day2 = ?, day_of_month = ?,
+                        category_id = ?, account_id = ?
                     WHERE id = ? AND user_id = ?
                     """,
                     [
@@ -259,6 +280,7 @@ def edit_recurring_item(
                         parsed_day2,
                         parsed_day_of_month,
                         parsed_category_id,
+                        parsed_account_id,
                         item_id,
                         user["id"],
                     ],
@@ -292,4 +314,14 @@ def delete_recurring_item(request: Request, item_id: int):
     delete_overrides_for_item(item_id)
     with get_connection() as conn:
         conn.execute("DELETE FROM recurring_items WHERE id = ? AND user_id = ?", [item_id, user["id"]])
+        # Drop any reconciliations / match rules tied to this expected item so the
+        # linked actuals are freed for future matching.
+        conn.execute(
+            "DELETE FROM expected_reconciliations WHERE user_id = ? AND source_type = 'recurring' AND source_id = ?",
+            [user["id"], item_id],
+        )
+        conn.execute(
+            "DELETE FROM expected_match_rules WHERE user_id = ? AND source_type = 'recurring' AND source_id = ?",
+            [user["id"], item_id],
+        )
     return redirect_with_message("/recurring", "Recurring item deleted")

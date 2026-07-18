@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-intro">
+  <div>
+    <p class="page-kicker">Import</p>
+    <h2>Bring in real bank &amp; card transactions.</h2>
+    <p>Upload a Checking, Visa, or Apple Card CSV export. Re-uploading is safe — only new transactions are added.</p>
+  </div>
+  <div class="intro-badge-stack">
+    <span class="stat-chip">{{ summary.total_count }} imported</span>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Upload a CSV</h2>
+    <p>Accepted: Credit-union Checking / Visa exports and Apple Card exports. The format is detected automatically.</p>
+  </div>
+  <form method="post" action="/import" enctype="multipart/form-data" class="import-upload-form">
+    <label class="inline-field">
+      CSV file
+      <input type="file" name="file" accept=".csv,text/csv" required />
+    </label>
+    <button type="submit" class="button-emphasis">Upload &amp; Import</button>
+  </form>
+</section>
+
+{% if summary.accounts %}
+<section class="summary-grid compact-grid">
+  <article class="card compact-card">
+    <h3>Total Spending</h3>
+    <p class="amount-value negative">${{ summary.total_spending|currency }}</p>
+    <p class="card-note">excludes transfers</p>
+  </article>
+  <article class="card compact-card">
+    <h3>Total Income</h3>
+    <p class="amount-value positive">${{ summary.total_income|currency }}</p>
+    <p class="card-note">excludes transfers</p>
+  </article>
+  {% for account in summary.accounts %}
+  <article class="card compact-card">
+    <h3>{{ account.account }}</h3>
+    <p class="amount-value">{{ account.n }} tx</p>
+    <p class="card-note">
+      {% if account.first_date %}{{ account.first_date }} → {{ account.last_date }}{% endif %}
+      {% if account.transfers %} · {{ account.transfers }} transfers{% endif %}
+    </p>
+  </article>
+  {% endfor %}
+</section>
+{% endif %}
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Imported Transactions</h2>
+    <p>Signed amounts: negative = money out, positive = money in. Transfers (e.g. card payments) are flagged and excluded from spending.</p>
+  </div>
+
+  {% if accounts %}
+  <nav class="import-filter-tabs" aria-label="Filter by account">
+    <a href="/import" class="{{ 'active' if not account_filter else '' }}">All</a>
+    {% for account in accounts %}
+    <a href="/import?account={{ account|urlencode }}" class="{{ 'active' if account_filter == account else '' }}">{{ account }}</a>
+    {% endfor %}
+  </nav>
+  {% endif %}
+
+  {% if transactions %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Account</th>
+          <th>Description</th>
+          <th>Category</th>
+          <th>Flow</th>
+          <th>Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for tx in transactions %}
+        <tr class="ledger-row{% if tx.is_transfer %} import-transfer-row{% endif %}">
+          <td>{{ tx.tx_date }}</td>
+          <td><span class="table-pill">{{ tx.account }}</span></td>
+          <td>
+            {{ tx.merchant if tx.merchant else tx.description }}
+            {% if tx.merchant and tx.description and tx.merchant != tx.description %}
+            <span class="import-desc-sub">{{ tx.description }}</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if tx.category_name %}
+            <span class="category-pill">
+              <span class="category-dot" style="background: {{ tx.category_color }};"></span>
+              {{ tx.category_name }}
+            </span>
+            {% else %}
+            -
+            {% endif %}
+          </td>
+          <td><span class="table-pill flow-{{ tx.flow }}">{{ tx.flow }}</span></td>
+          <td class="amount-value {{ 'positive' if tx.amount > 0 else 'negative' }}">
+            {{ '+' if tx.amount > 0 else '-' }}${{ (tx.amount if tx.amount >= 0 else -tx.amount)|currency }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if transactions|length >= 500 %}
+  <p class="card-note">Showing the most recent 500 transactions.</p>
+  {% endif %}
+  {% else %}
+  <p class="empty-state">No imported transactions yet. Upload a CSV above to get started.</p>
+  {% endif %}
+</section>
+{% endblock %}

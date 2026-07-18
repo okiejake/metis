@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-intro">
+  <div>
+    <p class="page-kicker"><a href="/expected" class="back-link">← Expected Transactions</a></p>
+    <h2>Reconcile: {{ item.name }}</h2>
+    <p>
+      {{ item.kind|capitalize }} · ${{ item.amount|currency }} · {{ item.cadence }}
+      {% if item.category_name %}
+      · <span class="category-pill"><span class="category-dot" style="background: {{ item.category_color }};"></span>{{ item.category_name }}</span>
+      {% endif %}
+    </p>
+  </div>
+</section>
+
+{% if occurrences is not none %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>Occurrences</h2>
+    <p>Each scheduled occurrence and whether a matching actual has been detected.</p>
+  </div>
+  {% if occurrences %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Expected Date</th><th>Amount</th><th>Status</th><th>Matched Actual</th></tr>
+      </thead>
+      <tbody>
+        {% for occ in occurrences %}
+        <tr class="{{ 'reconcile-paid-row' if occ.paid else '' }}">
+          <td>{{ occ.date }}</td>
+          <td class="amount-value">${{ occ.amount|currency }}</td>
+          <td>
+            {% if occ.paid %}
+            <span class="table-pill success">paid ✓</span>
+            {% else %}
+            <span class="table-pill neutral">expected</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if occ.match %}
+            {{ occ.match.tx_date }} · {{ occ.match.description|truncate(48) }}
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-state">No occurrences in the reconciliation window.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% macro amount_controls(mode, exact, minv, maxv) %}
+<span class="rule-amount-group">
+  <select name="amount_mode" class="rule-amount-mode" aria-label="Amount constraint">
+    <option value="any" {{ 'selected' if mode == 'any' else '' }}>any amount</option>
+    <option value="exact" {{ 'selected' if mode == 'exact' else '' }}>exactly $</option>
+    <option value="range" {{ 'selected' if mode == 'range' else '' }}>between $</option>
+  </select>
+  <input type="number" step="0.01" min="0" name="amount_exact" value="{{ exact }}"
+    placeholder="37.95" class="rule-amount" data-amount-field="exact" aria-label="Exact amount" />
+  <span class="rule-amount-pair" data-amount-field="range">
+    <input type="number" step="0.01" min="0" name="amount_min" value="{{ minv }}"
+      placeholder="min" class="rule-amount" aria-label="Minimum amount" />
+    <span class="rule-amount-sep">to</span>
+    <input type="number" step="0.01" min="0" name="amount_max" value="{{ maxv }}"
+      placeholder="max" class="rule-amount" aria-label="Maximum amount" />
+  </span>
+</span>
+{% endmacro %}
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Auto-match Rules</h2>
+    <p>
+      A rule auto-marks paid any imported transaction whose description contains this text — historical and future.
+      Optionally restrict it to an exact amount or a range (matched against the transaction's magnitude).
+    </p>
+  </div>
+
+  {% if rules %}
+  <div class="rule-list">
+    {% for rule in rules %}
+    <form method="post" action="/expected/rules" class="rule-row">
+      <input type="hidden" name="source_type" value="{{ item.source_type }}" />
+      <input type="hidden" name="source_id" value="{{ item.id }}" />
+      <input type="hidden" name="rule_id" value="{{ rule.id }}" />
+      <span class="rule-prefix">description contains</span>
+      <input type="text" name="pattern" value="{{ rule.pattern }}" class="rule-input" />
+      {{ amount_controls(rule.amount_mode, rule.amount_exact, rule.amount_min, rule.amount_max) }}
+      <button type="submit" class="button-link">Save</button>
+      <button type="submit" formaction="/expected/rules/{{ rule.id }}/delete" class="button-link danger-link">Delete</button>
+    </form>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty-state">No rules yet. Confirm a suggested match below to create one.</p>
+  {% endif %}
+
+  <form method="post" action="/expected/rules" class="rule-row rule-add-row">
+    <input type="hidden" name="source_type" value="{{ item.source_type }}" />
+    <input type="hidden" name="source_id" value="{{ item.id }}" />
+    <span class="rule-prefix">add rule — description contains</span>
+    <input type="text" name="pattern" value="{{ rule_seed }}" placeholder="e.g. ACH RENT" class="rule-input"
+      {{ 'autofocus' if rule_seed else '' }} required />
+    {{ amount_controls('any', '', '', '') }}
+    <button type="submit" class="button-emphasis">Save rule</button>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Suggested Matches</h2>
+    <p>Unreconciled actuals with a matching amount. Confirm the right one to link it (and seed a rule).</p>
+  </div>
+  {% if suggestions %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Date</th><th>Account</th><th>Description</th><th>Amount</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for s in suggestions %}
+        <tr>
+          <td>{{ s.tx_date }}</td>
+          <td><span class="table-pill">{{ s.account }}</span></td>
+          <td>{{ s.description|truncate(60) }}</td>
+          <td class="amount-value {{ 'positive' if s.amount > 0 else 'negative' }}">
+            {{ '+' if s.amount > 0 else '-' }}${{ (s.amount if s.amount >= 0 else -s.amount)|currency }}
+            {% if not s.is_exact %}<span class="near-amount-flag">≈</span>{% endif %}
+          </td>
+          <td>
+            <form method="post" action="/expected/reconcile/confirm">
+              <input type="hidden" name="source_type" value="{{ item.source_type }}" />
+              <input type="hidden" name="source_id" value="{{ item.id }}" />
+              <input type="hidden" name="imported_transaction_id" value="{{ s.id }}" />
+              <input type="hidden" name="description" value="{{ s.description }}" />
+              <button type="submit" class="button-link">Confirm match</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-state">No unreconciled actuals match this amount.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Linked Actuals</h2>
+    <p>Imported transactions currently reconciled to this expected item.</p>
+  </div>
+  {% if linked %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Date</th><th>Account</th><th>Description</th><th>Amount</th><th>Via</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for l in linked %}
+        <tr>
+          <td>{{ l.tx_date }}</td>
+          <td><span class="table-pill">{{ l.account }}</span></td>
+          <td>{{ l.description|truncate(60) }}</td>
+          <td class="amount-value {{ 'positive' if l.amount > 0 else 'negative' }}">
+            {{ '+' if l.amount > 0 else '-' }}${{ (l.amount if l.amount >= 0 else -l.amount)|currency }}
+          </td>
+          <td><span class="table-pill {{ 'success' if l.matched_via == 'rule' else 'neutral' }}">{{ l.matched_via }}</span></td>
+          <td>
+            <form method="post" action="/expected/reconcile/{{ l.recon_id }}/unlink">
+              <input type="hidden" name="source_type" value="{{ item.source_type }}" />
+              <input type="hidden" name="source_id" value="{{ item.id }}" />
+              <button type="submit" class="button-link danger-link">Unlink</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-state">Nothing linked yet.</p>
+  {% endif %}
+</section>
+
+<script>
+  (() => {
+    // Show only the amount inputs relevant to each rule's selected mode.
+    document.querySelectorAll('.rule-row').forEach((form) => {
+      const modeSelect = form.querySelector('.rule-amount-mode');
+      if (!modeSelect) return;
+      const sync = () => {
+        form.querySelectorAll('[data-amount-field]').forEach((el) => {
+          el.classList.toggle('hidden', el.dataset.amountField !== modeSelect.value);
+        });
+      };
+      modeSelect.addEventListener('change', sync);
+      sync();
+    });
+  })();
+</script>
+{% endblock %}

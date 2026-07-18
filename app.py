@@ -1,8 +1,11 @@
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
+from routes.accounts import router as accounts_router
 from routes.categories import router as categories_router
 from routes.core import router as core_router
+from routes.expected import router as expected_router
+from routes.imports import router as imports_router
 from routes.manual import router as manual_router
 from routes.overview import router as overview_router
 from routes.recurring import router as recurring_router
@@ -33,6 +36,9 @@ app.include_router(categories_router)
 app.include_router(recurring_router)
 app.include_router(manual_router)
 app.include_router(overview_router)
+app.include_router(imports_router)
+app.include_router(expected_router)
+app.include_router(accounts_router)
 
 
 if __name__ == "__main__":

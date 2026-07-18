@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-intro">
+  <div>
+    <p class="page-kicker">Accounts</p>
+    <h2>Model where money lands — and when it actually leaves.</h2>
+    <p>Assign expected transactions to a checking or credit-card account. Card charges defer to the card's payment due date so your cash flow is accurate.</p>
+  </div>
+  <div class="intro-badge-stack">
+    <span class="stat-chip amount-value">Checking opening ${{ starting_balance|currency }}</span>
+    <span class="stat-chip">{{ accounts|length }} account{{ '' if accounts|length == 1 else 's' }}</span>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Add Account</h2>
+    <p>Credit cards track a billing cycle so charges defer to the payment due date.</p>
+  </div>
+  <form method="post" action="/accounts" id="account-form" class="grid-form">
+    <label>
+      Name
+      <input type="text" name="name" placeholder="Checking / Visa / Apple Card" required />
+    </label>
+    <label>
+      Type
+      <select name="account_type" id="account_type">
+        <option value="checking">Checking</option>
+        <option value="credit_card">Credit card</option>
+      </select>
+    </label>
+    <div data-field="statement_day" class="conditional hidden cycle-field">
+      <label>Statement closes (day of month)
+        <input type="number" min="1" max="31" name="statement_day" value="15" class="cycle-day-input" />
+      </label>
+      <label class="eom-toggle"><input type="checkbox" name="statement_eom" value="1" class="eom-checkbox" data-target="statement_day" /> Last day of month</label>
+    </div>
+    <div data-field="due_day" class="conditional hidden cycle-field">
+      <label>Payment due (day of month)
+        <input type="number" min="1" max="31" name="due_day" value="10" class="cycle-day-input" />
+      </label>
+      <label class="eom-toggle"><input type="checkbox" name="due_eom" value="1" class="eom-checkbox" data-target="due_day" /> Last day of month</label>
+    </div>
+    <div class="full-row">
+      <button type="submit" class="button-emphasis">Add Account</button>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Accounts</h2>
+    <p>Credit-card cycle status shows the next statement close and payment due date.</p>
+  </div>
+  {% if accounts %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Account</th>
+          <th>Type</th>
+          <th>Cycle</th>
+          <th>Next Payment</th>
+          <th>Assigned</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for account in accounts %}
+        <tr>
+          <td><strong>{{ account.name }}</strong></td>
+          <td>
+            <span class="table-pill {{ 'success' if account.account_type == 'checking' else 'neutral' }}">
+              {{ 'Checking' if account.account_type == 'checking' else 'Credit card' }}
+            </span>
+          </td>
+          {% if account.account_type == 'checking' %}
+          <td colspan="2">
+            <form method="post" action="/accounts/opening-balance" class="inline-balance-form">
+              <label class="inline-balance-label">
+                Opening balance{% if first_actual %} (as of {{ first_actual }}){% endif %}
+                <input type="number" step="0.01" name="value" value="{{ '%.2f'|format(starting_balance) }}" />
+              </label>
+              <button type="submit" class="button-link">Save</button>
+            </form>
+            {% if first_actual %}
+            <p class="card-note">Set this to your real checking balance on {{ first_actual }}; the running balance sums forward from here.</p>
+            {% endif %}
+          </td>
+          {% else %}
+          <td>
+            {% if account.cycle %}
+            closes {{ account.cycle.next_close }} · due {{ account.cycle.next_due }}
+            {% else %}
+            <span class="card-note">set statement &amp; due days</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if account.projected %}
+            <span class="amount-value">${{ account.projected.amount|currency }}</span> on {{ account.projected.date }}
+            {% else %}—{% endif %}
+          </td>
+          {% endif %}
+          <td>{{ account.assigned_count }} item{{ '' if account.assigned_count == 1 else 's' }}</td>
+          <td>
+            <div class="actions">
+              <form method="get" action="/accounts/{{ account.id }}/edit">
+                <button type="submit">Edit</button>
+              </form>
+              <form method="post" action="/accounts/{{ account.id }}/delete" onsubmit="return confirm('Delete this account? Assigned items become unassigned.')">
+                <button type="submit" class="danger">Delete</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-state">No accounts yet. Add your checking account and credit cards above.</p>
+  {% endif %}
+</section>
+
+<script>
+  (() => {
+    const typeSelect = document.getElementById('account_type');
+    const statementField = document.querySelector('[data-field="statement_day"]');
+    const dueField = document.querySelector('[data-field="due_day"]');
+    function sync() {
+      const isCard = typeSelect.value === 'credit_card';
+      statementField.classList.toggle('hidden', !isCard);
+      dueField.classList.toggle('hidden', !isCard);
+    }
+    if (typeSelect) {
+      typeSelect.addEventListener('change', sync);
+      sync();
+    }
+
+    document.querySelectorAll('.eom-checkbox').forEach((box) => {
+      const input = document.querySelector(`input[name="${box.dataset.target}"]`);
+      function syncEom() {
+        if (input) {
+          input.disabled = box.checked;
+          input.classList.toggle('is-disabled', box.checked);
+        }
+      }
+      box.addEventListener('change', syncEom);
+      syncEom();
+    });
+  })();
+</script>
+{% endblock %}

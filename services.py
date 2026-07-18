@@ -1,4 +1,7 @@
 import calendar
+import csv
+import hashlib
+import io
 import json
 import os
 import re
@@ -12,7 +15,7 @@ from fastapi.responses import RedirectResponse, Response
 
 DB_PATH = os.getenv("FINANCE_DB_PATH", "finance.duckdb")
 VALID_KINDS = {"income", "expense"}
-VALID_FREQUENCIES = {"biweekly", "semimonthly", "monthly", "every_x_months"}
+VALID_FREQUENCIES = {"weekly", "biweekly", "semimonthly", "monthly", "yearly", "every_x_months"}
 DEFAULT_CATEGORY_COLOR = "#64748b"
 HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 FORECAST_WINDOW_SETTINGS_KEY = "forecast_window"
@@ -154,6 +157,10 @@ def delete_user_and_data(user_id: int) -> None:
     with get_connection() as conn:
         conn.execute("DELETE FROM recurring_items WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM manual_transactions WHERE user_id = ?", [user_id])
+        conn.execute("DELETE FROM imported_transactions WHERE user_id = ?", [user_id])
+        conn.execute("DELETE FROM expected_reconciliations WHERE user_id = ?", [user_id])
+        conn.execute("DELETE FROM expected_match_rules WHERE user_id = ?", [user_id])
+        conn.execute("DELETE FROM accounts WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM categories WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM settings WHERE key LIKE ?", [f"user:{user_id}:%"])
         conn.execute("DELETE FROM users WHERE id = ?", [user_id])
@@ -166,6 +173,10 @@ def init_db() -> None:
         conn.execute("CREATE SEQUENCE IF NOT EXISTS recurring_items_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS manual_transactions_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS amount_overrides_id_seq START 1")
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS imported_transactions_id_seq START 1")
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS expected_reconciliations_id_seq START 1")
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS expected_match_rules_id_seq START 1")
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS accounts_id_seq START 1")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -258,6 +269,75 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS imported_transactions (
+                id BIGINT PRIMARY KEY DEFAULT nextval('imported_transactions_id_seq'),
+                user_id BIGINT NOT NULL,
+                account TEXT NOT NULL,
+                tx_date DATE NOT NULL,
+                description TEXT NOT NULL,
+                merchant TEXT NOT NULL DEFAULT '',
+                amount DOUBLE NOT NULL,
+                flow TEXT NOT NULL,
+                is_transfer BOOLEAN NOT NULL DEFAULT FALSE,
+                raw_type TEXT NOT NULL DEFAULT '',
+                category_id BIGINT,
+                source_file TEXT NOT NULL DEFAULT '',
+                fingerprint TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS expected_reconciliations (
+                id BIGINT PRIMARY KEY DEFAULT nextval('expected_reconciliations_id_seq'),
+                user_id BIGINT NOT NULL,
+                imported_transaction_id BIGINT NOT NULL,
+                source_type TEXT NOT NULL,
+                source_id BIGINT NOT NULL,
+                matched_via TEXT NOT NULL DEFAULT 'confirm',
+                created_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS expected_match_rules (
+                id BIGINT PRIMARY KEY DEFAULT nextval('expected_match_rules_id_seq'),
+                user_id BIGINT NOT NULL,
+                source_type TEXT NOT NULL,
+                source_id BIGINT NOT NULL,
+                pattern TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS accounts (
+                id BIGINT PRIMARY KEY DEFAULT nextval('accounts_id_seq'),
+                user_id BIGINT NOT NULL,
+                name TEXT NOT NULL,
+                account_type TEXT NOT NULL,
+                statement_day INTEGER,
+                due_day INTEGER,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dismissed_suggestions (
+                user_id BIGINT NOT NULL,
+                suggestion_key TEXT NOT NULL,
+                reason TEXT NOT NULL DEFAULT 'dismissed',
+                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (user_id, suggestion_key)
+            )
+            """
+        )
 
         conn.execute(
             """
@@ -271,6 +351,10 @@ def init_db() -> None:
             conn.execute("ALTER TABLE recurring_items ADD COLUMN category_id BIGINT")
         if not table_has_column(conn, "manual_transactions", "category_id"):
             conn.execute("ALTER TABLE manual_transactions ADD COLUMN category_id BIGINT")
+        if not table_has_column(conn, "expected_match_rules", "amount_min"):
+            conn.execute("ALTER TABLE expected_match_rules ADD COLUMN amount_min DOUBLE")
+        if not table_has_column(conn, "expected_match_rules", "amount_max"):
+            conn.execute("ALTER TABLE expected_match_rules ADD COLUMN amount_max DOUBLE")
         if not table_has_column(conn, "categories", "color"):
             conn.execute("ALTER TABLE categories ADD COLUMN color TEXT")
         if not table_has_column(conn, "categories", "user_id"):
@@ -279,6 +363,10 @@ def init_db() -> None:
             conn.execute("ALTER TABLE recurring_items ADD COLUMN user_id BIGINT")
         if not table_has_column(conn, "manual_transactions", "user_id"):
             conn.execute("ALTER TABLE manual_transactions ADD COLUMN user_id BIGINT")
+        if not table_has_column(conn, "recurring_items", "account_id"):
+            conn.execute("ALTER TABLE recurring_items ADD COLUMN account_id BIGINT")
+        if not table_has_column(conn, "manual_transactions", "account_id"):
+            conn.execute("ALTER TABLE manual_transactions ADD COLUMN account_id BIGINT")
         if not table_has_column(conn, "users", "email"):
             conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
         migrate_categories_to_user_scoped_uniqueness(conn, default_user_id)
@@ -294,6 +382,14 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_recurring_items_user_id ON recurring_items(user_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_manual_transactions_user_id ON manual_transactions(user_id)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_user_name_unique ON categories(user_id, name)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_imported_user_date ON imported_transactions(user_id, tx_date)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_imported_fingerprint ON imported_transactions(user_id, fingerprint)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reconciliation_import_unique ON expected_reconciliations(user_id, imported_transaction_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_reconciliation_source ON expected_reconciliations(user_id, source_type, source_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_match_rules_source ON expected_match_rules(user_id, source_type, source_id)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_user_name_unique ON accounts(user_id, name)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_recurring_items_account ON recurring_items(user_id, account_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_manual_transactions_account ON manual_transactions(user_id, account_id)")
 
         legacy_settings = conn.execute(
             "SELECT key, value FROM settings WHERE key NOT LIKE 'user:%:%'"
@@ -544,7 +640,8 @@ def save_forecast_window(user_id: int, window_start: date, window_end: date) -> 
 def resolve_forecast_window(user_id: int, start: str = "", end: str = "") -> tuple[date, date, bool]:
     today = date.today()
     saved_start, saved_end = load_saved_forecast_window(user_id)
-    default_start = saved_start or today
+    # Blend-friendly default: recent past → near future so actuals + forecast both show.
+    default_start = saved_start or (today - timedelta(days=90))
     default_end = saved_end or (default_start + timedelta(days=FORECAST_WINDOW_DEFAULT_DAYS))
 
     invalid_filter = False
@@ -656,7 +753,7 @@ def day_in_month(year: int, month: int, desired_day: int) -> date:
     return date(year, month, min(desired_day, max_day))
 
 
-def iter_biweekly(start_anchor: date, window_start: date, window_end: date):
+def iter_every_n_days(start_anchor: date, window_start: date, window_end: date, step_days: int):
     if window_end < start_anchor:
         return
 
@@ -664,12 +761,16 @@ def iter_biweekly(start_anchor: date, window_start: date, window_end: date):
         current = start_anchor
     else:
         days_since_start = (window_start - start_anchor).days
-        jumps = (days_since_start + 13) // 14
-        current = start_anchor + timedelta(days=14 * jumps)
+        jumps = (days_since_start + step_days - 1) // step_days
+        current = start_anchor + timedelta(days=step_days * jumps)
 
     while current <= window_end:
         yield current
-        current += timedelta(days=14)
+        current += timedelta(days=step_days)
+
+
+def iter_biweekly(start_anchor: date, window_start: date, window_end: date):
+    yield from iter_every_n_days(start_anchor, window_start, window_end, 14)
 
 
 def iter_monthly(start_anchor: date, window_start: date, window_end: date, interval_months: int, day: int):
@@ -735,8 +836,10 @@ def generate_recurring_transactions(
     base_amount = float(item["amount"])
     frequency = item["frequency_type"]
 
-    if frequency == "biweekly":
-        occurrences = iter_biweekly(item_start, effective_start, effective_end)
+    if frequency == "weekly":
+        occurrences = iter_every_n_days(item_start, effective_start, effective_end, 7)
+    elif frequency == "biweekly":
+        occurrences = iter_every_n_days(item_start, effective_start, effective_end, 14)
     elif frequency == "semimonthly":
         day1 = int(item.get("semimonthly_day1") or 1)
         day2 = int(item.get("semimonthly_day2") or 15)
@@ -744,6 +847,9 @@ def generate_recurring_transactions(
     elif frequency == "monthly":
         day = int(item.get("day_of_month") or item_start.day)
         occurrences = iter_monthly(item_start, effective_start, effective_end, 1, day)
+    elif frequency == "yearly":
+        day = int(item.get("day_of_month") or item_start.day)
+        occurrences = iter_monthly(item_start, effective_start, effective_end, 12, day)
     else:
         interval_months = int(item.get("interval_months") or 1)
         day = int(item.get("day_of_month") or item_start.day)
@@ -764,6 +870,7 @@ def generate_recurring_transactions(
                 "kind": kind,
                 "category_name": item.get("category_name") or "",
                 "category_color": item.get("category_color") or "",
+                "account_id": item.get("account_id"),
             }
         )
 
@@ -776,7 +883,7 @@ def load_all_recurring(user_id: int) -> List[Dict[str, Any]]:
             """
             SELECT r.id, r.name, r.kind, r.amount, r.start_date, r.end_date, r.frequency_type,
                    r.interval_months, r.semimonthly_day1, r.semimonthly_day2, r.day_of_month,
-                   r.active, r.created_at, r.category_id, c.name AS category_name, c.color AS category_color
+                   r.active, r.created_at, r.category_id, r.account_id, c.name AS category_name, c.color AS category_color
             FROM recurring_items r
             LEFT JOIN categories c ON c.id = r.category_id AND c.user_id = r.user_id
             WHERE r.user_id = ?
@@ -796,7 +903,7 @@ def load_active_recurring(user_id: int) -> List[Dict[str, Any]]:
             """
             SELECT r.id, r.name, r.kind, r.amount, r.start_date, r.end_date, r.frequency_type,
                    r.interval_months, r.semimonthly_day1, r.semimonthly_day2, r.day_of_month,
-                   r.active, r.created_at, r.category_id, c.name AS category_name, c.color AS category_color
+                   r.active, r.created_at, r.category_id, r.account_id, c.name AS category_name, c.color AS category_color
             FROM recurring_items r
             LEFT JOIN categories c ON c.id = r.category_id AND c.user_id = r.user_id
             WHERE r.active = TRUE AND r.user_id = ?
@@ -814,7 +921,8 @@ def load_manual_transactions(user_id: int, window_start: date, window_end: date)
     with get_connection() as conn:
         cursor = conn.execute(
             """
-            SELECT m.id, m.name, m.kind, m.amount, m.tx_date, m.category_id, c.name AS category_name, c.color AS category_color
+            SELECT m.id, m.name, m.kind, m.amount, m.tx_date, m.category_id, m.account_id,
+                   c.name AS category_name, c.color AS category_color
             FROM manual_transactions m
             LEFT JOIN categories c ON c.id = m.category_id AND c.user_id = m.user_id
             WHERE m.user_id = ? AND m.tx_date >= ? AND m.tx_date <= ?
@@ -844,6 +952,7 @@ def load_manual_transactions(user_id: int, window_start: date, window_end: date)
                 "id": row["id"],
                 "category_name": row.get("category_name") or "",
                 "category_color": safe_hex_color(row.get("category_color")),
+                "account_id": row.get("account_id"),
             }
         )
     return transactions
@@ -886,7 +995,7 @@ def load_recurring_item_by_id(user_id: int, item_id: int) -> Optional[Dict[str, 
             """
             SELECT r.id, r.name, r.kind, r.amount, r.start_date, r.end_date, r.frequency_type,
                    r.interval_months, r.semimonthly_day1, r.semimonthly_day2, r.day_of_month,
-                   r.active, r.category_id, c.name AS category_name, c.color AS category_color
+                   r.active, r.category_id, r.account_id, c.name AS category_name, c.color AS category_color
             FROM recurring_items r
             LEFT JOIN categories c ON c.id = r.category_id AND c.user_id = r.user_id
             WHERE r.id = ? AND r.user_id = ?
@@ -947,25 +1056,451 @@ def delete_overrides_for_item(recurring_item_id: int) -> None:
 
 def summarize_frequency(item: Dict[str, Any]) -> str:
     frequency = item["frequency_type"]
+    start = item["start_date"]
+    day = item.get("day_of_month") or start.day
+    if frequency == "weekly":
+        return "Every week"
     if frequency == "biweekly":
         return "Every 2 weeks"
     if frequency == "semimonthly":
         return f"Twice monthly ({item.get('semimonthly_day1') or 1}, {item.get('semimonthly_day2') or 15})"
     if frequency == "monthly":
-        return f"Monthly (day {item.get('day_of_month') or item['start_date'].day})"
+        return f"Monthly (day {day})"
+    if frequency == "yearly":
+        return f"Yearly ({start.strftime('%b')} {day})"
     interval = item.get("interval_months") or 1
-    return f"Every {interval} month(s) (day {item.get('day_of_month') or item['start_date'].day})"
+    return f"Every {interval} month(s) (day {day})"
+
+
+# Enough lookback that a charge whose deferred card due-date lands inside the
+# window is still generated (one statement cycle + due offset ≈ up to ~62 days).
+CYCLE_LOOKBACK_DAYS = 75
+
+
+LAST_DAY_SENTINEL = 0  # statement_day / due_day == 0 means "last day of month"
+
+
+def _next_month_first(anchor: date) -> date:
+    return add_months(date(anchor.year, anchor.month, 1), 1)
+
+
+def resolve_cycle_day(day: Optional[int], year: int, month: int) -> date:
+    """Resolve a configured cycle day to a real date in the given month.
+    0 (LAST_DAY_SENTINEL) → the month's last day; None defaults to the 1st."""
+    if day is None:
+        day = 1
+    day = int(day)
+    if day <= LAST_DAY_SENTINEL:
+        return day_in_month(year, month, 31)  # day_in_month clamps to the last day
+    return day_in_month(year, month, day)
+
+
+def card_cycle_for_charge(account: Dict[str, Any], charge_date: date) -> tuple[date, date]:
+    """For a charge on a credit card, return (statement_close_date, payment_due_date).
+    Close = next statement_day on/after the charge; due = next due_day after close.
+    Supports 'last day of month' (stored as 0)."""
+    statement_day = account.get("statement_day")
+    due_day = account.get("due_day")
+
+    close = resolve_cycle_day(statement_day, charge_date.year, charge_date.month)
+    if close < charge_date:
+        nm = _next_month_first(charge_date)
+        close = resolve_cycle_day(statement_day, nm.year, nm.month)
+
+    due = resolve_cycle_day(due_day, close.year, close.month)
+    if due <= close:
+        nm = _next_month_first(close)
+        due = resolve_cycle_day(due_day, nm.year, nm.month)
+    return close, due
+
+
+def cash_effect_date(account: Optional[Dict[str, Any]], charge_date: date) -> date:
+    """When a charge actually moves checking cash: its own date for checking /
+    unassigned items; the card's payment due date for credit-card items."""
+    if account and account.get("account_type") == "credit_card":
+        return card_cycle_for_charge(account, charge_date)[1]
+    return charge_date
+
+
+def account_cycle_status(account: Dict[str, Any], today: Optional[date] = None) -> Dict[str, date]:
+    today = today or date.today()
+    close, due = card_cycle_for_charge(account, today)
+    return {"next_close": close, "next_due": due}
+
+
+def load_accounts(user_id: int) -> List[Dict[str, Any]]:
+    with get_connection() as conn:
+        return rows_to_dicts(
+            conn.execute(
+                "SELECT id, name, account_type, statement_day, due_day FROM accounts "
+                "WHERE user_id = ? ORDER BY account_type, LOWER(name), id",
+                [user_id],
+            )
+        )
+
+
+def load_account_by_id(user_id: int, account_id: int) -> Optional[Dict[str, Any]]:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id, name, account_type, statement_day, due_day FROM accounts WHERE id = ? AND user_id = ?",
+            [account_id, user_id],
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": int(row[0]),
+        "name": row[1],
+        "account_type": row[2],
+        "statement_day": row[3],
+        "due_day": row[4],
+    }
+
+
+def load_accounts_map(user_id: int) -> Dict[int, Dict[str, Any]]:
+    return {int(account["id"]): account for account in load_accounts(user_id)}
+
+
+def parse_optional_account_id(user_id: int, value: str) -> Optional[int]:
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    try:
+        parsed = int(cleaned)
+    except ValueError as exc:
+        raise ValueError("Invalid account selection") from exc
+    if parsed < 1 or not load_account_by_id(user_id, parsed):
+        raise ValueError("Selected account does not exist")
+    return parsed
+
+
+def ensure_seed_accounts(user_id: int) -> None:
+    """First-time convenience: if the user has no accounts but has imported data,
+    create one account per distinct imported account name (Checking→checking,
+    others→credit_card) so they can just fill in cycle days."""
+    with get_connection() as conn:
+        if conn.execute("SELECT COUNT(*) FROM accounts WHERE user_id = ?", [user_id]).fetchone()[0]:
+            return
+        names = [
+            row[0]
+            for row in conn.execute(
+                "SELECT DISTINCT account FROM imported_transactions WHERE user_id = ? ORDER BY account",
+                [user_id],
+            ).fetchall()
+        ]
+        for name in names:
+            account_type = "checking" if "checking" in name.lower() else "credit_card"
+            conn.execute(
+                "INSERT INTO accounts (user_id, name, account_type) VALUES (?, ?, ?)",
+                [user_id, name, account_type],
+            )
+
+
+def _apply_cash_flow_deferral(
+    rows: List[Dict[str, Any]],
+    accounts: Dict[int, Dict[str, Any]],
+    window_start: date,
+    window_end: date,
+) -> List[Dict[str, Any]]:
+    """Keep non-card expected rows on their own dates (within window). Credit-card
+    rows are dropped here and handled by forecast_card_payments (cycle-based and
+    actual-aware) so nothing double-counts."""
+    direct: List[Dict[str, Any]] = []
+    for row in rows:
+        account = accounts.get(row.get("account_id")) if row.get("account_id") else None
+        if account and account.get("account_type") == "credit_card":
+            continue
+        if window_start <= row["date"] <= window_end:
+            direct.append(row)
+    return direct
+
+
+def checking_account_names(user_id: int) -> List[str]:
+    """Names of the user's checking-type accounts, used to select the checking
+    rows out of imported_transactions. Falls back to the seeded 'Checking'."""
+    names = [a["name"] for a in load_accounts(user_id) if a.get("account_type") == "checking"]
+    return names or ["Checking"]
+
+
+def latest_checking_actual_date(user_id: int) -> Optional[date]:
+    names = checking_account_names(user_id)
+    placeholders = ", ".join("?" for _ in names)
+    with get_connection() as conn:
+        row = conn.execute(
+            f"SELECT MAX(tx_date) FROM imported_transactions WHERE user_id = ? AND account IN ({placeholders})",
+            [user_id, *names],
+        ).fetchone()
+    value = row[0] if row else None
+    if isinstance(value, datetime):
+        value = value.date()
+    return value
+
+
+def first_checking_actual_date(user_id: int) -> Optional[date]:
+    names = checking_account_names(user_id)
+    placeholders = ", ".join("?" for _ in names)
+    with get_connection() as conn:
+        row = conn.execute(
+            f"SELECT MIN(tx_date) FROM imported_transactions WHERE user_id = ? AND account IN ({placeholders})",
+            [user_id, *names],
+        ).fetchone()
+    value = row[0] if row else None
+    if isinstance(value, datetime):
+        value = value.date()
+    return value
+
+
+def load_actual_checking_transactions(user_id: int, window_start: date, window_end: date) -> List[Dict[str, Any]]:
+    """Real checking-account transactions (imported) mapped to the ledger row
+    schema. Amounts are signed (negative = money out). Card payments count."""
+    names = checking_account_names(user_id)
+    placeholders = ", ".join("?" for _ in names)
+    with get_connection() as conn:
+        rows = rows_to_dicts(
+            conn.execute(
+                f"""
+                SELECT i.id, i.tx_date, i.description, i.merchant, i.amount,
+                       COALESCE(ri.name, mt.name) AS expected_name,
+                       ec.name AS expected_category_name, ec.color AS expected_category_color,
+                       ic.name AS import_category_name, ic.color AS import_category_color
+                FROM imported_transactions i
+                LEFT JOIN expected_reconciliations r
+                       ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
+                LEFT JOIN recurring_items ri
+                       ON r.source_type = 'recurring' AND ri.id = r.source_id AND ri.user_id = i.user_id
+                LEFT JOIN manual_transactions mt
+                       ON r.source_type = 'one_time' AND mt.id = r.source_id AND mt.user_id = i.user_id
+                LEFT JOIN categories ec
+                       ON ec.id = COALESCE(ri.category_id, mt.category_id) AND ec.user_id = i.user_id
+                LEFT JOIN categories ic
+                       ON ic.id = i.category_id AND ic.user_id = i.user_id
+                WHERE i.user_id = ? AND i.account IN ({placeholders})
+                  AND i.tx_date >= ? AND i.tx_date <= ?
+                ORDER BY i.tx_date, i.id
+                """,
+                [user_id, *names, window_start, window_end],
+            )
+        )
+
+    transactions: List[Dict[str, Any]] = []
+    for row in rows:
+        tx_date = row["tx_date"]
+        if isinstance(tx_date, datetime):
+            tx_date = tx_date.date()
+        amount = float(row["amount"])
+        raw_name = row.get("merchant") or row.get("description") or ""
+        expected_name = row.get("expected_name")
+        linked = bool(expected_name)
+        if linked:
+            display = expected_name
+            category_name = row.get("expected_category_name") or row.get("import_category_name") or ""
+            category_color = row.get("expected_category_color") or row.get("import_category_color")
+        else:
+            display = raw_name
+            category_name = row.get("import_category_name") or ""
+            category_color = row.get("import_category_color")
+        transactions.append(
+            {
+                "date": tx_date,
+                "description": display,
+                "raw_name": raw_name,
+                "linked": linked,
+                "source": "actual",
+                "income": amount if amount > 0 else 0.0,
+                "expense": -amount if amount < 0 else 0.0,
+                "delta": amount,
+                "kind": "income" if amount > 0 else "expense",
+                "id": row["id"],
+                "category_name": category_name,
+                "category_color": safe_hex_color(category_color),
+            }
+        )
+    return transactions
+
+
+def checking_actual_balance_before(user_id: int, cutoff_date: date, opening_balance: float) -> float:
+    """opening_balance + sum of checking actual deltas strictly before cutoff_date.
+    Gives the correct running-balance seed for any window start."""
+    names = checking_account_names(user_id)
+    placeholders = ", ".join("?" for _ in names)
+    with get_connection() as conn:
+        row = conn.execute(
+            f"""
+            SELECT COALESCE(SUM(amount), 0) FROM imported_transactions
+            WHERE user_id = ? AND account IN ({placeholders}) AND tx_date < ?
+            """,
+            [user_id, *names, cutoff_date],
+        ).fetchone()
+    return float(opening_balance) + float(row[0] if row else 0.0)
+
+
+def card_actual_cutover(user_id: int, card_name: str) -> Optional[date]:
+    """Latest imported transaction date for a specific card account."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT MAX(tx_date) FROM imported_transactions WHERE user_id = ? AND account = ?",
+            [user_id, card_name],
+        ).fetchone()
+    value = row[0] if row else None
+    if isinstance(value, datetime):
+        value = value.date()
+    return value
+
+
+def _sum_actual_card_charges(user_id: int, card_name: str, after: date, close: date) -> float:
+    """Net signed sum of a card's real (non-transfer) charges in (after, close]."""
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT COALESCE(SUM(amount), 0) FROM imported_transactions
+            WHERE user_id = ? AND account = ? AND NOT is_transfer
+              AND tx_date > ? AND tx_date <= ?
+            """,
+            [user_id, card_name, after, close],
+        ).fetchone()
+    return float(row[0] if row else 0.0)
+
+
+def _card_expected_charges(
+    user_id: int, card_id: int, window_start: date, window_end: date
+) -> List[Dict[str, Any]]:
+    """Expected (recurring + one-time) charges assigned to a card as {date, delta}."""
+    charges: List[Dict[str, Any]] = []
+    active_items = load_active_recurring(user_id)
+    item_ids = [int(item["id"]) for item in active_items]
+    overrides_by_id = load_amount_overrides_for_items(item_ids)
+    for item in active_items:
+        if item.get("account_id") != card_id:
+            continue
+        for row in generate_recurring_transactions(
+            item, window_start, window_end, overrides=overrides_by_id.get(int(item["id"]), [])
+        ):
+            charges.append({"date": row["date"], "delta": float(row["delta"])})
+    for row in load_manual_transactions(user_id, window_start, window_end):
+        if row.get("account_id") == card_id:
+            charges.append({"date": row["date"], "delta": float(row["delta"])})
+    return charges
+
+
+def _iter_card_cycles(card: Dict[str, Any], window_start: date, window_end: date):
+    """Yield (prev_close, close, due) per monthly cycle whose due could fall in
+    [window_start, window_end]. Handles 'last day of month' via resolve_cycle_day."""
+    statement_day = card.get("statement_day")
+    due_day = card.get("due_day")
+    month = add_months(date(window_start.year, window_start.month, 1), -2)
+    stop = add_months(date(window_end.year, window_end.month, 1), 2)
+    while month <= stop:
+        close = resolve_cycle_day(statement_day, month.year, month.month)
+        prev_m = add_months(month, -1)
+        prev_close = resolve_cycle_day(statement_day, prev_m.year, prev_m.month)
+        due = resolve_cycle_day(due_day, close.year, close.month)
+        if due <= close:
+            nm = _next_month_first(close)
+            due = resolve_cycle_day(due_day, nm.year, nm.month)
+        yield prev_close, close, due
+        month = add_months(month, 1)
+
+
+def forecast_card_payments(
+    user_id: int, window_start: date, window_end: date, cutover: Optional[date]
+) -> List[Dict[str, Any]]:
+    """One projected '{card} payment' per cycle whose due date is in the window and
+    after the checking cutover. Amount = the card's actual charges in the cycle +
+    expected card charges — the latter counted only after that card's own import
+    cutover, so a charge that is both imported and expected is not double-counted."""
+    accounts = load_accounts_map(user_id)
+    payments: List[Dict[str, Any]] = []
+
+    for card in accounts.values():
+        if card.get("account_type") != "credit_card":
+            continue
+        if card.get("statement_day") is None or card.get("due_day") is None:
+            continue  # cycle not configured
+
+        card_cutover = card_actual_cutover(user_id, card["name"])
+        expected = _card_expected_charges(
+            user_id,
+            int(card["id"]),
+            window_start - timedelta(days=CYCLE_LOOKBACK_DAYS),
+            window_end,
+        )
+
+        for prev_close, close, due in _iter_card_cycles(card, window_start, window_end):
+            if not (window_start <= due <= window_end):
+                continue
+            if cutover is not None and due <= cutover:
+                continue  # already paid within the checking actuals
+
+            actual = _sum_actual_card_charges(user_id, card["name"], prev_close, close)
+            expected_sum = sum(
+                charge["delta"]
+                for charge in expected
+                if prev_close < charge["date"] <= close
+                and (card_cutover is None or charge["date"] > card_cutover)
+            )
+            delta = round(actual + expected_sum, 2)
+            if abs(delta) < 0.005:
+                continue
+
+            payments.append(
+                {
+                    "date": due,
+                    "description": f"{card['name']} payment",
+                    "source": "card",
+                    "income": delta if delta > 0 else 0.0,
+                    "expense": -delta if delta < 0 else 0.0,
+                    "delta": delta,
+                    "kind": "income" if delta > 0 else "expense",
+                    "category_name": "",
+                    "category_color": "",
+                    "account_id": int(card["id"]),
+                }
+            )
+    return payments
+
+
+def collect_blended_transactions(user_id: int, window_start: date, window_end: date) -> List[Dict[str, Any]]:
+    """Actual checking transactions up to the latest CSV date, then the expected
+    forecast after it — one coherent, non-double-counted cash timeline."""
+    cutover = latest_checking_actual_date(user_id)
+
+    transactions: List[Dict[str, Any]] = []
+    if cutover is not None:
+        actual_end = min(window_end, cutover)
+        if window_start <= actual_end:
+            transactions.extend(load_actual_checking_transactions(user_id, window_start, actual_end))
+        forecast_start = max(window_start, cutover + timedelta(days=1))
+    else:
+        forecast_start = window_start
+
+    if forecast_start <= window_end:
+        transactions.extend(collect_window_transactions(user_id, forecast_start, window_end))
+        transactions.extend(forecast_card_payments(user_id, forecast_start, window_end, cutover))
+
+    transactions.sort(
+        key=lambda tx: (
+            tx["date"],
+            0 if tx["kind"] == "income" else 1,
+            tx["description"].lower(),
+            tx.get("id", 0),
+        )
+    )
+    return transactions
 
 
 def collect_window_transactions(user_id: int, window_start: date, window_end: date) -> List[Dict[str, Any]]:
-    transactions: List[Dict[str, Any]] = []
+    accounts = load_accounts_map(user_id)
+    gen_start = window_start
+
+    raw: List[Dict[str, Any]] = []
     active_items = load_active_recurring(user_id)
     item_ids = [int(item["id"]) for item in active_items]
     overrides_by_id = load_amount_overrides_for_items(item_ids)
     for item in active_items:
         item_overrides = overrides_by_id.get(int(item["id"]), [])
-        transactions.extend(generate_recurring_transactions(item, window_start, window_end, overrides=item_overrides))
-    transactions.extend(load_manual_transactions(user_id, window_start, window_end))
+        raw.extend(generate_recurring_transactions(item, gen_start, window_end, overrides=item_overrides))
+    raw.extend(load_manual_transactions(user_id, gen_start, window_end))
+
+    transactions = _apply_cash_flow_deferral(raw, accounts, window_start, window_end)
 
     transactions.sort(
         key=lambda tx: (
@@ -1128,4 +1663,1100 @@ def build_monthly_totals(
         month_cursor = add_months(month_cursor, 1)
 
     return rows
+
+
+# ---------------------------------------------------------------------------
+# CSV transaction import (real bank/card exports -> imported_transactions)
+#
+# Ports the sign / flow / transfer logic from the (staged, un-integrated)
+# _incoming/financial_analysis/app/loaders.py, re-implemented on the stdlib
+# `csv` module so metis keeps no pandas/PyYAML dependency. Amounts are stored
+# SIGNED (negative = money out, positive = money in). Credit-card *payments*
+# are flagged is_transfer=True so they net out of spending totals.
+# ---------------------------------------------------------------------------
+
+IMPORT_FLOWS = {"income", "expense", "refund", "transfer", "fee"}
+_IMPORT_SQUASH_RE = re.compile(r"\s+")
+_CARD_PAYMENT_RE = re.compile(r"PAYMENT|THANK YOU", re.IGNORECASE)
+_CHECKING_PAYS_CARD_RE = re.compile(
+    r"APPLECARD|GS\s*BANK|BANKCARD|VISA|CARD PAYMENT|CREDIT CARD", re.IGNORECASE
+)
+
+
+class CsvImportError(ValueError):
+    """Raised when a CSV cannot be recognized or parsed. Subclasses ValueError
+    so routes can surface the message with the same handling as other input
+    errors."""
+
+
+def _import_squash(text: Any) -> str:
+    """Collapse runs of whitespace so descriptions are stable/searchable."""
+    return _IMPORT_SQUASH_RE.sub(" ", str(text if text is not None else "")).strip()
+
+
+def _visa_merchant(description: str) -> str:
+    """Visa descriptions look like 'LAKE 66        ARCADIA      OK' — the payee
+    is the leading chunk before the big whitespace gap."""
+    parts = re.split(r"\s{2,}", description.strip())
+    return parts[0].strip() if parts else description.strip()
+
+
+def _checking_merchant(description: str) -> str:
+    """Pull a readable payee out of a checking-account ACH description."""
+    desc = _import_squash(description)
+    match = re.search(r"\bACH\s+(.+?)\s+TYPE:", desc, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    match = re.search(r"\bACH\s+(.+?)(?:\s+ID:|\s+CO:|$)", desc, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return " ".join(desc.split()[:4])
+
+
+def _parse_import_date(value: str) -> date:
+    cleaned = str(value or "").strip()
+    if not cleaned:
+        raise CsvImportError("row is missing a date")
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(cleaned, fmt).date()
+        except ValueError:
+            continue
+    try:
+        return date.fromisoformat(cleaned[:10])
+    except ValueError as exc:
+        raise CsvImportError(f"unrecognized date '{cleaned}'") from exc
+
+
+def _parse_import_amount(value: str) -> float:
+    cleaned = str(value or "").strip().replace(",", "").replace("$", "")
+    if cleaned in ("", "-"):
+        return 0.0
+    try:
+        return float(cleaned)
+    except ValueError as exc:
+        raise CsvImportError(f"unrecognized amount '{value}'") from exc
+
+
+def _parse_checking_row(row: Dict[str, str]) -> Dict[str, Any]:
+    description = _import_squash(row.get("Description", ""))
+    raw_type = str(row.get("Credit or Debit", "")).strip()
+    is_credit = raw_type == "Credit"
+    magnitude = abs(_parse_import_amount(row.get("Amount", "0")))
+    # Credit -> money in (+), Debit -> money out (-).
+    amount = magnitude if is_credit else -magnitude
+    # A debit whose description names a card issuer is a card payment (transfer).
+    pays_card = bool(_CHECKING_PAYS_CARD_RE.search(description.upper())) and not is_credit
+    if is_credit:
+        flow = "income"
+    elif pays_card:
+        flow = "transfer"
+    else:
+        flow = "expense"
+    return {
+        "account": "Checking",
+        "tx_date": _parse_import_date(row.get("Processed Date", "")),
+        "description": description,
+        "merchant": _checking_merchant(description),
+        "amount": amount,
+        "flow": flow,
+        "is_transfer": pays_card,
+        "raw_type": raw_type,
+    }
+
+
+def _parse_visa_row(row: Dict[str, str]) -> Dict[str, Any]:
+    description = _import_squash(row.get("Description", ""))
+    raw_type = str(row.get("Credit or Debit", "")).strip()
+    is_credit = raw_type == "Credit"
+    is_payment = is_credit and bool(_CARD_PAYMENT_RE.search(description))
+    is_refund = is_credit and not is_payment
+    magnitude = abs(_parse_import_amount(row.get("Amount", "0")))
+    # Debit on a card = purchase (money out, -). Refund = money back (+).
+    # Payment = transfer; store negative (debt paid down) but flag it.
+    amount = magnitude if is_refund else -magnitude
+    if is_payment:
+        flow = "transfer"
+    elif is_refund:
+        flow = "refund"
+    else:
+        flow = "expense"
+    return {
+        "account": "Visa",
+        "tx_date": _parse_import_date(row.get("Processed Date", "")),
+        "description": description,
+        "merchant": _visa_merchant(description),
+        "amount": amount,
+        "flow": flow,
+        "is_transfer": is_payment,
+        "raw_type": raw_type,
+    }
+
+
+def _parse_apple_row(row: Dict[str, str]) -> Dict[str, Any]:
+    description = _import_squash(row.get("Description", ""))
+    merchant = _import_squash(row.get("Merchant", ""))
+    raw_type = str(row.get("Type", "")).strip()
+    usd = _parse_import_amount(row.get("Amount (USD)", "0"))  # purchases +, credits -
+    amount = -usd  # purchase (+usd) -> expense (-)
+    is_transfer = raw_type == "Payment"
+    if raw_type == "Payment":
+        flow = "transfer"
+    elif raw_type == "Interest":
+        flow = "fee"
+    elif raw_type == "Credit":
+        flow = "refund"
+    else:
+        flow = "expense"
+    # "Other"/"Debit" rows are tiny adjustments; treat as transfer so they drop
+    # out of spending totals.
+    if raw_type in ("Other", "Debit"):
+        is_transfer = True
+        flow = "transfer"
+    return {
+        "account": "Apple Card",
+        "tx_date": _parse_import_date(row.get("Transaction Date", "")),
+        "description": description,
+        "merchant": merchant,
+        "amount": amount,
+        "flow": flow,
+        "is_transfer": is_transfer,
+        "raw_type": raw_type,
+    }
+
+
+_ROW_PARSERS = {
+    "checking": _parse_checking_row,
+    "visa": _parse_visa_row,
+    "apple": _parse_apple_row,
+}
+
+
+def detect_csv_format(header: List[str], first_row: Optional[Dict[str, str]]) -> Optional[str]:
+    """Identify which export a CSV is. Checking and Visa share an identical
+    6-column header, so they are disambiguated by the Account Name value."""
+    fields = {str(name).strip() for name in (header or []) if name}
+    if "Amount (USD)" in fields and "Transaction Date" in fields:
+        return "apple"
+    if {"Processed Date", "Credit or Debit", "Amount", "Account Name"}.issubset(fields):
+        account_name = str((first_row or {}).get("Account Name", "")).upper()
+        if "CHECKING" in account_name:
+            return "checking"
+        if "VISA" in account_name:
+            return "visa"
+    return None
+
+
+def parse_import_csv(filename: str, text: str) -> tuple[str, List[Dict[str, Any]]]:
+    """Parse a bank/card CSV export into normalized rows.
+
+    Returns (account_label, rows). Raises CsvImportError on an unrecognized
+    format or an unparseable row.
+    """
+    if text.startswith("﻿"):  # strip UTF-8 BOM so header cells match
+        text = text[1:]
+    reader = csv.DictReader(io.StringIO(text))
+    if reader.fieldnames is None:
+        raise CsvImportError("The file is empty or not a valid CSV.")
+    raw_rows = list(reader)
+    fmt = detect_csv_format(list(reader.fieldnames), raw_rows[0] if raw_rows else None)
+    if fmt is None:
+        raise CsvImportError(
+            "Unrecognized CSV format. Expected a Checking, Visa, or Apple Card export."
+        )
+    parser = _ROW_PARSERS[fmt]
+
+    parsed: List[Dict[str, Any]] = []
+    for index, raw in enumerate(raw_rows):
+        if not any(str(value).strip() for value in raw.values()):
+            continue  # skip fully blank lines
+        try:
+            parsed.append(parser(raw))
+        except CsvImportError as exc:
+            raise CsvImportError(f"row {index + 2}: {exc}") from exc
+
+    account_label = parsed[0]["account"] if parsed else fmt.title()
+    return account_label, parsed
+
+
+def compute_import_fingerprint(row: Dict[str, Any], occurrence_index: int) -> str:
+    """Stable dedup key for one transaction. The occurrence_index disambiguates
+    genuinely identical same-day rows while keeping re-uploads reproducible."""
+    key = "|".join(
+        [
+            row["account"],
+            row["tx_date"].isoformat(),
+            f"{float(row['amount']):.2f}",
+            _import_squash(row["description"]).upper(),
+            str(occurrence_index),
+        ]
+    )
+    return hashlib.sha1(key.encode("utf-8")).hexdigest()
+
+
+def _assign_import_fingerprints(rows: List[Dict[str, Any]]) -> None:
+    seen: Dict[tuple, int] = {}
+    for row in rows:
+        base_key = (
+            row["account"],
+            row["tx_date"].isoformat(),
+            round(float(row["amount"]), 2),
+            _import_squash(row["description"]).upper(),
+        )
+        occurrence = seen.get(base_key, 0)
+        seen[base_key] = occurrence + 1
+        row["fingerprint"] = compute_import_fingerprint(row, occurrence)
+
+
+def upsert_imported_transactions(
+    user_id: int, rows: List[Dict[str, Any]], source_file: str
+) -> Dict[str, int]:
+    """Insert only rows whose fingerprint is not already present for this user.
+    Idempotent: re-uploading overlapping exports adds nothing new."""
+    if not rows:
+        return {"inserted": 0, "skipped": 0, "transfers": 0}
+
+    _assign_import_fingerprints(rows)
+    fingerprints = [row["fingerprint"] for row in rows]
+
+    inserted = 0
+    transfers = 0
+    with get_connection() as conn:
+        placeholders = ", ".join("?" for _ in fingerprints)
+        existing = conn.execute(
+            f"SELECT fingerprint FROM imported_transactions "
+            f"WHERE user_id = ? AND fingerprint IN ({placeholders})",
+            [user_id, *fingerprints],
+        ).fetchall()
+        already_present = {found[0] for found in existing}
+
+        seen_in_batch: set = set()
+        for row in rows:
+            fingerprint = row["fingerprint"]
+            if fingerprint in already_present or fingerprint in seen_in_batch:
+                continue
+            seen_in_batch.add(fingerprint)
+            conn.execute(
+                """
+                INSERT INTO imported_transactions (
+                    user_id, account, tx_date, description, merchant, amount,
+                    flow, is_transfer, raw_type, category_id, source_file, fingerprint
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+                """,
+                [
+                    user_id,
+                    row["account"],
+                    row["tx_date"],
+                    row["description"],
+                    row["merchant"],
+                    float(row["amount"]),
+                    row["flow"],
+                    bool(row["is_transfer"]),
+                    row["raw_type"],
+                    source_file,
+                    fingerprint,
+                ],
+            )
+            inserted += 1
+            if row["is_transfer"]:
+                transfers += 1
+
+    return {"inserted": inserted, "skipped": len(rows) - inserted, "transfers": transfers}
+
+
+def load_imported_transactions(
+    user_id: int, account_filter: str = "", limit: int = 500
+) -> List[Dict[str, Any]]:
+    query = """
+        SELECT i.id, i.account, i.tx_date, i.description, i.merchant, i.amount,
+               i.flow, i.is_transfer, i.raw_type, i.category_id, i.source_file,
+               c.name AS category_name, c.color AS category_color
+        FROM imported_transactions i
+        LEFT JOIN categories c ON c.id = i.category_id AND c.user_id = i.user_id
+        WHERE i.user_id = ?
+    """
+    params: List[Any] = [user_id]
+    if account_filter:
+        query += " AND i.account = ?"
+        params.append(account_filter)
+    query += " ORDER BY i.tx_date DESC, i.id DESC LIMIT ?"
+    params.append(limit)
+
+    with get_connection() as conn:
+        rows = rows_to_dicts(conn.execute(query, params))
+
+    for row in rows:
+        tx_date = row["tx_date"]
+        if isinstance(tx_date, datetime):
+            row["tx_date"] = tx_date.date()
+        row["category_color"] = safe_hex_color(row.get("category_color"))
+    return rows
+
+
+def load_imported_accounts(user_id: int) -> List[str]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT account FROM imported_transactions WHERE user_id = ? ORDER BY account",
+            [user_id],
+        ).fetchall()
+    return [row[0] for row in rows]
+
+
+def summarize_imported(user_id: int) -> Dict[str, Any]:
+    """Per-account counts + totals for the import page header. Spending and
+    income both exclude transfers so card payments never double-count."""
+    with get_connection() as conn:
+        total_row = conn.execute(
+            "SELECT COUNT(*) FROM imported_transactions WHERE user_id = ?",
+            [user_id],
+        ).fetchone()
+        accounts = rows_to_dicts(
+            conn.execute(
+                """
+                SELECT account,
+                       COUNT(*) AS n,
+                       COALESCE(SUM(CASE WHEN NOT is_transfer AND amount < 0 THEN -amount ELSE 0 END), 0) AS spending,
+                       COALESCE(SUM(CASE WHEN NOT is_transfer AND amount > 0 THEN amount ELSE 0 END), 0) AS income,
+                       COALESCE(SUM(CASE WHEN is_transfer THEN 1 ELSE 0 END), 0) AS transfers,
+                       MIN(tx_date) AS first_date,
+                       MAX(tx_date) AS last_date
+                FROM imported_transactions
+                WHERE user_id = ?
+                GROUP BY account
+                ORDER BY account
+                """,
+                [user_id],
+            )
+        )
+
+    for account in accounts:
+        for key in ("first_date", "last_date"):
+            if isinstance(account.get(key), datetime):
+                account[key] = account[key].date()
+
+    return {
+        "total_count": int(total_row[0]) if total_row else 0,
+        "accounts": accounts,
+        "total_spending": sum(float(account["spending"]) for account in accounts),
+        "total_income": sum(float(account["income"]) for account in accounts),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Expected transactions + reconciliation
+#
+# "Expected transactions" = recurring_items (recurring) + manual_transactions
+# (one-time). Reconciliation links an imported (actual) transaction to an
+# expected item. A confirmed link seeds an editable description substring rule
+# (expected_match_rules) that auto-links matching actuals, both historical and
+# on future imports. This layer is status/audit only; it does not change the
+# forecast ledger math.
+# ---------------------------------------------------------------------------
+
+EXPECTED_SOURCE_TYPES = {"recurring", "one_time"}
+_OPEN_WINDOW_START = date(1970, 1, 1)
+_OPEN_WINDOW_END = date(2999, 12, 31)
+RECONCILE_OCCURRENCE_TOLERANCE_DAYS = 10
+
+
+def load_all_manual_transactions(user_id: int) -> List[Dict[str, Any]]:
+    """Raw one-off (manual) transactions for a user, newest first."""
+    with get_connection() as conn:
+        rows = rows_to_dicts(
+            conn.execute(
+                """
+                SELECT m.id, m.name, m.kind, m.amount, m.tx_date, m.category_id, m.account_id,
+                       c.name AS category_name, c.color AS category_color
+                FROM manual_transactions m
+                LEFT JOIN categories c ON c.id = m.category_id AND c.user_id = m.user_id
+                WHERE m.user_id = ?
+                ORDER BY m.tx_date DESC, m.id DESC
+                """,
+                [user_id],
+            )
+        )
+    for row in rows:
+        if isinstance(row["tx_date"], datetime):
+            row["tx_date"] = row["tx_date"].date()
+        row["category_color"] = safe_hex_color(row.get("category_color"))
+    return rows
+
+
+def load_expected_items(user_id: int) -> List[Dict[str, Any]]:
+    """Unified expected-transaction list: recurring items + one-time items."""
+    accounts = load_accounts_map(user_id)
+
+    def account_name(account_id: Any) -> str:
+        account = accounts.get(int(account_id)) if account_id else None
+        return account["name"] if account else ""
+
+    items: List[Dict[str, Any]] = []
+    for item in load_all_recurring(user_id):
+        items.append(
+            {
+                "source_type": "recurring",
+                "id": int(item["id"]),
+                "name": item["name"],
+                "kind": item["kind"],
+                "amount": float(item["amount"]),
+                "category_name": item.get("category_name") or "",
+                "category_color": safe_hex_color(item.get("category_color")),
+                "account_name": account_name(item.get("account_id")),
+                "active": bool(item["active"]),
+                "cadence": summarize_frequency(item),
+                "date": item["start_date"].date() if isinstance(item.get("start_date"), datetime) else item.get("start_date"),
+            }
+        )
+    for row in load_all_manual_transactions(user_id):
+        items.append(
+            {
+                "source_type": "one_time",
+                "id": int(row["id"]),
+                "name": row["name"],
+                "kind": row["kind"],
+                "amount": float(row["amount"]),
+                "category_name": row.get("category_name") or "",
+                "category_color": safe_hex_color(row.get("category_color")),
+                "account_name": account_name(row.get("account_id")),
+                "active": True,
+                "cadence": "One-time",
+                "date": row["tx_date"],
+            }
+        )
+    return items
+
+
+def load_expected_item(user_id: int, source_type: str, source_id: int) -> Optional[Dict[str, Any]]:
+    if source_type == "recurring":
+        item = load_recurring_item_by_id(user_id, source_id)
+        if not item:
+            return None
+        return {
+            "source_type": "recurring",
+            "id": int(item["id"]),
+            "name": item["name"],
+            "kind": item["kind"],
+            "amount": float(item["amount"]),
+            "category_name": item.get("category_name") or "",
+            "category_color": safe_hex_color(item.get("category_color")),
+            "active": bool(item["active"]),
+            "cadence": summarize_frequency(item),
+            "raw": item,
+        }
+    if source_type == "one_time":
+        row = load_manual_transaction_by_id(user_id, source_id)
+        if not row:
+            return None
+        return {
+            "source_type": "one_time",
+            "id": int(row["id"]),
+            "name": row["name"],
+            "kind": row["kind"],
+            "amount": float(row["amount"]),
+            "category_name": row.get("category_name") or "",
+            "category_color": safe_hex_color(row.get("category_color")),
+            "active": True,
+            "cadence": "One-time",
+            "date": row["tx_date"],
+            "raw": row,
+        }
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Recurring-transaction suggestions
+#
+# Scan a user's imported (actual) transactions, group them by a normalized
+# merchant key, and infer which groups look like real recurring items —
+# regular cadence + stable amount. Each surviving group becomes a suggestion
+# the user can confirm (create a recurring item on the detected account) or
+# dismiss. Dismissed/added keys are remembered so they don't reappear.
+# ---------------------------------------------------------------------------
+
+_SUGGEST_STATE_RE = re.compile(r"\b[A-Z]{2}\b")
+
+# Map a median day-gap between occurrences to a human cadence and the Metis
+# frequency parameters that reproduce it. (lo, hi) is the inclusive gap window.
+_SUGGEST_CADENCES = [
+    # name, (lo, hi), frequency_type, interval_months
+    ("Weekly", (5, 10), "weekly", None),
+    ("Every 2 weeks", (11, 18), "biweekly", None),
+    ("Monthly", (19, 45), "monthly", None),
+    ("Every 2 months", (46, 75), "every_x_months", 2),
+    ("Quarterly", (76, 135), "every_x_months", 3),
+    ("Every 6 months", (136, 285), "every_x_months", 6),
+    ("Yearly", (286, 430), "yearly", 12),
+]
+
+
+def _suggest_norm_key(text: Any) -> str:
+    """Collapse a merchant/description to a stable grouping key (drop store #s,
+    trailing city/state, ' * ' / '_' suffixes, and long digit runs)."""
+    value = str(text or "").upper()
+    value = re.sub(r"#\s*\d+", "", value)          # store numbers
+    value = re.sub(r"\b\d{3,}\b", "", value)        # long digit runs / phone tails
+    value = re.sub(r"[*_].*$", "", value)           # SQ * / TST* / FOO_BAR suffixes
+    value = _SUGGEST_STATE_RE.sub("", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    return value or str(text or "").upper().strip()
+
+
+def _suggest_clean_name(text: Any) -> str:
+    """Turn a raw merchant string into a friendlier default recurring name."""
+    value = _import_squash(text)
+    value = re.sub(r"\s{2,}.*$", "", value)             # drop trailing address block
+    value = re.sub(r"\bWWW\.[^\s]+", "", value, flags=re.IGNORECASE)  # drop URLs
+    value = value.replace("*", " ").replace("_", " ")   # SQ* / TST* / FOO_BAR -> spaces
+    value = re.sub(r"\b\d{3,}\b", "", value)             # drop long id numbers
+    value = re.sub(r"\s+", " ", value).strip(" -.*_")
+    if not value:
+        value = _import_squash(text)[:40]
+    # Title-case ALL-CAPS bank/ACH text; leave mixed-case merchant names alone.
+    if value.isupper():
+        value = value.title()
+    return value[:40] or "Recurring item"
+
+
+def _classify_suggest_cadence(median_gap: float):
+    for name, (lo, hi), freq, interval in _SUGGEST_CADENCES:
+        if lo <= median_gap <= hi:
+            return name, freq, interval
+    return None, None, None
+
+
+def load_dismissed_suggestion_keys(user_id: int) -> set:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT suggestion_key FROM dismissed_suggestions WHERE user_id = ?",
+            [user_id],
+        ).fetchall()
+    return {row[0] for row in rows}
+
+
+def dismiss_suggestion(user_id: int, suggestion_key: str, reason: str = "dismissed") -> None:
+    key = (suggestion_key or "").strip()
+    if not key:
+        return
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO dismissed_suggestions (user_id, suggestion_key, reason)
+            VALUES (?, ?, ?)
+            ON CONFLICT DO NOTHING
+            """,
+            [user_id, key, reason],
+        )
+
+
+def count_dismissed_suggestions(user_id: int) -> int:
+    """How many suggestions the user manually dismissed (restorable). Excludes
+    'added' rows, which suppress already-confirmed items and should stay hidden."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM dismissed_suggestions WHERE user_id = ? AND reason = 'dismissed'",
+            [user_id],
+        ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def reset_dismissed_suggestions(user_id: int) -> None:
+    """Restore manually-dismissed suggestions. Leaves 'added' suppressions intact
+    so items already turned into recurring rules are not re-suggested."""
+    with get_connection() as conn:
+        conn.execute(
+            "DELETE FROM dismissed_suggestions WHERE user_id = ? AND reason = 'dismissed'",
+            [user_id],
+        )
+
+
+def _median(values: List[float]) -> float:
+    ordered = sorted(values)
+    n = len(ordered)
+    if not n:
+        return 0.0
+    mid = n // 2
+    if n % 2:
+        return float(ordered[mid])
+    return (ordered[mid - 1] + ordered[mid]) / 2.0
+
+
+def _pstdev(values: List[float]) -> float:
+    n = len(values)
+    if n < 2:
+        return 0.0
+    mean = sum(values) / n
+    return (sum((v - mean) ** 2 for v in values) / n) ** 0.5
+
+
+def _mode(values: List[Any]) -> Any:
+    counts: Dict[Any, int] = {}
+    for v in values:
+        counts[v] = counts.get(v, 0) + 1
+    return max(counts.items(), key=lambda kv: kv[1])[0] if counts else None
+
+
+def detect_recurring_suggestions(
+    user_id: int,
+    min_occurrences: int = 3,
+    amount_cv_max: float = 0.35,
+    min_confidence: float = 0.5,
+    lookback_days: int = 1200,
+    limit: int = 24,
+) -> List[Dict[str, Any]]:
+    """Infer likely recurring items from a user's imported transactions.
+
+    A group of same-merchant transactions qualifies when it recurs at least
+    `min_occurrences` times at a regular spacing (mapping to a Metis cadence)
+    and its amount is reasonably stable. Transfers, dismissed/added keys, and
+    groups already reconciled to a recurring item are excluded."""
+    since = date.today() - timedelta(days=lookback_days)
+    accounts = load_accounts(user_id)
+    account_id_by_name = {a["name"]: int(a["id"]) for a in accounts}
+    categories = {int(c["id"]): c for c in load_categories(user_id)}
+    dismissed = load_dismissed_suggestion_keys(user_id)
+
+    with get_connection() as conn:
+        rows = rows_to_dicts(
+            conn.execute(
+                """
+                SELECT i.id, i.account, i.tx_date, i.description, i.merchant,
+                       i.amount, i.category_id,
+                       CASE WHEN r.source_type = 'recurring' THEN 1 ELSE 0 END AS recon_recurring
+                FROM imported_transactions i
+                LEFT JOIN expected_reconciliations r
+                       ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
+                WHERE i.user_id = ?
+                  AND NOT i.is_transfer
+                  AND i.tx_date >= ?
+                ORDER BY i.tx_date
+                """,
+                [user_id, since],
+            )
+        )
+
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        tx_date = row["tx_date"]
+        if isinstance(tx_date, datetime):
+            tx_date = tx_date.date()
+        row["tx_date"] = tx_date
+        key = _suggest_norm_key(row.get("merchant") or row.get("description"))
+        if not key or key in dismissed:
+            continue
+        groups.setdefault(key, []).append(row)
+
+    suggestions: List[Dict[str, Any]] = []
+    for key, group in groups.items():
+        if len(group) < min_occurrences:
+            continue
+        # Skip groups already tracked by a recurring item (majority reconciled).
+        reconciled = sum(1 for r in group if r["recon_recurring"])
+        if reconciled * 2 >= len(group):
+            continue
+
+        group.sort(key=lambda r: r["tx_date"])
+        dates = [r["tx_date"] for r in group]
+        gaps = [(dates[i] - dates[i - 1]).days for i in range(1, len(dates))]
+        gaps = [g for g in gaps if g > 0]
+        if len(gaps) < min_occurrences - 1:
+            continue
+
+        median_gap = _median([float(g) for g in gaps])
+        cadence_label, frequency_type, interval_months = _classify_suggest_cadence(median_gap)
+        if frequency_type is None:
+            continue
+
+        signed = [float(r["amount"]) for r in group]
+        amounts = [abs(v) for v in signed]
+        mean_abs = sum(amounts) / len(amounts)
+        amount_cv = (_pstdev(amounts) / mean_abs) if mean_abs else 1.0
+        if amount_cv > amount_cv_max:
+            continue
+
+        gap_cv = (_pstdev([float(g) for g in gaps]) / median_gap) if median_gap else 1.0
+        confidence = round(max(0.0, min(1.0, 1.0 - 0.5 * amount_cv - 0.5 * gap_cv)), 2)
+        if confidence < min_confidence:
+            continue
+
+        kind = "income" if _median(signed) > 0 else "expense"
+        account_name = _mode([r["account"] for r in group])
+        modal_category = _mode([r["category_id"] for r in group if r.get("category_id")])
+        category = categories.get(int(modal_category)) if modal_category else None
+        day_of_month = int(_mode([r["tx_date"].day for r in group]) or dates[-1].day)
+        interval = int(interval_months or 1)
+
+        suggestions.append(
+            {
+                "key": key,
+                "name": _suggest_clean_name(_mode([r["merchant"] for r in group]) or key),
+                "kind": kind,
+                "amount": round(_median(amounts), 2),
+                "account_id": account_id_by_name.get(account_name),
+                "account_name": account_name,
+                "category_id": int(category["id"]) if category else None,
+                "category_name": category["name"] if category else "",
+                "category_color": category["color"] if category else "",
+                "frequency_type": frequency_type,
+                "frequency_label": cadence_label,
+                "interval_months": interval,
+                "day_of_month": day_of_month,
+                "semimonthly_day1": 1,
+                "semimonthly_day2": 15,
+                "start_date": dates[-1].isoformat(),
+                "count": len(group),
+                "confidence": confidence,
+                "first_date": dates[0].isoformat(),
+                "last_date": dates[-1].isoformat(),
+            }
+        )
+
+    suggestions.sort(key=lambda s: (s["confidence"], s["amount"]), reverse=True)
+    return suggestions[:limit]
+
+
+def find_amount_suggestions(user_id: int, kind: str, amount: float, limit: int = 25) -> List[Dict[str, Any]]:
+    """Unreconciled imported transactions whose amount ~matches an expected item
+    (correct sign, not a transfer), closest amount first."""
+    target = abs(float(amount))
+    tolerance = round(max(target * 0.02, 0.0), 2)
+    sign_condition = "i.amount < 0" if kind == "expense" else "i.amount > 0"
+    with get_connection() as conn:
+        rows = rows_to_dicts(
+            conn.execute(
+                f"""
+                SELECT i.id, i.account, i.tx_date, i.description, i.merchant, i.amount, i.flow
+                FROM imported_transactions i
+                WHERE i.user_id = ?
+                  AND NOT i.is_transfer
+                  AND {sign_condition}
+                  AND ABS(ABS(i.amount) - ?) <= ?
+                  AND i.id NOT IN (
+                      SELECT imported_transaction_id FROM expected_reconciliations WHERE user_id = ?
+                  )
+                ORDER BY ABS(ABS(i.amount) - ?) ASC, i.tx_date DESC
+                LIMIT ?
+                """,
+                [user_id, target, tolerance, user_id, target, limit],
+            )
+        )
+    for row in rows:
+        if isinstance(row["tx_date"], datetime):
+            row["tx_date"] = row["tx_date"].date()
+        row["is_exact"] = abs(abs(float(row["amount"])) - target) < 0.005
+    return rows
+
+
+def confirm_reconciliation(
+    user_id: int, source_type: str, source_id: int, imported_transaction_id: int, matched_via: str = "confirm"
+) -> bool:
+    """Link an actual to an expected item. Idempotent: an already-linked actual
+    is left untouched (returns False)."""
+    with get_connection() as conn:
+        existing = conn.execute(
+            "SELECT id FROM expected_reconciliations WHERE user_id = ? AND imported_transaction_id = ?",
+            [user_id, imported_transaction_id],
+        ).fetchone()
+        if existing:
+            return False
+        conn.execute(
+            """
+            INSERT INTO expected_reconciliations (user_id, imported_transaction_id, source_type, source_id, matched_via)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            [user_id, imported_transaction_id, source_type, source_id, matched_via],
+        )
+    return True
+
+
+def suggest_rule_pattern(description: str) -> str:
+    """Seed an editable description-substring rule from a confirmed actual."""
+    text = _import_squash(description).upper()
+    if not text:
+        return ""
+    ach = re.search(r"\bACH\s+(.+?)\s+TYPE:", text)
+    if ach:
+        return ach.group(1).strip()[:40]
+    kept: List[str] = []
+    for token in text.split():
+        if re.fullmatch(r"[0-9#*.\-]+", token):
+            break  # stop at the first id/number-ish token
+        kept.append(token)
+        if len(kept) >= 3:
+            break
+    core = " ".join(kept).strip()
+    return (core or text)[:40]
+
+
+def _rule_amount_display(amount_min: Any, amount_max: Any) -> Dict[str, Any]:
+    """Derive the UI mode (any/exact/range) and prefill values for a rule's
+    optional amount constraint."""
+    lo = None if amount_min is None else float(amount_min)
+    hi = None if amount_max is None else float(amount_max)
+    if lo is None and hi is None:
+        return {"amount_mode": "any", "amount_exact": "", "amount_min": "", "amount_max": ""}
+    if lo is not None and hi is not None and abs(lo - hi) < 0.005:
+        return {"amount_mode": "exact", "amount_exact": f"{lo:.2f}", "amount_min": "", "amount_max": ""}
+    return {
+        "amount_mode": "range",
+        "amount_exact": "",
+        "amount_min": "" if lo is None else f"{lo:.2f}",
+        "amount_max": "" if hi is None else f"{hi:.2f}",
+    }
+
+
+def load_match_rules_for_item(user_id: int, source_type: str, source_id: int) -> List[Dict[str, Any]]:
+    with get_connection() as conn:
+        rules = rows_to_dicts(
+            conn.execute(
+                "SELECT id, pattern, amount_min, amount_max FROM expected_match_rules "
+                "WHERE user_id = ? AND source_type = ? AND source_id = ? ORDER BY id",
+                [user_id, source_type, source_id],
+            )
+        )
+    for rule in rules:
+        rule.update(_rule_amount_display(rule.get("amount_min"), rule.get("amount_max")))
+    return rules
+
+
+def _expected_item_kind(conn: duckdb.DuckDBPyConnection, user_id: int, source_type: str, source_id: int) -> Optional[str]:
+    table = "recurring_items" if source_type == "recurring" else "manual_transactions"
+    row = conn.execute(f"SELECT kind FROM {table} WHERE id = ? AND user_id = ?", [source_id, user_id]).fetchone()
+    return row[0] if row else None
+
+
+def apply_match_rules(
+    user_id: int, rule_ids: Optional[List[int]] = None, import_ids: Optional[List[int]] = None
+) -> int:
+    """Auto-link unreconciled actuals whose description contains a rule pattern
+    (with the expected item's sign). Runs retroactively (rule create/edit) and
+    on new imports (pass import_ids). Returns the number of new links."""
+    linked = 0
+    with get_connection() as conn:
+        rule_columns = "id, source_type, source_id, pattern, amount_min, amount_max"
+        if rule_ids is not None:
+            if not rule_ids:
+                return 0
+            placeholders = ", ".join("?" for _ in rule_ids)
+            rules = conn.execute(
+                f"SELECT {rule_columns} FROM expected_match_rules "
+                f"WHERE user_id = ? AND id IN ({placeholders})",
+                [user_id, *rule_ids],
+            ).fetchall()
+        else:
+            rules = conn.execute(
+                f"SELECT {rule_columns} FROM expected_match_rules WHERE user_id = ?",
+                [user_id],
+            ).fetchall()
+
+        for _rule_id, source_type, source_id, pattern, amount_min, amount_max in rules:
+            kind = _expected_item_kind(conn, user_id, source_type, source_id)
+            if not kind or not pattern.strip():
+                continue
+            sign_condition = "i.amount < 0" if kind == "expense" else "i.amount > 0"
+            params: List[Any] = [user_id, f"%{pattern.upper()}%", user_id]
+            # Optional amount constraint, compared against the magnitude. A small
+            # epsilon absorbs float rounding so an "exact" bound matches cleanly.
+            amount_filter = ""
+            if amount_min is not None:
+                amount_filter += " AND ABS(i.amount) >= ?"
+                params.append(float(amount_min) - 0.005)
+            if amount_max is not None:
+                amount_filter += " AND ABS(i.amount) <= ?"
+                params.append(float(amount_max) + 0.005)
+            import_filter = ""
+            if import_ids is not None:
+                if not import_ids:
+                    continue
+                placeholders = ", ".join("?" for _ in import_ids)
+                import_filter = f" AND i.id IN ({placeholders})"
+                params.extend(import_ids)
+            candidates = conn.execute(
+                f"""
+                SELECT i.id FROM imported_transactions i
+                WHERE i.user_id = ?
+                  AND NOT i.is_transfer
+                  AND {sign_condition}
+                  AND UPPER(i.description) LIKE ?
+                  AND i.id NOT IN (
+                      SELECT imported_transaction_id FROM expected_reconciliations WHERE user_id = ?
+                  )
+                  {amount_filter}
+                  {import_filter}
+                """,
+                params,
+            ).fetchall()
+            for (import_id,) in candidates:
+                conn.execute(
+                    """
+                    INSERT INTO expected_reconciliations (user_id, imported_transaction_id, source_type, source_id, matched_via)
+                    VALUES (?, ?, ?, ?, 'rule')
+                    """,
+                    [user_id, import_id, source_type, source_id],
+                )
+                linked += 1
+    return linked
+
+
+def resync_item_rules(user_id: int, source_type: str, source_id: int) -> int:
+    """Drop this item's auto (rule) links and re-apply its current rules. Manual
+    ('confirm') links are preserved."""
+    with get_connection() as conn:
+        conn.execute(
+            "DELETE FROM expected_reconciliations "
+            "WHERE user_id = ? AND source_type = ? AND source_id = ? AND matched_via = 'rule'",
+            [user_id, source_type, source_id],
+        )
+        rule_ids = [
+            int(row[0])
+            for row in conn.execute(
+                "SELECT id FROM expected_match_rules WHERE user_id = ? AND source_type = ? AND source_id = ?",
+                [user_id, source_type, source_id],
+            ).fetchall()
+        ]
+    return apply_match_rules(user_id, rule_ids=rule_ids) if rule_ids else 0
+
+
+def _validate_amount_bounds(
+    amount_min: Optional[float], amount_max: Optional[float]
+) -> tuple[Optional[float], Optional[float]]:
+    lo = None if amount_min is None else round(float(amount_min), 2)
+    hi = None if amount_max is None else round(float(amount_max), 2)
+    if lo is not None and lo < 0:
+        raise ValueError("Amount must be zero or greater")
+    if hi is not None and hi < 0:
+        raise ValueError("Amount must be zero or greater")
+    if lo is not None and hi is not None and lo > hi:
+        raise ValueError("Minimum amount cannot be greater than the maximum")
+    return lo, hi
+
+
+def create_match_rule(
+    user_id: int,
+    source_type: str,
+    source_id: int,
+    pattern: str,
+    amount_min: Optional[float] = None,
+    amount_max: Optional[float] = None,
+) -> int:
+    cleaned = pattern.strip()
+    if not cleaned:
+        raise ValueError("Match pattern cannot be empty")
+    lo, hi = _validate_amount_bounds(amount_min, amount_max)
+    with get_connection() as conn:
+        row = conn.execute(
+            "INSERT INTO expected_match_rules (user_id, source_type, source_id, pattern, amount_min, amount_max) "
+            "VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+            [user_id, source_type, source_id, cleaned, lo, hi],
+        ).fetchone()
+    resync_item_rules(user_id, source_type, source_id)
+    return int(row[0])
+
+
+def update_match_rule(
+    user_id: int,
+    rule_id: int,
+    pattern: str,
+    amount_min: Optional[float] = None,
+    amount_max: Optional[float] = None,
+) -> None:
+    cleaned = pattern.strip()
+    if not cleaned:
+        raise ValueError("Match pattern cannot be empty")
+    lo, hi = _validate_amount_bounds(amount_min, amount_max)
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT source_type, source_id FROM expected_match_rules WHERE id = ? AND user_id = ?",
+            [rule_id, user_id],
+        ).fetchone()
+        if not row:
+            raise ValueError("Match rule not found")
+        conn.execute(
+            "UPDATE expected_match_rules SET pattern = ?, amount_min = ?, amount_max = ? WHERE id = ? AND user_id = ?",
+            [cleaned, lo, hi, rule_id, user_id],
+        )
+    resync_item_rules(user_id, row[0], int(row[1]))
+
+
+def delete_match_rule(user_id: int, rule_id: int) -> None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT source_type, source_id FROM expected_match_rules WHERE id = ? AND user_id = ?",
+            [rule_id, user_id],
+        ).fetchone()
+        conn.execute("DELETE FROM expected_match_rules WHERE id = ? AND user_id = ?", [rule_id, user_id])
+    if row:
+        resync_item_rules(user_id, row[0], int(row[1]))
+
+
+def unlink_reconciliation(user_id: int, recon_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "DELETE FROM expected_reconciliations WHERE id = ? AND user_id = ?", [recon_id, user_id]
+        )
+
+
+def load_reconciliations_for_item(user_id: int, source_type: str, source_id: int) -> List[Dict[str, Any]]:
+    with get_connection() as conn:
+        rows = rows_to_dicts(
+            conn.execute(
+                """
+                SELECT r.id AS recon_id, r.matched_via, r.imported_transaction_id,
+                       i.account, i.tx_date, i.description, i.merchant, i.amount, i.flow
+                FROM expected_reconciliations r
+                JOIN imported_transactions i
+                  ON i.id = r.imported_transaction_id AND i.user_id = r.user_id
+                WHERE r.user_id = ? AND r.source_type = ? AND r.source_id = ?
+                ORDER BY i.tx_date DESC
+                """,
+                [user_id, source_type, source_id],
+            )
+        )
+    for row in rows:
+        if isinstance(row["tx_date"], datetime):
+            row["tx_date"] = row["tx_date"].date()
+    return rows
+
+
+def load_reconciliation_counts(user_id: int) -> Dict[tuple, int]:
+    """(source_type, source_id) -> number of linked actuals, for the list page."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT source_type, source_id, COUNT(*) FROM expected_reconciliations "
+            "WHERE user_id = ? GROUP BY source_type, source_id",
+            [user_id],
+        ).fetchall()
+    return {(row[0], int(row[1])): int(row[2]) for row in rows}
+
+
+def recurring_occurrence_status(
+    item: Dict[str, Any], window_start: date, window_end: date, linked_imports: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Map each generated occurrence of a recurring item to a linked actual
+    within a tolerance window → paid / expected, for the reconcile view."""
+    occurrences = generate_recurring_transactions(item, window_start, window_end)
+    used: set = set()
+    result: List[Dict[str, Any]] = []
+    for occurrence in occurrences:
+        occ_date = occurrence["date"]
+        best = None
+        best_days = RECONCILE_OCCURRENCE_TOLERANCE_DAYS + 1
+        for linked in linked_imports:
+            if linked["recon_id"] in used:
+                continue
+            days = abs((linked["tx_date"] - occ_date).days)
+            if days <= RECONCILE_OCCURRENCE_TOLERANCE_DAYS and days < best_days:
+                best = linked
+                best_days = days
+        if best is not None:
+            used.add(best["recon_id"])
+        result.append(
+            {
+                "date": occ_date,
+                "amount": occurrence["income"] if occurrence["kind"] == "income" else occurrence["expense"],
+                "paid": best is not None,
+                "match": best,
+            }
+        )
+    return result
 
