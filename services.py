@@ -1455,11 +1455,54 @@ def _card_expected_charges(
         for row in generate_recurring_transactions(
             item, window_start, window_end, overrides=overrides_by_id.get(int(item["id"]), [])
         ):
-            charges.append({"date": row["date"], "delta": float(row["delta"])})
+            charges.append(
+                {
+                    "date": row["date"],
+                    "delta": float(row["delta"]),
+                    "description": row.get("description") or "",
+                    "kind": "recurring",
+                }
+            )
     for row in load_manual_transactions(user_id, window_start, window_end):
         if row.get("account_id") == card_id:
-            charges.append({"date": row["date"], "delta": float(row["delta"])})
+            charges.append(
+                {
+                    "date": row["date"],
+                    "delta": float(row["delta"]),
+                    "description": row.get("description") or "",
+                    "kind": "one_time",
+                }
+            )
     return charges
+
+
+def _list_actual_card_charges(
+    user_id: int, card: Dict[str, Any], after: date, close: date
+) -> List[Dict[str, Any]]:
+    """A card's real (non-transfer) charges in (after, close] as itemized rows
+    {date, description, delta, kind:'actual'} — the imported half of a payment."""
+    clause, params = _card_scope_sql(card)
+    with get_connection() as conn:
+        rows = rows_to_dicts(
+            conn.execute(
+                f"SELECT tx_date, description, merchant, amount FROM imported_transactions "
+                f"WHERE user_id = ? AND {clause} AND NOT is_transfer "
+                f"AND tx_date > ? AND tx_date <= ? ORDER BY tx_date, id",
+                [user_id, *params, after, close],
+            )
+        )
+    items: List[Dict[str, Any]] = []
+    for row in rows:
+        tx_date = row["tx_date"]
+        items.append(
+            {
+                "date": tx_date.date() if isinstance(tx_date, datetime) else tx_date,
+                "description": row.get("merchant") or row.get("description") or "",
+                "delta": float(row["amount"]),
+                "kind": "actual",
+            }
+        )
+    return items
 
 
 def _iter_card_cycles(card: Dict[str, Any], window_start: date, window_end: date):
@@ -1520,17 +1563,27 @@ def forecast_card_payments(
             ):
                 continue
 
-            actual = _sum_actual_card_charges(user_id, card, prev_close, close)
-            expected_sum = sum(
-                charge["delta"]
+            actual_items = _list_actual_card_charges(user_id, card, prev_close, close)
+            actual = sum(item["delta"] for item in actual_items)
+            expected_items = [
+                {
+                    "date": charge["date"],
+                    "description": charge.get("description") or "",
+                    "delta": charge["delta"],
+                    "kind": charge.get("kind") or "recurring",
+                }
                 for charge in expected
                 if prev_close < charge["date"] <= close
                 and (card_cutover is None or charge["date"] > card_cutover)
-            )
+            ]
+            expected_sum = sum(item["delta"] for item in expected_items)
             delta = round(actual + expected_sum, 2)
             if abs(delta) < 0.005:
                 continue
 
+            card_charges = sorted(
+                actual_items + expected_items, key=lambda item: item["date"]
+            )
             payments.append(
                 {
                     "date": due,
@@ -1543,6 +1596,7 @@ def forecast_card_payments(
                     "category_name": "",
                     "category_color": "",
                     "account_id": int(card["id"]),
+                    "card_charges": card_charges,
                 }
             )
     return payments
