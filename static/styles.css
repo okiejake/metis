@@ -738,6 +738,13 @@ body.is-ready .container > *:nth-child(4) {
   color: var(--danger);
 }
 
+.today-balance {
+  border: 2px solid var(--accent);
+  border-radius: 6px;
+  font-weight: 700;
+  background: rgba(199, 155, 104, 0.12);
+}
+
 .chart-panel {
   padding: 1rem 1rem 1.15rem;
 }
@@ -1891,6 +1898,10 @@ body.amounts-hidden .amount-sensitive {
   border-bottom-color: #425975;
 }
 
+:root[data-theme="dark"] .today-balance {
+  background: rgba(140, 178, 222, 0.15);
+}
+
 :root[data-theme="dark"] .table-pill {
   border-color: #4a5d74;
   background: #1e2a39;
@@ -1961,4 +1972,359 @@ body.amounts-hidden .amount-sensitive {
   border-color: #678cb7;
   background: #304863;
   color: #eaf3ff;
+}
+
+/* Import page ------------------------------------------------------------ */
+.import-upload-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.import-upload-form input[type="file"] {
+  margin-top: 0.35rem;
+}
+
+.card-note {
+  margin-top: 0.35rem;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.import-filter-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+}
+
+.import-filter-tabs a {
+  border: 1px solid color-mix(in srgb, var(--muted) 40%, transparent);
+  border-radius: 999px;
+  padding: 0.2rem 0.7rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.import-filter-tabs a:hover {
+  color: var(--text);
+}
+
+.import-filter-tabs a.active {
+  background: var(--surface-muted);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.import-transfer-row {
+  opacity: 0.62;
+}
+
+.import-desc-sub {
+  display: block;
+  color: var(--muted);
+  font-size: 0.74rem;
+  margin-top: 0.15rem;
+}
+
+.table-pill.flow-income,
+.table-pill.flow-refund {
+  border-color: color-mix(in srgb, var(--success) 45%, transparent);
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.table-pill.flow-transfer,
+.table-pill.flow-fee {
+  border-color: color-mix(in srgb, var(--muted) 40%, transparent);
+  background: var(--surface-muted);
+  color: var(--muted);
+}
+
+/* Expected Transactions + reconcile ------------------------------------- */
+.expected-type-toggle {
+  display: inline-flex;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  margin-bottom: 1rem;
+}
+
+.type-toggle-btn {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.35rem 1rem;
+  font-weight: 700;
+  font-size: 0.82rem;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.type-toggle-btn.is-active {
+  background: var(--surface-solid);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+.row-action-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  justify-content: flex-end;
+}
+
+.reconcile-link {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.back-link {
+  color: var(--muted);
+  text-decoration: none;
+  font-weight: 700;
+}
+.back-link:hover { color: var(--text); }
+
+.rule-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.9rem;
+}
+
+.rule-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.rule-add-row {
+  margin-top: 0.4rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid color-mix(in srgb, var(--muted) 25%, transparent);
+}
+
+.rule-prefix {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.rule-input {
+  flex: 1 1 220px;
+  min-width: 180px;
+  font-family: inherit;
+}
+
+.rule-amount-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.rule-amount-mode {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+.rule-amount {
+  width: 6.4rem;
+  flex: 0 0 auto;
+}
+
+.rule-amount-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.rule-amount-sep {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.near-amount-flag {
+  color: var(--muted);
+  font-weight: 700;
+  margin-left: 0.2rem;
+}
+
+.reconcile-paid-row { opacity: 0.72; }
+
+/* Accounts: inline opening-balance editor -------------------------------- */
+.inline-balance-form {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.inline-balance-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.inline-balance-label input {
+  width: 8rem;
+  font-family: inherit;
+}
+
+/* Blended ledger: actual vs forecast ------------------------------------ */
+.ledger-row.actual-row td:first-child {
+  border-left: 3px solid var(--success);
+}
+.ledger-row.forecast-row td:first-child {
+  border-left: 3px solid color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.table-pill.source-actual {
+  border-color: color-mix(in srgb, var(--success) 45%, transparent);
+  background: var(--success-soft);
+  color: var(--success);
+}
+.table-pill.source-card {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--surface-muted);
+  color: var(--accent);
+}
+.forecast-divider-row td {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  padding: 0.3rem 0.75rem;
+}
+.forecast-divider-label {
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.panel-hint {
+  margin: 0 0 1rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: 0.6rem;
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+/* Accounts: cycle day + EOM toggle -------------------------------------- */
+.cycle-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.eom-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+}
+.cycle-day-input.is-disabled {
+  opacity: 0.45;
+}
+/* Ledger: actual row linked to an expected item ------------------------- */
+.has-linked-actual {
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: help;
+}
+
+/* Suggested recurring cards --------------------------------------------- */
+.suggestions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 0.9rem;
+}
+
+.suggestion-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  background: var(--surface-solid);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 0.85rem 0.9rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.suggestion-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.suggestion-confidence {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--success);
+  background: var(--success-soft);
+  border-radius: 999px;
+  padding: 0.12rem 0.5rem;
+  white-space: nowrap;
+}
+
+.suggestion-evidence {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.suggestion-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem 0.6rem;
+  margin: 0;
+}
+
+.suggestion-field {
+  font-size: 0.78rem;
+  gap: 0.28rem;
+}
+
+.suggestion-field input,
+.suggestion-field select {
+  padding: 0.45rem 0.5rem;
+}
+
+.suggestion-field-name {
+  grid-column: 1 / -1;
+}
+
+.suggestion-actions {
+  grid-column: 1 / -1;
+  margin-top: 0.1rem;
+}
+
+.suggestion-actions .button-emphasis {
+  width: 100%;
+}
+
+.suggestion-dismiss-form {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -0.2rem;
+}
+
+.suggestions-reset-form {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.85rem;
 }

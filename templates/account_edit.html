@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-intro">
+  <div>
+    <p class="page-kicker"><a href="/accounts" class="back-link">← Accounts</a></p>
+    <h2>Edit {{ account.name }}</h2>
+    <p>Update the account type and, for credit cards, the billing-cycle days.</p>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Edit Account</h2>
+    <p>Credit cards defer assigned charges to their payment due date.</p>
+  </div>
+  <form method="post" action="/accounts/{{ account.id }}/edit" id="account-form" class="grid-form">
+    <label>
+      Name
+      <input type="text" name="name" value="{{ account.name }}" required />
+    </label>
+    <label>
+      Type
+      <select name="account_type" id="account_type">
+        <option value="checking" {{ 'selected' if account.account_type == 'checking' else '' }}>Checking</option>
+        <option value="credit_card" {{ 'selected' if account.account_type == 'credit_card' else '' }}>Credit card</option>
+      </select>
+    </label>
+    {% set statement_is_eom = account.statement_day == 0 %}
+    {% set due_is_eom = account.due_day == 0 %}
+    <div data-field="statement_day" class="conditional cycle-field {{ 'hidden' if account.account_type != 'credit_card' else '' }}">
+      <label>Statement closes (day of month)
+        <input type="number" min="1" max="31" name="statement_day" value="{{ account.statement_day if account.statement_day else 15 }}" class="cycle-day-input" />
+      </label>
+      <label class="eom-toggle"><input type="checkbox" name="statement_eom" value="1" class="eom-checkbox" data-target="statement_day" {{ 'checked' if statement_is_eom else '' }} /> Last day of month</label>
+    </div>
+    <div data-field="due_day" class="conditional cycle-field {{ 'hidden' if account.account_type != 'credit_card' else '' }}">
+      <label>Payment due (day of month)
+        <input type="number" min="1" max="31" name="due_day" value="{{ account.due_day if account.due_day else 10 }}" class="cycle-day-input" />
+      </label>
+      <label class="eom-toggle"><input type="checkbox" name="due_eom" value="1" class="eom-checkbox" data-target="due_day" {{ 'checked' if due_is_eom else '' }} /> Last day of month</label>
+    </div>
+    <div class="full-row">
+      <button type="submit" class="button-emphasis">Save Changes</button>
+      <a class="button-link" href="/accounts">Cancel</a>
+    </div>
+  </form>
+</section>
+
+<script>
+  (() => {
+    const typeSelect = document.getElementById('account_type');
+    const statementField = document.querySelector('[data-field="statement_day"]');
+    const dueField = document.querySelector('[data-field="due_day"]');
+    function sync() {
+      const isCard = typeSelect.value === 'credit_card';
+      statementField.classList.toggle('hidden', !isCard);
+      dueField.classList.toggle('hidden', !isCard);
+    }
+    if (typeSelect) {
+      typeSelect.addEventListener('change', sync);
+      sync();
+    }
+
+    document.querySelectorAll('.eom-checkbox').forEach((box) => {
+      const input = document.querySelector(`input[name="${box.dataset.target}"]`);
+      function syncEom() {
+        if (input) {
+          input.disabled = box.checked;
+          input.classList.toggle('is-disabled', box.checked);
+        }
+      }
+      box.addEventListener('change', syncEom);
+      syncEom();
+    });
+  })();
+</script>
+{% endblock %}

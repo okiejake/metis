@@ -60,6 +60,16 @@
     </label>
 
     <label>
+      Account
+      <select name="account_id">
+        <option value="">Unassigned (immediate)</option>
+        {% for account in accounts %}
+        <option value="{{ account.id }}" {{ 'selected' if item.account_id == account.id else '' }}>{{ account.name }}{{ ' (card)' if account.account_type == 'credit_card' else '' }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label>
       Start Date
       <input type="date" name="start_date" value="{{ item.start_date }}" required />
     </label>
@@ -72,9 +82,11 @@
     <label>
       Frequency
       <select name="frequency_type" id="frequency_type" required>
+        <option value="weekly" {{ 'selected' if item.frequency_type == 'weekly' else '' }}>Weekly</option>
         <option value="biweekly" {{ 'selected' if item.frequency_type == 'biweekly' else '' }}>Bi-weekly</option>
         <option value="semimonthly" {{ 'selected' if item.frequency_type == 'semimonthly' else '' }}>Semi-monthly</option>
         <option value="monthly" {{ 'selected' if item.frequency_type == 'monthly' else '' }}>Monthly</option>
+        <option value="yearly" {{ 'selected' if item.frequency_type == 'yearly' else '' }}>Yearly</option>
         <option value="every_x_months" {{ 'selected' if item.frequency_type == 'every_x_months' else '' }}>Every X months</option>
       </select>
     </label>
@@ -134,7 +146,7 @@
   function updateConditionalFields() {
     const value = frequencySelect.value;
     intervalField.classList.toggle('hidden', value !== 'every_x_months');
-    dayField.classList.toggle('hidden', !(value === 'monthly' || value === 'every_x_months'));
+    dayField.classList.toggle('hidden', !(value === 'monthly' || value === 'every_x_months' || value === 'yearly'));
     semiDay1Field.classList.toggle('hidden', value !== 'semimonthly');
     semiDay2Field.classList.toggle('hidden', value !== 'semimonthly');
     syncDayOfMonthFromStart();

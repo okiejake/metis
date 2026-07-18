@@ -46,3 +46,8 @@ htmlcov/
 .DS_Store
 .vscode/
 .idea/
+
+# Local only context
+
+METIS_APP_OVERVIEW.md
+_incoming

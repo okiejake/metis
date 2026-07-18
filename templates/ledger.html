@@ -17,8 +17,8 @@
 
 <section class="summary-grid compact-grid">
   <article class="card compact-card">
-    <h3>Starting Balance</h3>
-    <p class="amount-value">${{ starting_balance|currency }}</p>
+    <h3>Current Checking Balance</h3>
+    <p class="amount-value">${{ current_checking_balance|currency }}</p>
   </article>
   <article class="card compact-card">
     <h3>Total Income</h3>
@@ -43,8 +43,14 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Ledger</h2>
-    <p>Hover a row and tap + to insert a transaction inline.</p>
+    <p>Actual checking transactions through {{ forecast_start_iso }}, then forecast. Hover a row and tap + to insert.</p>
   </div>
+  {% if window_all_future and first_actual_iso %}
+  <div class="panel-hint">
+    Showing forecast only — your actual checking data goes back to <strong>{{ first_actual_iso }}</strong>.
+    Widen the range (YTD / Rolling 6M) to see actuals blended with the forecast.
+  </div>
+  {% endif %}
   {% if rows %}
   <div class="table-wrap">
     <table>
@@ -61,8 +67,15 @@
         </tr>
       </thead>
       <tbody>
+        {% set ns = namespace(forecast_divider_shown=false) %}
         {% for row in rows %}
         {% set default_insert_date = row.insert_default_date.isoformat() if row.insert_default_date else (row.date.isoformat() if row.date else today_iso) %}
+        {% if not ns.forecast_divider_shown and row.row_type != 'month_summary' and row.source is defined and row.source != 'actual' %}
+        <tr class="forecast-divider-row">
+          <td colspan="8"><span class="forecast-divider-label">↓ Forecast begins {{ forecast_start_iso }}</span></td>
+        </tr>
+        {% set ns.forecast_divider_shown = true %}
+        {% endif %}
         {% if row.row_type == 'month_summary' %}
         <tr class="ledger-row month-summary-row">
           <td>{{ row.month_label }}</td>
@@ -76,13 +89,17 @@
           </td>
           <td class="amount-value">${{ row.income|currency }}</td>
           <td class="amount-value">${{ row.expense|currency }}</td>
-          <td class="amount-value {{ 'negative' if row.running_balance < 0 else '' }}">${{ row.running_balance|currency }}</td>
+          <td class="amount-value {{ 'negative' if row.running_balance < 0 else '' }}{% if row.date.isoformat() == today_iso %} today-balance{% endif %}">${{ row.running_balance|currency }}</td>
           <td class="row-action-cell"></td>
         </tr>
         {% else %}
-        <tr class="ledger-row">
+        <tr class="ledger-row {{ 'actual-row' if row.source == 'actual' else 'forecast-row' }}">
           <td>{{ row.date }}</td>
-          <td>{{ row.description }}</td>
+          <td>
+            {% if row.linked and row.raw_name and row.raw_name != row.description %}
+            <span class="has-linked-actual" title="Actual: {{ row.raw_name }}">{{ row.description }}</span>
+            {% else %}{{ row.description }}{% endif %}
+          </td>
           <td>
             {% if row.category_name %}
             <span class="category-pill">
@@ -93,10 +110,10 @@
             -
             {% endif %}
           </td>
-          <td><span class="table-pill">{{ row.source }}</span></td>
+          <td><span class="table-pill source-{{ row.source }}">{{ row.source }}</span></td>
           <td class="amount-value">{% if row.income > 0 %}${{ row.income|currency }}{% else %}-{% endif %}</td>
           <td class="amount-value">{% if row.expense > 0 %}${{ row.expense|currency }}{% else %}-{% endif %}</td>
-          <td class="amount-value {{ 'negative' if row.running_balance < 0 else '' }}">${{ row.running_balance|currency }}</td>
+          <td class="amount-value {{ 'negative' if row.running_balance < 0 else '' }}{% if row.date.isoformat() == today_iso %} today-balance{% endif %}">${{ row.running_balance|currency }}</td>
           <td class="row-action-cell">
             {% if row.source == 'manual' %}
             <details class="row-action-menu">
