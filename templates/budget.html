@@ -72,7 +72,7 @@
             {{ '-' if cat.difference < 0 else '' }}${{ (cat.difference if cat.difference >= 0 else -cat.difference)|currency }}
           </td>
         </tr>
-        {% for item in cat.items %}
+        {% for item in cat.line_items %}
         <tr class="budget-item-row">
           <td class="budget-item-name">↳ {{ item.name }}</td>
           <td class="amount-value">${{ item.budgeted|currency }}</td>

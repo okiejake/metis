@@ -21,7 +21,115 @@
       CSV file
       <input type="file" name="file" accept=".csv,text/csv" required />
     </label>
+    <label class="inline-field">
+      Template
+      <select name="template_id">
+        <option value="">Auto-detect</option>
+        {% for tmpl in import_templates %}
+        <option value="{{ tmpl.id }}">{{ tmpl.name }} → {{ tmpl.account_name }}</option>
+        {% endfor %}
+      </select>
+    </label>
     <button type="submit" class="button-emphasis">Upload &amp; Import</button>
+  </form>
+  <p class="card-note">Auto-detect covers the built-in Checking / Visa / Apple Card exports and any custom template whose columns match. Pick a template to force it.</p>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Import templates</h2>
+    <p>Teach Metis a new CSV layout: map its columns and point it at an account. Custom templates are tried after the 3 built-ins.</p>
+  </div>
+
+  {% if import_templates %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Account</th>
+          <th>Identifying columns</th>
+          <th>Date / Amount / Description</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for tmpl in import_templates %}
+        <tr>
+          <td><strong>{{ tmpl.name }}</strong></td>
+          <td><span class="table-pill">{{ tmpl.account_name }}</span></td>
+          <td class="card-note">{{ tmpl.signature|join(', ') }}</td>
+          <td class="card-note">{{ tmpl.date_field }} · {{ tmpl.amount_field }}{% if tmpl.amount_sign == 'inverted' %} (inverted){% endif %} · {{ tmpl.description_field }}</td>
+          <td>
+            <form method="post" action="/import/templates/{{ tmpl.id }}/delete" onsubmit="return confirm('Delete this import template?')">
+              <button type="submit" class="danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-state">No custom templates yet. Add one below for any CSV the 3 built-ins don't recognize.</p>
+  {% endif %}
+
+  <form method="post" action="/import/templates" class="grid-form" style="margin-top: 1rem;">
+    <label>
+      Template name
+      <input type="text" name="name" placeholder="e.g. Chase Checking" required />
+    </label>
+    <label>
+      Target account
+      <select name="account_id" required>
+        <option value="" disabled selected>Choose account…</option>
+        {% for acct in user_accounts %}
+        <option value="{{ acct.id }}">{{ acct.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Identifying header columns (comma-separated)
+      <input type="text" name="signature" placeholder="Posting Date, Amount, Description" required />
+    </label>
+    <label>
+      Date column
+      <input type="text" name="date_field" placeholder="Posting Date" required />
+    </label>
+    <label>
+      Date format (optional, strptime)
+      <input type="text" name="date_format" placeholder="%m/%d/%Y" />
+    </label>
+    <label>
+      Amount column
+      <input type="text" name="amount_field" placeholder="Amount" required />
+    </label>
+    <label>
+      Amount sign
+      <select name="amount_sign">
+        <option value="standard">Standard (negative = money out)</option>
+        <option value="inverted">Inverted (positive = expense)</option>
+      </select>
+    </label>
+    <label>
+      Description column
+      <input type="text" name="description_field" placeholder="Description" required />
+    </label>
+    <label>
+      Merchant column (optional)
+      <input type="text" name="merchant_field" placeholder="Merchant" />
+    </label>
+    <label>
+      Type column (optional)
+      <input type="text" name="type_field" placeholder="Type" />
+    </label>
+    <label>
+      Credit value (optional)
+      <input type="text" name="credit_value" placeholder="Credit" />
+    </label>
+    <div class="full-row">
+      <button type="submit" class="button-emphasis">Save Template</button>
+    </div>
   </form>
 </section>
 

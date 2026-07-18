@@ -177,6 +177,7 @@ def init_db() -> None:
         conn.execute("CREATE SEQUENCE IF NOT EXISTS expected_reconciliations_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS expected_match_rules_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS accounts_id_seq START 1")
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS import_templates_id_seq START 1")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -329,6 +330,26 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS import_templates (
+                id BIGINT PRIMARY KEY DEFAULT nextval('import_templates_id_seq'),
+                user_id BIGINT NOT NULL,
+                name TEXT NOT NULL,
+                account_id BIGINT NOT NULL,
+                date_field TEXT NOT NULL,
+                date_format TEXT,
+                amount_field TEXT NOT NULL,
+                amount_sign TEXT NOT NULL DEFAULT 'standard',
+                type_field TEXT,
+                credit_value TEXT,
+                description_field TEXT NOT NULL,
+                merchant_field TEXT,
+                signature TEXT NOT NULL DEFAULT '[]',
+                created_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS dismissed_suggestions (
                 user_id BIGINT NOT NULL,
                 suggestion_key TEXT NOT NULL,
@@ -399,6 +420,7 @@ def init_db() -> None:
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_user_name_unique ON categories(user_id, name)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_imported_user_date ON imported_transactions(user_id, tx_date)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_imported_user_account ON imported_transactions(user_id, account_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_import_templates_user ON import_templates(user_id)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_imported_fingerprint ON imported_transactions(user_id, fingerprint)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reconciliation_import_unique ON expected_reconciliations(user_id, imported_transaction_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_reconciliation_source ON expected_reconciliations(user_id, source_type, source_id)")
@@ -1793,7 +1815,7 @@ def build_budget_summary(user_id: int, window_start: date, window_end: date) -> 
                 "name": name or "Uncategorized",
                 "color": safe_hex_color(color),
                 "budgeted": 0.0,
-                "items": [],
+                "line_items": [],
             },
         )
 
@@ -1812,7 +1834,7 @@ def build_budget_summary(user_id: int, window_start: date, window_end: date) -> 
             continue
         bucket = _cat_bucket(item.get("category_name"), item.get("category_color"))
         bucket["budgeted"] += total
-        bucket["items"].append({"name": item["name"], "budgeted": round(total, 2), "source": "recurring"})
+        bucket["line_items"].append({"name": item["name"], "budgeted": round(total, 2), "source": "recurring"})
 
     for row in load_manual_transactions(user_id, window_start, window_end):
         amount = abs(float(row["delta"]))
@@ -1823,7 +1845,7 @@ def build_budget_summary(user_id: int, window_start: date, window_end: date) -> 
             continue
         bucket = _cat_bucket(row.get("category_name"), row.get("category_color"))
         bucket["budgeted"] += amount
-        bucket["items"].append({"name": row["description"], "budgeted": round(amount, 2), "source": "one_time"})
+        bucket["line_items"].append({"name": row["description"], "budgeted": round(amount, 2), "source": "one_time"})
 
     # --- Actuals, grouped by effective category ---
     actuals = _budget_actuals_by_category(user_id, window_start, window_end)
@@ -1844,8 +1866,8 @@ def build_budget_summary(user_id: int, window_start: date, window_end: date) -> 
                 "budgeted": budgeted,
                 "actual": actual,
                 "difference": round(budgeted - actual, 2),
-                "items": sorted(
-                    budget_cats.get(key, {}).get("items", []), key=lambda i: -i["budgeted"]
+                "line_items": sorted(
+                    budget_cats.get(key, {}).get("line_items", []), key=lambda i: -i["budgeted"]
                 ),
             }
         )
@@ -2150,6 +2172,65 @@ def _parse_import_amount(value: str) -> float:
         raise CsvImportError(f"unrecognized amount '{value}'") from exc
 
 
+def _parse_import_date_with(value: str, date_format: Optional[str]) -> date:
+    """Parse a date using a template's explicit strptime format when given,
+    falling back to the built-in multi-format parser."""
+    if date_format:
+        cleaned = str(value or "").strip()
+        if not cleaned:
+            raise CsvImportError("row is missing a date")
+        try:
+            return datetime.strptime(cleaned, date_format).date()
+        except ValueError:
+            pass  # fall through to the tolerant parser
+    return _parse_import_date(value)
+
+
+def _parse_template_row(row: Dict[str, str], template: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize a CSV row using a user-defined template. Output mirrors the
+    built-in parsers' keys and additionally carries the target account_id."""
+    description = _import_squash(row.get(template["description_field"], ""))
+    merchant_field = template.get("merchant_field")
+    merchant = _import_squash(row.get(merchant_field, "")) if merchant_field else description
+
+    tx_date = _parse_import_date_with(row.get(template["date_field"], ""), template.get("date_format"))
+
+    raw = _parse_import_amount(row.get(template["amount_field"], "0"))
+    if (template.get("amount_sign") or "standard") == "inverted":
+        raw = -raw
+    magnitude = abs(raw)
+
+    type_field = template.get("type_field")
+    raw_type = str(row.get(type_field, "")).strip() if type_field else ""
+    if type_field:
+        is_credit = raw_type == str(template.get("credit_value") or "").strip()
+    else:
+        is_credit = raw > 0  # sign-based: positive = money in
+
+    target_is_card = template.get("account_type") == "credit_card"
+    if is_credit:
+        is_payment = target_is_card and bool(_CARD_PAYMENT_RE.search(description))
+        if is_payment:
+            amount, flow, is_transfer = -magnitude, "transfer", True
+        else:
+            amount, flow, is_transfer = magnitude, ("refund" if target_is_card else "income"), False
+    else:
+        pays_card = (not target_is_card) and bool(_CHECKING_PAYS_CARD_RE.search(description.upper()))
+        amount, flow, is_transfer = -magnitude, ("transfer" if pays_card else "expense"), pays_card
+
+    return {
+        "account": template["account_name"],
+        "account_id": template["account_id"],
+        "tx_date": tx_date,
+        "description": description,
+        "merchant": merchant,
+        "amount": amount,
+        "flow": flow,
+        "is_transfer": is_transfer,
+        "raw_type": raw_type,
+    }
+
+
 def _parse_checking_row(row: Dict[str, str]) -> Dict[str, Any]:
     description = _import_squash(row.get("Description", ""))
     raw_type = str(row.get("Credit or Debit", "")).strip()
@@ -2259,11 +2340,23 @@ def detect_csv_format(header: List[str], first_row: Optional[Dict[str, str]]) ->
     return None
 
 
-def parse_import_csv(filename: str, text: str) -> tuple[str, List[Dict[str, Any]]]:
+def _template_signature_matches(header_fields: set, template: Dict[str, Any]) -> bool:
+    signature = template.get("signature") or []
+    return bool(signature) and all(col in header_fields for col in signature)
+
+
+def parse_import_csv(
+    filename: str,
+    text: str,
+    templates: Optional[List[Dict[str, Any]]] = None,
+    forced_template: Optional[Dict[str, Any]] = None,
+) -> tuple[str, Optional[int], List[Dict[str, Any]]]:
     """Parse a bank/card CSV export into normalized rows.
 
-    Returns (account_label, rows). Raises CsvImportError on an unrecognized
-    format or an unparseable row.
+    Tries the 3 built-in parsers first, then any user templates by signature;
+    `forced_template` skips detection (manual picker). Returns
+    (account_label, account_id, rows). account_id is None for built-in formats
+    (resolved by name at upsert). Raises CsvImportError on an unrecognized format.
     """
     if text.startswith("﻿"):  # strip UTF-8 BOM so header cells match
         text = text[1:]
@@ -2271,24 +2364,40 @@ def parse_import_csv(filename: str, text: str) -> tuple[str, List[Dict[str, Any]
     if reader.fieldnames is None:
         raise CsvImportError("The file is empty or not a valid CSV.")
     raw_rows = list(reader)
-    fmt = detect_csv_format(list(reader.fieldnames), raw_rows[0] if raw_rows else None)
-    if fmt is None:
+    header = list(reader.fieldnames)
+
+    template = forced_template
+    fmt: Optional[str] = None
+    if template is None:
+        fmt = detect_csv_format(header, raw_rows[0] if raw_rows else None)
+        if fmt is None and templates:
+            fields = {str(name).strip() for name in header if name}
+            for candidate in templates:
+                if _template_signature_matches(fields, candidate):
+                    template = candidate
+                    break
+    if fmt is None and template is None:
         raise CsvImportError(
-            "Unrecognized CSV format. Expected a Checking, Visa, or Apple Card export."
+            "Unrecognized CSV format. Expected a Checking, Visa, or Apple Card "
+            "export, or a matching custom template."
         )
-    parser = _ROW_PARSERS[fmt]
 
     parsed: List[Dict[str, Any]] = []
     for index, raw in enumerate(raw_rows):
         if not any(str(value).strip() for value in raw.values()):
             continue  # skip fully blank lines
         try:
-            parsed.append(parser(raw))
+            if template is not None:
+                parsed.append(_parse_template_row(raw, template))
+            else:
+                parsed.append(_ROW_PARSERS[fmt](raw))
         except CsvImportError as exc:
             raise CsvImportError(f"row {index + 2}: {exc}") from exc
 
+    if template is not None:
+        return template["account_name"], int(template["account_id"]), parsed
     account_label = parsed[0]["account"] if parsed else fmt.title()
-    return account_label, parsed
+    return account_label, None, parsed
 
 
 def compute_import_fingerprint(row: Dict[str, Any], occurrence_index: int) -> str:
@@ -2467,6 +2576,126 @@ def map_import_label_to_account(user_id: int, label: str, account_id: int) -> in
             [account_id, account[0], user_id, label],
         )
         return int(matched)
+
+
+IMPORT_TEMPLATE_SIGN_MODES = {"standard", "inverted"}
+
+
+def _row_to_import_template(row: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        signature = json.loads(row.get("signature") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        signature = []
+    if not isinstance(signature, list):
+        signature = []
+    row["signature"] = [str(col) for col in signature]
+    return row
+
+
+def load_import_templates(user_id: int) -> List[Dict[str, Any]]:
+    """User-defined CSV templates joined to their target account (name + type)."""
+    with get_connection() as conn:
+        rows = rows_to_dicts(
+            conn.execute(
+                """
+                SELECT t.id, t.name, t.account_id, t.date_field, t.date_format,
+                       t.amount_field, t.amount_sign, t.type_field, t.credit_value,
+                       t.description_field, t.merchant_field, t.signature,
+                       a.name AS account_name, a.account_type
+                FROM import_templates t
+                JOIN accounts a ON a.id = t.account_id AND a.user_id = t.user_id
+                WHERE t.user_id = ?
+                ORDER BY LOWER(t.name), t.id
+                """,
+                [user_id],
+            )
+        )
+    return [_row_to_import_template(row) for row in rows]
+
+
+def load_import_template(user_id: int, template_id: int) -> Optional[Dict[str, Any]]:
+    for template in load_import_templates(user_id):
+        if int(template["id"]) == int(template_id):
+            return template
+    return None
+
+
+def _clean_signature(columns: List[str]) -> str:
+    cleaned = [str(col).strip() for col in columns if str(col).strip()]
+    return json.dumps(cleaned)
+
+
+def save_import_template(
+    user_id: int,
+    name: str,
+    account_id: int,
+    date_field: str,
+    amount_field: str,
+    description_field: str,
+    signature: List[str],
+    amount_sign: str = "standard",
+    date_format: Optional[str] = None,
+    type_field: Optional[str] = None,
+    credit_value: Optional[str] = None,
+    merchant_field: Optional[str] = None,
+    template_id: Optional[int] = None,
+) -> None:
+    """Create or update a custom import template. Raises ValueError on bad input."""
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("Template name is required")
+    for label, value in (("date column", date_field), ("amount column", amount_field), ("description column", description_field)):
+        if not (value or "").strip():
+            raise ValueError(f"The {label} is required")
+    if amount_sign not in IMPORT_TEMPLATE_SIGN_MODES:
+        raise ValueError("Amount sign must be standard or inverted")
+    sig = [str(c).strip() for c in signature if str(c).strip()]
+    if not sig:
+        raise ValueError("List at least one header column that identifies this format")
+
+    def _opt(value: Optional[str]) -> Optional[str]:
+        value = (value or "").strip()
+        return value or None
+
+    fields = [
+        name, int(account_id), date_field.strip(), _opt(date_format), amount_field.strip(),
+        amount_sign, _opt(type_field), _opt(credit_value), description_field.strip(),
+        _opt(merchant_field), json.dumps(sig),
+    ]
+    with get_connection() as conn:
+        if not conn.execute(
+            "SELECT 1 FROM accounts WHERE id = ? AND user_id = ?", [int(account_id), user_id]
+        ).fetchone():
+            raise ValueError("Target account not found")
+        if template_id:
+            conn.execute(
+                """
+                UPDATE import_templates
+                SET name = ?, account_id = ?, date_field = ?, date_format = ?, amount_field = ?,
+                    amount_sign = ?, type_field = ?, credit_value = ?, description_field = ?,
+                    merchant_field = ?, signature = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                [*fields, int(template_id), user_id],
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO import_templates (
+                    name, account_id, date_field, date_format, amount_field, amount_sign,
+                    type_field, credit_value, description_field, merchant_field, signature, user_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [*fields, user_id],
+            )
+
+
+def delete_import_template(user_id: int, template_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "DELETE FROM import_templates WHERE id = ? AND user_id = ?", [int(template_id), user_id]
+        )
 
 
 def summarize_imported(user_id: int) -> Dict[str, Any]:
