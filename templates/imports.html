@@ -25,6 +25,46 @@
   </form>
 </section>
 
+{% if unmapped_labels %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>Unlinked imported accounts</h2>
+    <p>These imported labels aren’t tied to an account — usually because the account was renamed after importing. Link each to its account so renames, the card forecast, and amount-due stay in sync.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Imported label</th>
+          <th>Transactions</th>
+          <th>Link to account</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in unmapped_labels %}
+        <tr>
+          <td><span class="table-pill">{{ item.label }}</span></td>
+          <td>{{ item.count }}</td>
+          <td>
+            <form method="post" action="/import/map-account" class="inline-map-form">
+              <input type="hidden" name="label" value="{{ item.label }}" />
+              <select name="account_id" required>
+                <option value="" disabled selected>Choose account…</option>
+                {% for acct in user_accounts %}
+                <option value="{{ acct.id }}">{{ acct.name }}</option>
+                {% endfor %}
+              </select>
+              <button type="submit" class="button-emphasis">Link</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
 {% if summary.accounts %}
 <section class="summary-grid compact-grid">
   <article class="card compact-card">

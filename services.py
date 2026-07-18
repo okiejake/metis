@@ -367,6 +367,8 @@ def init_db() -> None:
             conn.execute("ALTER TABLE recurring_items ADD COLUMN account_id BIGINT")
         if not table_has_column(conn, "manual_transactions", "account_id"):
             conn.execute("ALTER TABLE manual_transactions ADD COLUMN account_id BIGINT")
+        if not table_has_column(conn, "imported_transactions", "account_id"):
+            conn.execute("ALTER TABLE imported_transactions ADD COLUMN account_id BIGINT")
         if not table_has_column(conn, "users", "email"):
             conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
         migrate_categories_to_user_scoped_uniqueness(conn, default_user_id)
@@ -378,11 +380,25 @@ def init_db() -> None:
         conn.execute("UPDATE recurring_items SET user_id = ? WHERE user_id IS NULL", [default_user_id])
         conn.execute("UPDATE manual_transactions SET user_id = ? WHERE user_id IS NULL", [default_user_id])
         conn.execute("UPDATE users SET email = '' WHERE email IS NULL")
+        # Anchor imported rows to accounts by id. Backfill exact name matches;
+        # rows whose account was renamed stay NULL and are relinked via the
+        # Import-page mapping UI (load_unmapped_import_labels / map_import_label_to_account).
+        conn.execute(
+            """
+            UPDATE imported_transactions SET account_id = (
+                SELECT a.id FROM accounts a
+                WHERE a.user_id = imported_transactions.user_id
+                  AND LOWER(a.name) = LOWER(imported_transactions.account)
+            )
+            WHERE account_id IS NULL
+            """
+        )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_categories_user_id ON categories(user_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_recurring_items_user_id ON recurring_items(user_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_manual_transactions_user_id ON manual_transactions(user_id)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_user_name_unique ON categories(user_id, name)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_imported_user_date ON imported_transactions(user_id, tx_date)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_imported_user_account ON imported_transactions(user_id, account_id)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_imported_fingerprint ON imported_transactions(user_id, fingerprint)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reconciliation_import_unique ON expected_reconciliations(user_id, imported_transaction_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_reconciliation_source ON expected_reconciliations(user_id, source_type, source_id)")
@@ -1215,19 +1231,51 @@ def _apply_cash_flow_deferral(
 
 
 def checking_account_names(user_id: int) -> List[str]:
-    """Names of the user's checking-type accounts, used to select the checking
-    rows out of imported_transactions. Falls back to the seeded 'Checking'."""
+    """Names of the user's checking-type accounts, used as a name fallback for
+    imported rows not yet anchored by account_id. Falls back to seeded 'Checking'."""
     names = [a["name"] for a in load_accounts(user_id) if a.get("account_type") == "checking"]
     return names or ["Checking"]
 
 
-def latest_checking_actual_date(user_id: int) -> Optional[date]:
+def checking_account_ids(user_id: int) -> List[int]:
+    """Ids of the user's checking-type accounts — the stable, rename-proof key
+    for selecting checking rows out of imported_transactions."""
+    return [int(a["id"]) for a in load_accounts(user_id) if a.get("account_type") == "checking"]
+
+
+def _checking_scope_sql(user_id: int, prefix: str = "") -> tuple[str, List[Any]]:
+    """SQL predicate + params selecting a user's checking imported rows by
+    account_id, with a name fallback for rows not yet anchored (account_id NULL).
+    `prefix` is the column qualifier for the imported_transactions row (e.g. "i.")."""
+    ids = checking_account_ids(user_id)
     names = checking_account_names(user_id)
-    placeholders = ", ".join("?" for _ in names)
+    clauses: List[str] = []
+    params: List[Any] = []
+    if ids:
+        clauses.append(f"{prefix}account_id IN ({', '.join('?' for _ in ids)})")
+        params.extend(ids)
+    clauses.append(
+        f"({prefix}account_id IS NULL AND {prefix}account IN ({', '.join('?' for _ in names)}))"
+    )
+    params.extend(names)
+    return "(" + " OR ".join(clauses) + ")", params
+
+
+def _card_scope_sql(card: Dict[str, Any], prefix: str = "") -> tuple[str, List[Any]]:
+    """SQL predicate + params selecting one card's imported rows by account_id,
+    with a name fallback for rows not yet anchored (account_id NULL)."""
+    clause = (
+        f"({prefix}account_id = ? OR ({prefix}account_id IS NULL AND {prefix}account = ?))"
+    )
+    return clause, [int(card["id"]), card["name"]]
+
+
+def latest_checking_actual_date(user_id: int) -> Optional[date]:
+    clause, params = _checking_scope_sql(user_id)
     with get_connection() as conn:
         row = conn.execute(
-            f"SELECT MAX(tx_date) FROM imported_transactions WHERE user_id = ? AND account IN ({placeholders})",
-            [user_id, *names],
+            f"SELECT MAX(tx_date) FROM imported_transactions WHERE user_id = ? AND {clause}",
+            [user_id, *params],
         ).fetchone()
     value = row[0] if row else None
     if isinstance(value, datetime):
@@ -1236,12 +1284,11 @@ def latest_checking_actual_date(user_id: int) -> Optional[date]:
 
 
 def first_checking_actual_date(user_id: int) -> Optional[date]:
-    names = checking_account_names(user_id)
-    placeholders = ", ".join("?" for _ in names)
+    clause, params = _checking_scope_sql(user_id)
     with get_connection() as conn:
         row = conn.execute(
-            f"SELECT MIN(tx_date) FROM imported_transactions WHERE user_id = ? AND account IN ({placeholders})",
-            [user_id, *names],
+            f"SELECT MIN(tx_date) FROM imported_transactions WHERE user_id = ? AND {clause}",
+            [user_id, *params],
         ).fetchone()
     value = row[0] if row else None
     if isinstance(value, datetime):
@@ -1252,8 +1299,7 @@ def first_checking_actual_date(user_id: int) -> Optional[date]:
 def load_actual_checking_transactions(user_id: int, window_start: date, window_end: date) -> List[Dict[str, Any]]:
     """Real checking-account transactions (imported) mapped to the ledger row
     schema. Amounts are signed (negative = money out). Card payments count."""
-    names = checking_account_names(user_id)
-    placeholders = ", ".join("?" for _ in names)
+    scope_clause, scope_params = _checking_scope_sql(user_id, "i.")
     with get_connection() as conn:
         rows = rows_to_dicts(
             conn.execute(
@@ -1273,11 +1319,11 @@ def load_actual_checking_transactions(user_id: int, window_start: date, window_e
                        ON ec.id = COALESCE(ri.category_id, mt.category_id) AND ec.user_id = i.user_id
                 LEFT JOIN categories ic
                        ON ic.id = i.category_id AND ic.user_id = i.user_id
-                WHERE i.user_id = ? AND i.account IN ({placeholders})
+                WHERE i.user_id = ? AND {scope_clause}
                   AND i.tx_date >= ? AND i.tx_date <= ?
                 ORDER BY i.tx_date, i.id
                 """,
-                [user_id, *names, window_start, window_end],
+                [user_id, *scope_params, window_start, window_end],
             )
         )
 
@@ -1320,25 +1366,26 @@ def load_actual_checking_transactions(user_id: int, window_start: date, window_e
 def checking_actual_balance_before(user_id: int, cutoff_date: date, opening_balance: float) -> float:
     """opening_balance + sum of checking actual deltas strictly before cutoff_date.
     Gives the correct running-balance seed for any window start."""
-    names = checking_account_names(user_id)
-    placeholders = ", ".join("?" for _ in names)
+    clause, params = _checking_scope_sql(user_id)
     with get_connection() as conn:
         row = conn.execute(
             f"""
             SELECT COALESCE(SUM(amount), 0) FROM imported_transactions
-            WHERE user_id = ? AND account IN ({placeholders}) AND tx_date < ?
+            WHERE user_id = ? AND {clause} AND tx_date < ?
             """,
-            [user_id, *names, cutoff_date],
+            [user_id, *params, cutoff_date],
         ).fetchone()
     return float(opening_balance) + float(row[0] if row else 0.0)
 
 
-def card_actual_cutover(user_id: int, card_name: str) -> Optional[date]:
-    """Latest imported transaction date for a specific card account."""
+def card_actual_cutover(user_id: int, card: Dict[str, Any]) -> Optional[date]:
+    """Latest imported transaction date for a specific card account (by account_id,
+    with a name fallback for rows not yet anchored)."""
+    clause, params = _card_scope_sql(card)
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT MAX(tx_date) FROM imported_transactions WHERE user_id = ? AND account = ?",
-            [user_id, card_name],
+            f"SELECT MAX(tx_date) FROM imported_transactions WHERE user_id = ? AND {clause}",
+            [user_id, *params],
         ).fetchone()
     value = row[0] if row else None
     if isinstance(value, datetime):
@@ -1346,16 +1393,17 @@ def card_actual_cutover(user_id: int, card_name: str) -> Optional[date]:
     return value
 
 
-def _sum_actual_card_charges(user_id: int, card_name: str, after: date, close: date) -> float:
+def _sum_actual_card_charges(user_id: int, card: Dict[str, Any], after: date, close: date) -> float:
     """Net signed sum of a card's real (non-transfer) charges in (after, close]."""
+    clause, params = _card_scope_sql(card)
     with get_connection() as conn:
         row = conn.execute(
-            """
+            f"""
             SELECT COALESCE(SUM(amount), 0) FROM imported_transactions
-            WHERE user_id = ? AND account = ? AND NOT is_transfer
+            WHERE user_id = ? AND {clause} AND NOT is_transfer
               AND tx_date > ? AND tx_date <= ?
             """,
-            [user_id, card_name, after, close],
+            [user_id, *params, after, close],
         ).fetchone()
     return float(row[0] if row else 0.0)
 
@@ -1416,7 +1464,7 @@ def forecast_card_payments(
         if card.get("statement_day") is None or card.get("due_day") is None:
             continue  # cycle not configured
 
-        card_cutover = card_actual_cutover(user_id, card["name"])
+        card_cutover = card_actual_cutover(user_id, card)
         expected = _card_expected_charges(
             user_id,
             int(card["id"]),
@@ -1430,7 +1478,7 @@ def forecast_card_payments(
             if cutover is not None and due <= cutover:
                 continue  # already paid within the checking actuals
 
-            actual = _sum_actual_card_charges(user_id, card["name"], prev_close, close)
+            actual = _sum_actual_card_charges(user_id, card, prev_close, close)
             expected_sum = sum(
                 charge["delta"]
                 for charge in expected
@@ -1919,6 +1967,12 @@ def upsert_imported_transactions(
     _assign_import_fingerprints(rows)
     fingerprints = [row["fingerprint"] for row in rows]
 
+    # Anchor each row to an account by id at insert time. Prefer an account_id the
+    # parser already resolved (custom templates); otherwise match on account name.
+    name_to_id = {
+        str(a["name"]).lower(): int(a["id"]) for a in load_accounts(user_id)
+    }
+
     inserted = 0
     transfers = 0
     with get_connection() as conn:
@@ -1936,17 +1990,21 @@ def upsert_imported_transactions(
             if fingerprint in already_present or fingerprint in seen_in_batch:
                 continue
             seen_in_batch.add(fingerprint)
+            account_id = row.get("account_id")
+            if account_id is None:
+                account_id = name_to_id.get(str(row["account"]).lower())
             conn.execute(
                 """
                 INSERT INTO imported_transactions (
-                    user_id, account, tx_date, description, merchant, amount,
+                    user_id, account, account_id, tx_date, description, merchant, amount,
                     flow, is_transfer, raw_type, category_id, source_file, fingerprint
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
                 """,
                 [
                     user_id,
                     row["account"],
+                    account_id,
                     row["tx_date"],
                     row["description"],
                     row["merchant"],
@@ -2001,6 +2059,50 @@ def load_imported_accounts(user_id: int) -> List[str]:
             [user_id],
         ).fetchall()
     return [row[0] for row in rows]
+
+
+def load_unmapped_import_labels(user_id: int) -> List[Dict[str, Any]]:
+    """Distinct imported-account labels whose rows are not yet anchored to an
+    account (account_id IS NULL) — i.e. the labels of already-renamed accounts
+    that the exact-name backfill could not match. Each entry: {label, count}."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT account, COUNT(*) AS n
+            FROM imported_transactions
+            WHERE user_id = ? AND account_id IS NULL
+            GROUP BY account
+            ORDER BY account
+            """,
+            [user_id],
+        ).fetchall()
+    return [{"label": row[0], "count": int(row[1])} for row in rows]
+
+
+def map_import_label_to_account(user_id: int, label: str, account_id: int) -> int:
+    """Relink every unanchored imported row carrying `label` to `account_id`, and
+    align its display label to that account's current name. Returns rows updated."""
+    with get_connection() as conn:
+        account = conn.execute(
+            "SELECT name FROM accounts WHERE user_id = ? AND id = ?",
+            [user_id, account_id],
+        ).fetchone()
+        if not account:
+            raise ValueError("Account not found")
+        matched = conn.execute(
+            "SELECT COUNT(*) FROM imported_transactions "
+            "WHERE user_id = ? AND account_id IS NULL AND account = ?",
+            [user_id, label],
+        ).fetchone()[0]
+        conn.execute(
+            """
+            UPDATE imported_transactions
+            SET account_id = ?, account = ?
+            WHERE user_id = ? AND account_id IS NULL AND account = ?
+            """,
+            [account_id, account[0], user_id, label],
+        )
+        return int(matched)
 
 
 def summarize_imported(user_id: int) -> Dict[str, Any]:

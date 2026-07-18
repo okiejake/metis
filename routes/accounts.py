@@ -188,6 +188,12 @@ def edit_account(
                 "UPDATE accounts SET name = ?, account_type = ?, statement_day = ?, due_day = ? WHERE id = ? AND user_id = ?",
                 [cleaned_name, account_type, parsed_statement, parsed_due, account_id, user["id"]],
             )
+            # Cascade the rename to imported rows anchored to this account so their
+            # display label follows the account (rows match by stable account_id).
+            conn.execute(
+                "UPDATE imported_transactions SET account = ? WHERE user_id = ? AND account_id = ?",
+                [cleaned_name, user["id"], account_id],
+            )
     except ValueError as exc:
         return redirect_with_message(f"/accounts/{account_id}/edit", str(exc), is_error=True)
 
