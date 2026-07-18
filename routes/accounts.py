@@ -5,6 +5,7 @@ from fastapi.responses import HTMLResponse
 
 from services import (
     account_cycle_status,
+    card_balance_summary,
     ensure_seed_accounts,
     first_checking_actual_date,
     forecast_card_payments,
@@ -79,6 +80,7 @@ def accounts_page(request: Request, msg: str = "", err: int = 0):
         if account["account_type"] == "credit_card" and account.get("statement_day") and account.get("due_day"):
             account["cycle"] = account_cycle_status(account, today)
             account["projected"] = projected.get(int(account["id"]))
+            account["balance"] = card_balance_summary(user["id"], account)
 
     return templates.TemplateResponse(
         "accounts.html",

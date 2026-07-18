@@ -1092,6 +1092,12 @@ def summarize_frequency(item: Dict[str, Any]) -> str:
 # window is still generated (one statement cycle + due offset ≈ up to ~62 days).
 CYCLE_LOOKBACK_DAYS = 75
 
+# How close (in days) a checking payment and a card's own payment row must be to
+# be treated as the same payment, and how long after a statement's due date a
+# recorded card payment still counts as settling it.
+PAYMENT_MATCH_WINDOW_DAYS = 7
+CARD_PAYMENT_GRACE_DAYS = 7
+
 
 LAST_DAY_SENTINEL = 0  # statement_day / due_day == 0 means "last day of month"
 
@@ -1408,6 +1414,33 @@ def _sum_actual_card_charges(user_id: int, card: Dict[str, Any], after: date, cl
     return float(row[0] if row else 0.0)
 
 
+def _card_payment_dates(user_id: int, card: Dict[str, Any]) -> List[date]:
+    """Dates of a card's own recorded payments (imported transfer rows)."""
+    clause, params = _card_scope_sql(card)
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"SELECT tx_date FROM imported_transactions "
+            f"WHERE user_id = ? AND {clause} AND is_transfer",
+            [user_id, *params],
+        ).fetchall()
+    dates: List[date] = []
+    for (value,) in rows:
+        dates.append(value.date() if isinstance(value, datetime) else value)
+    return dates
+
+
+def _card_payments_between(user_id: int, card: Dict[str, Any], after: date, through: date) -> float:
+    """Total magnitude of a card's recorded payments in (after, through]."""
+    clause, params = _card_scope_sql(card)
+    with get_connection() as conn:
+        row = conn.execute(
+            f"SELECT COALESCE(SUM(ABS(amount)), 0) FROM imported_transactions "
+            f"WHERE user_id = ? AND {clause} AND is_transfer AND tx_date > ? AND tx_date <= ?",
+            [user_id, *params, after, through],
+        ).fetchone()
+    return round(float(row[0] if row else 0.0), 2)
+
+
 def _card_expected_charges(
     user_id: int, card_id: int, window_start: date, window_end: date
 ) -> List[Dict[str, Any]]:
@@ -1465,6 +1498,7 @@ def forecast_card_payments(
             continue  # cycle not configured
 
         card_cutover = card_actual_cutover(user_id, card)
+        payment_dates = _card_payment_dates(user_id, card)
         expected = _card_expected_charges(
             user_id,
             int(card["id"]),
@@ -1477,6 +1511,14 @@ def forecast_card_payments(
                 continue
             if cutover is not None and due <= cutover:
                 continue  # already paid within the checking actuals
+            # If the card itself recorded a payment for this closed statement (an
+            # early/late payment the checking cutover wouldn't catch), the cycle is
+            # settled — don't project a phantom payment for it.
+            if any(
+                close < pd <= due + timedelta(days=CARD_PAYMENT_GRACE_DAYS)
+                for pd in payment_dates
+            ):
+                continue
 
             actual = _sum_actual_card_charges(user_id, card, prev_close, close)
             expected_sum = sum(
@@ -1504,6 +1546,91 @@ def forecast_card_payments(
                 }
             )
     return payments
+
+
+def match_card_payments(user_id: int) -> List[Dict[str, Any]]:
+    """Pair a checking transfer debit with a card's own payment row (both flagged
+    is_transfer) by matching magnitude + near date. Rows are anchored by
+    account_id, so matches survive account renames. Returns the matched pairs."""
+    accounts = load_accounts_map(user_id)
+    checking_ids = {aid for aid, a in accounts.items() if a.get("account_type") == "checking"}
+    card_ids = {aid for aid, a in accounts.items() if a.get("account_type") == "credit_card"}
+
+    with get_connection() as conn:
+        rows = rows_to_dicts(
+            conn.execute(
+                "SELECT id, account_id, account, tx_date, amount FROM imported_transactions "
+                "WHERE user_id = ? AND is_transfer",
+                [user_id],
+            )
+        )
+    checking_txns: List[Dict[str, Any]] = []
+    card_txns: List[Dict[str, Any]] = []
+    for row in rows:
+        tx_date = row["tx_date"]
+        row["tx_date"] = tx_date.date() if isinstance(tx_date, datetime) else tx_date
+        if row["account_id"] in card_ids:
+            card_txns.append(row)
+        elif row["account_id"] in checking_ids:
+            checking_txns.append(row)
+
+    pairs: List[Dict[str, Any]] = []
+    used: set = set()
+    # Match earliest card payments first for stable, deterministic pairing.
+    for card_tx in sorted(card_txns, key=lambda r: (r["tx_date"], r["id"])):
+        best = None
+        best_diff = None
+        for check_tx in checking_txns:
+            if check_tx["id"] in used:
+                continue
+            if abs(abs(check_tx["amount"]) - abs(card_tx["amount"])) > 0.005:
+                continue
+            diff = abs((check_tx["tx_date"] - card_tx["tx_date"]).days)
+            if diff > PAYMENT_MATCH_WINDOW_DAYS:
+                continue
+            if best_diff is None or diff < best_diff:
+                best, best_diff = check_tx, diff
+        if best is not None:
+            used.add(best["id"])
+            pairs.append(
+                {
+                    "card_row_id": int(card_tx["id"]),
+                    "card_account_id": int(card_tx["account_id"]),
+                    "checking_row_id": int(best["id"]),
+                    "amount": round(abs(card_tx["amount"]), 2),
+                    "card_date": card_tx["tx_date"],
+                    "checking_date": best["tx_date"],
+                }
+            )
+    return pairs
+
+
+def card_balance_summary(user_id: int, card: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Amount due on a card's most recently closed statement: the statement's net
+    charges (account_id-anchored) minus payments recorded since it closed."""
+    if card.get("statement_day") is None or card.get("due_day") is None:
+        return None
+    today = date.today()
+    last_cycle = None
+    for prev_close, close, due in _iter_card_cycles(card, add_months(today, -3), today):
+        if close <= today and (last_cycle is None or close > last_cycle[1]):
+            last_cycle = (prev_close, close, due)
+    if last_cycle is None:
+        return None
+    prev_close, close, due = last_cycle
+
+    # Purchases are negative, so owed = -(net charges); refunds reduce it.
+    statement_owed = round(-_sum_actual_card_charges(user_id, card, prev_close, close), 2)
+    payments_applied = _card_payments_between(user_id, card, close, today)
+    amount_due = round(statement_owed - payments_applied, 2)
+    return {
+        "statement_close": close,
+        "due_date": due,
+        "statement_owed": statement_owed,
+        "payments_applied": payments_applied,
+        "amount_due": max(amount_due, 0.0),
+        "paid": statement_owed > 0.005 and amount_due <= 0.005,
+    }
 
 
 def collect_blended_transactions(user_id: int, window_start: date, window_end: date) -> List[Dict[str, Any]]:
