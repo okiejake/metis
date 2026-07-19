@@ -1483,6 +1483,8 @@ def _card_expected_charges(
                     "delta": float(row["delta"]),
                     "description": row.get("description") or "",
                     "kind": "recurring",
+                    "category_name": item.get("category_name") or "",
+                    "category_color": safe_hex_color(item.get("category_color")),
                 }
             )
     for row in load_manual_transactions(user_id, window_start, window_end):
@@ -1493,6 +1495,8 @@ def _card_expected_charges(
                     "delta": float(row["delta"]),
                     "description": row.get("description") or "",
                     "kind": "one_time",
+                    "category_name": row.get("category_name") or "",
+                    "category_color": safe_hex_color(row.get("category_color")),
                 }
             )
     return charges
@@ -1503,13 +1507,16 @@ def _list_actual_card_charges(
 ) -> List[Dict[str, Any]]:
     """A card's real (non-transfer) charges in (after, close] as itemized rows
     {date, description, delta, kind:'actual'} — the imported half of a payment."""
-    clause, params = _card_scope_sql(card)
+    clause, params = _card_scope_sql(card, "i.")
     with get_connection() as conn:
         rows = rows_to_dicts(
             conn.execute(
-                f"SELECT tx_date, description, merchant, amount FROM imported_transactions "
-                f"WHERE user_id = ? AND {clause} AND NOT is_transfer "
-                f"AND tx_date > ? AND tx_date <= ? ORDER BY tx_date, id",
+                f"SELECT i.tx_date, i.description, i.merchant, i.amount, "
+                f"c.name AS category_name, c.color AS category_color "
+                f"FROM imported_transactions i "
+                f"LEFT JOIN categories c ON c.id = i.category_id AND c.user_id = i.user_id "
+                f"WHERE i.user_id = ? AND {clause} AND NOT i.is_transfer "
+                f"AND i.tx_date > ? AND i.tx_date <= ? ORDER BY i.tx_date, i.id",
                 [user_id, *params, after, close],
             )
         )
@@ -1522,6 +1529,8 @@ def _list_actual_card_charges(
                 "description": row.get("merchant") or row.get("description") or "",
                 "delta": float(row["amount"]),
                 "kind": "actual",
+                "category_name": row.get("category_name") or "",
+                "category_color": safe_hex_color(row.get("category_color")),
             }
         )
     return items
@@ -1593,6 +1602,8 @@ def forecast_card_payments(
                     "description": charge.get("description") or "",
                     "delta": charge["delta"],
                     "kind": charge.get("kind") or "recurring",
+                    "category_name": charge.get("category_name") or "",
+                    "category_color": safe_hex_color(charge.get("category_color")),
                 }
                 for charge in expected
                 if prev_close < charge["date"] <= close

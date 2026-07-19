@@ -108,7 +108,7 @@
           <td>
             {% if row.category_name %}
             <span class="category-pill">
-              <span class="category-dot" style="background: {{ row.category_color if row.category_color else '#64748b' }};"></span>
+              <span class="category-dot" style="background: {{ row.category_color if row.category_color else 'var(--muted)' }};"></span>
               {{ row.category_name }}
             </span>
             {% else %}
@@ -146,13 +146,23 @@
               <p class="card-detail-caption">Charges making up this {{ row.description }}</p>
               <table class="card-detail-table">
                 <thead>
-                  <tr><th>Date</th><th>Charge</th><th>Type</th><th>Amount</th></tr>
+                  <tr><th>Date</th><th>Charge</th><th>Category</th><th>Type</th><th>Amount</th></tr>
                 </thead>
                 <tbody>
                   {% for charge in row.card_charges %}
                   <tr>
                     <td>{{ charge.date }}</td>
                     <td>{{ charge.description if charge.description else '—' }}</td>
+                    <td>
+                      {% if charge.category_name %}
+                      <span class="category-pill">
+                        <span class="category-dot" style="background: {{ charge.category_color if charge.category_color else 'var(--muted)' }};"></span>
+                        {{ charge.category_name }}
+                      </span>
+                      {% else %}
+                      -
+                      {% endif %}
+                    </td>
                     <td>
                       <span class="table-pill">
                         {% if charge.kind == 'actual' %}Imported{% elif charge.kind == 'recurring' %}Recurring{% else %}One-time{% endif %}
