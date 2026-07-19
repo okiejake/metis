@@ -177,6 +177,7 @@ def init_db() -> None:
         conn.execute("CREATE SEQUENCE IF NOT EXISTS expected_reconciliations_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS expected_match_rules_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS accounts_id_seq START 1")
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS import_templates_id_seq START 1")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -329,6 +330,26 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS import_templates (
+                id BIGINT PRIMARY KEY DEFAULT nextval('import_templates_id_seq'),
+                user_id BIGINT NOT NULL,
+                name TEXT NOT NULL,
+                account_id BIGINT NOT NULL,
+                date_field TEXT NOT NULL,
+                date_format TEXT,
+                amount_field TEXT NOT NULL,
+                amount_sign TEXT NOT NULL DEFAULT 'standard',
+                type_field TEXT,
+                credit_value TEXT,
+                description_field TEXT NOT NULL,
+                merchant_field TEXT,
+                signature TEXT NOT NULL DEFAULT '[]',
+                created_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS dismissed_suggestions (
                 user_id BIGINT NOT NULL,
                 suggestion_key TEXT NOT NULL,
@@ -367,6 +388,8 @@ def init_db() -> None:
             conn.execute("ALTER TABLE recurring_items ADD COLUMN account_id BIGINT")
         if not table_has_column(conn, "manual_transactions", "account_id"):
             conn.execute("ALTER TABLE manual_transactions ADD COLUMN account_id BIGINT")
+        if not table_has_column(conn, "imported_transactions", "account_id"):
+            conn.execute("ALTER TABLE imported_transactions ADD COLUMN account_id BIGINT")
         if not table_has_column(conn, "users", "email"):
             conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
         migrate_categories_to_user_scoped_uniqueness(conn, default_user_id)
@@ -378,11 +401,26 @@ def init_db() -> None:
         conn.execute("UPDATE recurring_items SET user_id = ? WHERE user_id IS NULL", [default_user_id])
         conn.execute("UPDATE manual_transactions SET user_id = ? WHERE user_id IS NULL", [default_user_id])
         conn.execute("UPDATE users SET email = '' WHERE email IS NULL")
+        # Anchor imported rows to accounts by id. Backfill exact name matches;
+        # rows whose account was renamed stay NULL and are relinked via the
+        # Import-page mapping UI (load_unmapped_import_labels / map_import_label_to_account).
+        conn.execute(
+            """
+            UPDATE imported_transactions SET account_id = (
+                SELECT a.id FROM accounts a
+                WHERE a.user_id = imported_transactions.user_id
+                  AND LOWER(a.name) = LOWER(imported_transactions.account)
+            )
+            WHERE account_id IS NULL
+            """
+        )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_categories_user_id ON categories(user_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_recurring_items_user_id ON recurring_items(user_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_manual_transactions_user_id ON manual_transactions(user_id)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_user_name_unique ON categories(user_id, name)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_imported_user_date ON imported_transactions(user_id, tx_date)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_imported_user_account ON imported_transactions(user_id, account_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_import_templates_user ON import_templates(user_id)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_imported_fingerprint ON imported_transactions(user_id, fingerprint)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reconciliation_import_unique ON expected_reconciliations(user_id, imported_transaction_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_reconciliation_source ON expected_reconciliations(user_id, source_type, source_id)")
@@ -1076,6 +1114,12 @@ def summarize_frequency(item: Dict[str, Any]) -> str:
 # window is still generated (one statement cycle + due offset ≈ up to ~62 days).
 CYCLE_LOOKBACK_DAYS = 75
 
+# How close (in days) a checking payment and a card's own payment row must be to
+# be treated as the same payment, and how long after a statement's due date a
+# recorded card payment still counts as settling it.
+PAYMENT_MATCH_WINDOW_DAYS = 7
+CARD_PAYMENT_GRACE_DAYS = 7
+
 
 LAST_DAY_SENTINEL = 0  # statement_day / due_day == 0 means "last day of month"
 
@@ -1215,19 +1259,51 @@ def _apply_cash_flow_deferral(
 
 
 def checking_account_names(user_id: int) -> List[str]:
-    """Names of the user's checking-type accounts, used to select the checking
-    rows out of imported_transactions. Falls back to the seeded 'Checking'."""
+    """Names of the user's checking-type accounts, used as a name fallback for
+    imported rows not yet anchored by account_id. Falls back to seeded 'Checking'."""
     names = [a["name"] for a in load_accounts(user_id) if a.get("account_type") == "checking"]
     return names or ["Checking"]
 
 
-def latest_checking_actual_date(user_id: int) -> Optional[date]:
+def checking_account_ids(user_id: int) -> List[int]:
+    """Ids of the user's checking-type accounts — the stable, rename-proof key
+    for selecting checking rows out of imported_transactions."""
+    return [int(a["id"]) for a in load_accounts(user_id) if a.get("account_type") == "checking"]
+
+
+def _checking_scope_sql(user_id: int, prefix: str = "") -> tuple[str, List[Any]]:
+    """SQL predicate + params selecting a user's checking imported rows by
+    account_id, with a name fallback for rows not yet anchored (account_id NULL).
+    `prefix` is the column qualifier for the imported_transactions row (e.g. "i.")."""
+    ids = checking_account_ids(user_id)
     names = checking_account_names(user_id)
-    placeholders = ", ".join("?" for _ in names)
+    clauses: List[str] = []
+    params: List[Any] = []
+    if ids:
+        clauses.append(f"{prefix}account_id IN ({', '.join('?' for _ in ids)})")
+        params.extend(ids)
+    clauses.append(
+        f"({prefix}account_id IS NULL AND {prefix}account IN ({', '.join('?' for _ in names)}))"
+    )
+    params.extend(names)
+    return "(" + " OR ".join(clauses) + ")", params
+
+
+def _card_scope_sql(card: Dict[str, Any], prefix: str = "") -> tuple[str, List[Any]]:
+    """SQL predicate + params selecting one card's imported rows by account_id,
+    with a name fallback for rows not yet anchored (account_id NULL)."""
+    clause = (
+        f"({prefix}account_id = ? OR ({prefix}account_id IS NULL AND {prefix}account = ?))"
+    )
+    return clause, [int(card["id"]), card["name"]]
+
+
+def latest_checking_actual_date(user_id: int) -> Optional[date]:
+    clause, params = _checking_scope_sql(user_id)
     with get_connection() as conn:
         row = conn.execute(
-            f"SELECT MAX(tx_date) FROM imported_transactions WHERE user_id = ? AND account IN ({placeholders})",
-            [user_id, *names],
+            f"SELECT MAX(tx_date) FROM imported_transactions WHERE user_id = ? AND {clause}",
+            [user_id, *params],
         ).fetchone()
     value = row[0] if row else None
     if isinstance(value, datetime):
@@ -1236,12 +1312,11 @@ def latest_checking_actual_date(user_id: int) -> Optional[date]:
 
 
 def first_checking_actual_date(user_id: int) -> Optional[date]:
-    names = checking_account_names(user_id)
-    placeholders = ", ".join("?" for _ in names)
+    clause, params = _checking_scope_sql(user_id)
     with get_connection() as conn:
         row = conn.execute(
-            f"SELECT MIN(tx_date) FROM imported_transactions WHERE user_id = ? AND account IN ({placeholders})",
-            [user_id, *names],
+            f"SELECT MIN(tx_date) FROM imported_transactions WHERE user_id = ? AND {clause}",
+            [user_id, *params],
         ).fetchone()
     value = row[0] if row else None
     if isinstance(value, datetime):
@@ -1252,8 +1327,7 @@ def first_checking_actual_date(user_id: int) -> Optional[date]:
 def load_actual_checking_transactions(user_id: int, window_start: date, window_end: date) -> List[Dict[str, Any]]:
     """Real checking-account transactions (imported) mapped to the ledger row
     schema. Amounts are signed (negative = money out). Card payments count."""
-    names = checking_account_names(user_id)
-    placeholders = ", ".join("?" for _ in names)
+    scope_clause, scope_params = _checking_scope_sql(user_id, "i.")
     with get_connection() as conn:
         rows = rows_to_dicts(
             conn.execute(
@@ -1273,11 +1347,11 @@ def load_actual_checking_transactions(user_id: int, window_start: date, window_e
                        ON ec.id = COALESCE(ri.category_id, mt.category_id) AND ec.user_id = i.user_id
                 LEFT JOIN categories ic
                        ON ic.id = i.category_id AND ic.user_id = i.user_id
-                WHERE i.user_id = ? AND i.account IN ({placeholders})
+                WHERE i.user_id = ? AND {scope_clause}
                   AND i.tx_date >= ? AND i.tx_date <= ?
                 ORDER BY i.tx_date, i.id
                 """,
-                [user_id, *names, window_start, window_end],
+                [user_id, *scope_params, window_start, window_end],
             )
         )
 
@@ -1320,25 +1394,26 @@ def load_actual_checking_transactions(user_id: int, window_start: date, window_e
 def checking_actual_balance_before(user_id: int, cutoff_date: date, opening_balance: float) -> float:
     """opening_balance + sum of checking actual deltas strictly before cutoff_date.
     Gives the correct running-balance seed for any window start."""
-    names = checking_account_names(user_id)
-    placeholders = ", ".join("?" for _ in names)
+    clause, params = _checking_scope_sql(user_id)
     with get_connection() as conn:
         row = conn.execute(
             f"""
             SELECT COALESCE(SUM(amount), 0) FROM imported_transactions
-            WHERE user_id = ? AND account IN ({placeholders}) AND tx_date < ?
+            WHERE user_id = ? AND {clause} AND tx_date < ?
             """,
-            [user_id, *names, cutoff_date],
+            [user_id, *params, cutoff_date],
         ).fetchone()
     return float(opening_balance) + float(row[0] if row else 0.0)
 
 
-def card_actual_cutover(user_id: int, card_name: str) -> Optional[date]:
-    """Latest imported transaction date for a specific card account."""
+def card_actual_cutover(user_id: int, card: Dict[str, Any]) -> Optional[date]:
+    """Latest imported transaction date for a specific card account (by account_id,
+    with a name fallback for rows not yet anchored)."""
+    clause, params = _card_scope_sql(card)
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT MAX(tx_date) FROM imported_transactions WHERE user_id = ? AND account = ?",
-            [user_id, card_name],
+            f"SELECT MAX(tx_date) FROM imported_transactions WHERE user_id = ? AND {clause}",
+            [user_id, *params],
         ).fetchone()
     value = row[0] if row else None
     if isinstance(value, datetime):
@@ -1346,18 +1421,46 @@ def card_actual_cutover(user_id: int, card_name: str) -> Optional[date]:
     return value
 
 
-def _sum_actual_card_charges(user_id: int, card_name: str, after: date, close: date) -> float:
+def _sum_actual_card_charges(user_id: int, card: Dict[str, Any], after: date, close: date) -> float:
     """Net signed sum of a card's real (non-transfer) charges in (after, close]."""
+    clause, params = _card_scope_sql(card)
     with get_connection() as conn:
         row = conn.execute(
-            """
+            f"""
             SELECT COALESCE(SUM(amount), 0) FROM imported_transactions
-            WHERE user_id = ? AND account = ? AND NOT is_transfer
+            WHERE user_id = ? AND {clause} AND NOT is_transfer
               AND tx_date > ? AND tx_date <= ?
             """,
-            [user_id, card_name, after, close],
+            [user_id, *params, after, close],
         ).fetchone()
     return float(row[0] if row else 0.0)
+
+
+def _card_payment_dates(user_id: int, card: Dict[str, Any]) -> List[date]:
+    """Dates of a card's own recorded payments (imported transfer rows)."""
+    clause, params = _card_scope_sql(card)
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"SELECT tx_date FROM imported_transactions "
+            f"WHERE user_id = ? AND {clause} AND is_transfer",
+            [user_id, *params],
+        ).fetchall()
+    dates: List[date] = []
+    for (value,) in rows:
+        dates.append(value.date() if isinstance(value, datetime) else value)
+    return dates
+
+
+def _card_payments_between(user_id: int, card: Dict[str, Any], after: date, through: date) -> float:
+    """Total magnitude of a card's recorded payments in (after, through]."""
+    clause, params = _card_scope_sql(card)
+    with get_connection() as conn:
+        row = conn.execute(
+            f"SELECT COALESCE(SUM(ABS(amount)), 0) FROM imported_transactions "
+            f"WHERE user_id = ? AND {clause} AND is_transfer AND tx_date > ? AND tx_date <= ?",
+            [user_id, *params, after, through],
+        ).fetchone()
+    return round(float(row[0] if row else 0.0), 2)
 
 
 def _card_expected_charges(
@@ -1374,11 +1477,63 @@ def _card_expected_charges(
         for row in generate_recurring_transactions(
             item, window_start, window_end, overrides=overrides_by_id.get(int(item["id"]), [])
         ):
-            charges.append({"date": row["date"], "delta": float(row["delta"])})
+            charges.append(
+                {
+                    "date": row["date"],
+                    "delta": float(row["delta"]),
+                    "description": row.get("description") or "",
+                    "kind": "recurring",
+                    "category_name": item.get("category_name") or "",
+                    "category_color": safe_hex_color(item.get("category_color")),
+                }
+            )
     for row in load_manual_transactions(user_id, window_start, window_end):
         if row.get("account_id") == card_id:
-            charges.append({"date": row["date"], "delta": float(row["delta"])})
+            charges.append(
+                {
+                    "date": row["date"],
+                    "delta": float(row["delta"]),
+                    "description": row.get("description") or "",
+                    "kind": "one_time",
+                    "category_name": row.get("category_name") or "",
+                    "category_color": safe_hex_color(row.get("category_color")),
+                }
+            )
     return charges
+
+
+def _list_actual_card_charges(
+    user_id: int, card: Dict[str, Any], after: date, close: date
+) -> List[Dict[str, Any]]:
+    """A card's real (non-transfer) charges in (after, close] as itemized rows
+    {date, description, delta, kind:'actual'} — the imported half of a payment."""
+    clause, params = _card_scope_sql(card, "i.")
+    with get_connection() as conn:
+        rows = rows_to_dicts(
+            conn.execute(
+                f"SELECT i.tx_date, i.description, i.merchant, i.amount, "
+                f"c.name AS category_name, c.color AS category_color "
+                f"FROM imported_transactions i "
+                f"LEFT JOIN categories c ON c.id = i.category_id AND c.user_id = i.user_id "
+                f"WHERE i.user_id = ? AND {clause} AND NOT i.is_transfer "
+                f"AND i.tx_date > ? AND i.tx_date <= ? ORDER BY i.tx_date, i.id",
+                [user_id, *params, after, close],
+            )
+        )
+    items: List[Dict[str, Any]] = []
+    for row in rows:
+        tx_date = row["tx_date"]
+        items.append(
+            {
+                "date": tx_date.date() if isinstance(tx_date, datetime) else tx_date,
+                "description": row.get("merchant") or row.get("description") or "",
+                "delta": float(row["amount"]),
+                "kind": "actual",
+                "category_name": row.get("category_name") or "",
+                "category_color": safe_hex_color(row.get("category_color")),
+            }
+        )
+    return items
 
 
 def _iter_card_cycles(card: Dict[str, Any], window_start: date, window_end: date):
@@ -1416,7 +1571,8 @@ def forecast_card_payments(
         if card.get("statement_day") is None or card.get("due_day") is None:
             continue  # cycle not configured
 
-        card_cutover = card_actual_cutover(user_id, card["name"])
+        card_cutover = card_actual_cutover(user_id, card)
+        payment_dates = _card_payment_dates(user_id, card)
         expected = _card_expected_charges(
             user_id,
             int(card["id"]),
@@ -1429,18 +1585,38 @@ def forecast_card_payments(
                 continue
             if cutover is not None and due <= cutover:
                 continue  # already paid within the checking actuals
+            # If the card itself recorded a payment for this closed statement (an
+            # early/late payment the checking cutover wouldn't catch), the cycle is
+            # settled — don't project a phantom payment for it.
+            if any(
+                close < pd <= due + timedelta(days=CARD_PAYMENT_GRACE_DAYS)
+                for pd in payment_dates
+            ):
+                continue
 
-            actual = _sum_actual_card_charges(user_id, card["name"], prev_close, close)
-            expected_sum = sum(
-                charge["delta"]
+            actual_items = _list_actual_card_charges(user_id, card, prev_close, close)
+            actual = sum(item["delta"] for item in actual_items)
+            expected_items = [
+                {
+                    "date": charge["date"],
+                    "description": charge.get("description") or "",
+                    "delta": charge["delta"],
+                    "kind": charge.get("kind") or "recurring",
+                    "category_name": charge.get("category_name") or "",
+                    "category_color": safe_hex_color(charge.get("category_color")),
+                }
                 for charge in expected
                 if prev_close < charge["date"] <= close
                 and (card_cutover is None or charge["date"] > card_cutover)
-            )
+            ]
+            expected_sum = sum(item["delta"] for item in expected_items)
             delta = round(actual + expected_sum, 2)
             if abs(delta) < 0.005:
                 continue
 
+            card_charges = sorted(
+                actual_items + expected_items, key=lambda item: item["date"]
+            )
             payments.append(
                 {
                     "date": due,
@@ -1453,9 +1629,321 @@ def forecast_card_payments(
                     "category_name": "",
                     "category_color": "",
                     "account_id": int(card["id"]),
+                    "card_charges": card_charges,
                 }
             )
     return payments
+
+
+def match_card_payments(user_id: int) -> List[Dict[str, Any]]:
+    """Pair a checking transfer debit with a card's own payment row (both flagged
+    is_transfer) by matching magnitude + near date. Rows are anchored by
+    account_id, so matches survive account renames. Returns the matched pairs."""
+    accounts = load_accounts_map(user_id)
+    checking_ids = {aid for aid, a in accounts.items() if a.get("account_type") == "checking"}
+    card_ids = {aid for aid, a in accounts.items() if a.get("account_type") == "credit_card"}
+
+    with get_connection() as conn:
+        rows = rows_to_dicts(
+            conn.execute(
+                "SELECT id, account_id, account, tx_date, amount FROM imported_transactions "
+                "WHERE user_id = ? AND is_transfer",
+                [user_id],
+            )
+        )
+    checking_txns: List[Dict[str, Any]] = []
+    card_txns: List[Dict[str, Any]] = []
+    for row in rows:
+        tx_date = row["tx_date"]
+        row["tx_date"] = tx_date.date() if isinstance(tx_date, datetime) else tx_date
+        if row["account_id"] in card_ids:
+            card_txns.append(row)
+        elif row["account_id"] in checking_ids:
+            checking_txns.append(row)
+
+    pairs: List[Dict[str, Any]] = []
+    used: set = set()
+    # Match earliest card payments first for stable, deterministic pairing.
+    for card_tx in sorted(card_txns, key=lambda r: (r["tx_date"], r["id"])):
+        best = None
+        best_diff = None
+        for check_tx in checking_txns:
+            if check_tx["id"] in used:
+                continue
+            if abs(abs(check_tx["amount"]) - abs(card_tx["amount"])) > 0.005:
+                continue
+            diff = abs((check_tx["tx_date"] - card_tx["tx_date"]).days)
+            if diff > PAYMENT_MATCH_WINDOW_DAYS:
+                continue
+            if best_diff is None or diff < best_diff:
+                best, best_diff = check_tx, diff
+        if best is not None:
+            used.add(best["id"])
+            pairs.append(
+                {
+                    "card_row_id": int(card_tx["id"]),
+                    "card_account_id": int(card_tx["account_id"]),
+                    "checking_row_id": int(best["id"]),
+                    "amount": round(abs(card_tx["amount"]), 2),
+                    "card_date": card_tx["tx_date"],
+                    "checking_date": best["tx_date"],
+                }
+            )
+    return pairs
+
+
+def card_balance_summary(user_id: int, card: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Amount due on a card's most recently closed statement: the statement's net
+    charges (account_id-anchored) minus payments recorded since it closed."""
+    if card.get("statement_day") is None or card.get("due_day") is None:
+        return None
+    today = date.today()
+    last_cycle = None
+    for prev_close, close, due in _iter_card_cycles(card, add_months(today, -3), today):
+        if close <= today and (last_cycle is None or close > last_cycle[1]):
+            last_cycle = (prev_close, close, due)
+    if last_cycle is None:
+        return None
+    prev_close, close, due = last_cycle
+
+    # Purchases are negative, so owed = -(net charges); refunds reduce it.
+    statement_owed = round(-_sum_actual_card_charges(user_id, card, prev_close, close), 2)
+    payments_applied = _card_payments_between(user_id, card, close, today)
+    amount_due = round(statement_owed - payments_applied, 2)
+    return {
+        "statement_close": close,
+        "due_date": due,
+        "statement_owed": statement_owed,
+        "payments_applied": payments_applied,
+        "amount_due": max(amount_due, 0.0),
+        "paid": statement_owed > 0.005 and amount_due <= 0.005,
+    }
+
+
+BUDGET_WINDOW_SETTINGS_KEY = "budget_window"
+
+
+def _month_bounds(anchor: date) -> tuple[date, date]:
+    start = date(anchor.year, anchor.month, 1)
+    end = add_months(start, 1) - timedelta(days=1)
+    return start, end
+
+
+def resolve_budget_window(user_id: int, start: str = "", end: str = "") -> tuple[date, date, bool]:
+    """Budget's own saved window (default = current month). Kept under a separate
+    settings key so it never clobbers the shared Dashboard/Ledger window."""
+    today = date.today()
+    saved_start = saved_end = None
+    stored = get_setting_value(user_id, BUDGET_WINDOW_SETTINGS_KEY)
+    if stored:
+        try:
+            parsed = json.loads(stored)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            saved_start = parse_optional_iso_date(parsed.get("start"))
+            saved_end = parse_optional_iso_date(parsed.get("end"))
+
+    month_start, month_end = _month_bounds(today)
+    default_start = saved_start or month_start
+    default_end = saved_end or month_end
+
+    invalid = False
+    try:
+        window_start = parse_iso_date(start) if start else default_start
+        window_end = parse_iso_date(end) if end else default_end
+    except ValueError:
+        window_start, window_end, invalid = default_start, default_end, True
+
+    if window_end < window_start:
+        window_start, window_end = window_end, window_start
+
+    set_setting_value(
+        user_id,
+        BUDGET_WINDOW_SETTINGS_KEY,
+        json.dumps({"start": window_start.isoformat(), "end": window_end.isoformat()}),
+    )
+    return window_start, window_end, invalid
+
+
+def _budget_actuals_by_category(
+    user_id: int, window_start: date, window_end: date
+) -> Dict[str, Dict[str, Any]]:
+    """Actual imported spend/income in the window grouped by *effective* category
+    (COALESCE reconciled item's category, import category). Transfers excluded so
+    card payments never count as spending. Returns keyed by lower(name) ('' = none)."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT COALESCE(ec.name, ic.name) AS cat_name,
+                   COALESCE(ec.color, ic.color) AS cat_color,
+                   COALESCE(SUM(i.amount), 0) AS total
+            FROM imported_transactions i
+            LEFT JOIN expected_reconciliations r
+                   ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
+            LEFT JOIN recurring_items ri
+                   ON r.source_type = 'recurring' AND ri.id = r.source_id AND ri.user_id = i.user_id
+            LEFT JOIN manual_transactions mt
+                   ON r.source_type = 'one_time' AND mt.id = r.source_id AND mt.user_id = i.user_id
+            LEFT JOIN categories ec
+                   ON ec.id = COALESCE(ri.category_id, mt.category_id) AND ec.user_id = i.user_id
+            LEFT JOIN categories ic
+                   ON ic.id = i.category_id AND ic.user_id = i.user_id
+            WHERE i.user_id = ? AND NOT i.is_transfer
+              AND i.tx_date >= ? AND i.tx_date <= ?
+            GROUP BY 1, 2
+            """,
+            [user_id, window_start, window_end],
+        ).fetchall()
+
+    result: Dict[str, Dict[str, Any]] = {}
+    for cat_name, cat_color, total in rows:
+        key = (cat_name or "").strip().lower()
+        bucket = result.setdefault(
+            key, {"name": cat_name or "Uncategorized", "color": safe_hex_color(cat_color), "expense": 0.0, "income": 0.0}
+        )
+        total = float(total)
+        if total < 0:
+            bucket["expense"] += -total
+        else:
+            bucket["income"] += total
+    return result
+
+
+def _budget_actuals_by_item(
+    user_id: int, window_start: date, window_end: date
+) -> Dict[tuple, float]:
+    """Actual imported expense in the window attributed to a specific budgeted
+    line item via its reconciliation. Keyed by (source_type, source_id) ->
+    expense as a positive number. Only reconciled, non-transfer imports count;
+    unreconciled category spend belongs to the category, not to any one item."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT r.source_type, r.source_id, COALESCE(SUM(i.amount), 0) AS total
+            FROM imported_transactions i
+            JOIN expected_reconciliations r
+                   ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
+            WHERE i.user_id = ? AND NOT i.is_transfer
+              AND i.tx_date >= ? AND i.tx_date <= ?
+            GROUP BY 1, 2
+            """,
+            [user_id, window_start, window_end],
+        ).fetchall()
+    result: Dict[tuple, float] = {}
+    for source_type, source_id, total in rows:
+        total = float(total)
+        if total < 0:
+            result[(source_type, int(source_id))] = round(-total, 2)
+    return result
+
+
+def build_budget_summary(user_id: int, window_start: date, window_end: date) -> Dict[str, Any]:
+    """Budget vs actual vs difference by category for the window. Budgeted =
+    recurring occurrences + one-time items in the window; actual = imported spend
+    grouped by effective category. Expense-focused, with income shown separately."""
+    # --- Budgeted, grouped by category ---
+    budget_cats: Dict[str, Dict[str, Any]] = {}
+    income_budgeted = 0.0
+
+    def _cat_bucket(name: Optional[str], color: Optional[str]) -> Dict[str, Any]:
+        key = (name or "").strip().lower()
+        return budget_cats.setdefault(
+            key,
+            {
+                "name": name or "Uncategorized",
+                "color": safe_hex_color(color),
+                "budgeted": 0.0,
+                "line_items": [],
+            },
+        )
+
+    active_items = load_active_recurring(user_id)
+    item_ids = [int(item["id"]) for item in active_items]
+    overrides_by_id = load_amount_overrides_for_items(item_ids)
+    for item in active_items:
+        occurrences = generate_recurring_transactions(
+            item, window_start, window_end, overrides=overrides_by_id.get(int(item["id"]), [])
+        )
+        total = sum(abs(float(row["delta"])) for row in occurrences)
+        if total <= 0:
+            continue
+        if item["kind"] == "income":
+            income_budgeted += total
+            continue
+        bucket = _cat_bucket(item.get("category_name"), item.get("category_color"))
+        bucket["budgeted"] += total
+        bucket["line_items"].append(
+            {"id": int(item["id"]), "name": item["name"], "budgeted": round(total, 2), "source": "recurring"}
+        )
+
+    for row in load_manual_transactions(user_id, window_start, window_end):
+        amount = abs(float(row["delta"]))
+        if amount <= 0:
+            continue
+        if row["kind"] == "income":
+            income_budgeted += amount
+            continue
+        bucket = _cat_bucket(row.get("category_name"), row.get("category_color"))
+        bucket["budgeted"] += amount
+        bucket["line_items"].append(
+            {"id": int(row["id"]), "name": row["description"], "budgeted": round(amount, 2), "source": "one_time"}
+        )
+
+    # --- Actuals, grouped by effective category and by reconciled line item ---
+    actuals = _budget_actuals_by_category(user_id, window_start, window_end)
+    item_actuals = _budget_actuals_by_item(user_id, window_start, window_end)
+    actual_income = sum(bucket["income"] for bucket in actuals.values())
+
+    # --- Merge expense categories from both sides ---
+    keys = set(budget_cats) | {k for k, v in actuals.items() if v["expense"] > 0.005}
+    categories: List[Dict[str, Any]] = []
+    for key in keys:
+        budgeted = round(budget_cats.get(key, {}).get("budgeted", 0.0), 2)
+        actual = round(actuals.get(key, {}).get("expense", 0.0), 2)
+        name = budget_cats.get(key, {}).get("name") or actuals.get(key, {}).get("name") or "Uncategorized"
+        color = budget_cats.get(key, {}).get("color") or actuals.get(key, {}).get("color")
+        line_items = []
+        for li in sorted(
+            budget_cats.get(key, {}).get("line_items", []), key=lambda i: -i["budgeted"]
+        ):
+            li_actual = item_actuals.get((li["source"], li["id"]), 0.0)
+            line_items.append(
+                {
+                    **li,
+                    "actual": li_actual,
+                    "difference": round(li["budgeted"] - li_actual, 2),
+                }
+            )
+        categories.append(
+            {
+                "name": name,
+                "color": safe_hex_color(color),
+                "budgeted": budgeted,
+                "actual": actual,
+                "difference": round(budgeted - actual, 2),
+                "line_items": line_items,
+            }
+        )
+    categories.sort(key=lambda c: (-max(c["budgeted"], c["actual"]), c["name"].lower()))
+
+    total_budgeted = round(sum(c["budgeted"] for c in categories), 2)
+    total_actual = round(sum(c["actual"] for c in categories), 2)
+    return {
+        "window_start": window_start,
+        "window_end": window_end,
+        "categories": categories,
+        "totals": {
+            "budgeted": total_budgeted,
+            "actual": total_actual,
+            "difference": round(total_budgeted - total_actual, 2),
+        },
+        "income": {
+            "budgeted": round(income_budgeted, 2),
+            "actual": round(actual_income, 2),
+            "difference": round(income_budgeted - actual_income, 2),
+        },
+    }
 
 
 def collect_blended_transactions(user_id: int, window_start: date, window_end: date) -> List[Dict[str, Any]]:
@@ -1738,6 +2226,65 @@ def _parse_import_amount(value: str) -> float:
         raise CsvImportError(f"unrecognized amount '{value}'") from exc
 
 
+def _parse_import_date_with(value: str, date_format: Optional[str]) -> date:
+    """Parse a date using a template's explicit strptime format when given,
+    falling back to the built-in multi-format parser."""
+    if date_format:
+        cleaned = str(value or "").strip()
+        if not cleaned:
+            raise CsvImportError("row is missing a date")
+        try:
+            return datetime.strptime(cleaned, date_format).date()
+        except ValueError:
+            pass  # fall through to the tolerant parser
+    return _parse_import_date(value)
+
+
+def _parse_template_row(row: Dict[str, str], template: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize a CSV row using a user-defined template. Output mirrors the
+    built-in parsers' keys and additionally carries the target account_id."""
+    description = _import_squash(row.get(template["description_field"], ""))
+    merchant_field = template.get("merchant_field")
+    merchant = _import_squash(row.get(merchant_field, "")) if merchant_field else description
+
+    tx_date = _parse_import_date_with(row.get(template["date_field"], ""), template.get("date_format"))
+
+    raw = _parse_import_amount(row.get(template["amount_field"], "0"))
+    if (template.get("amount_sign") or "standard") == "inverted":
+        raw = -raw
+    magnitude = abs(raw)
+
+    type_field = template.get("type_field")
+    raw_type = str(row.get(type_field, "")).strip() if type_field else ""
+    if type_field:
+        is_credit = raw_type == str(template.get("credit_value") or "").strip()
+    else:
+        is_credit = raw > 0  # sign-based: positive = money in
+
+    target_is_card = template.get("account_type") == "credit_card"
+    if is_credit:
+        is_payment = target_is_card and bool(_CARD_PAYMENT_RE.search(description))
+        if is_payment:
+            amount, flow, is_transfer = -magnitude, "transfer", True
+        else:
+            amount, flow, is_transfer = magnitude, ("refund" if target_is_card else "income"), False
+    else:
+        pays_card = (not target_is_card) and bool(_CHECKING_PAYS_CARD_RE.search(description.upper()))
+        amount, flow, is_transfer = -magnitude, ("transfer" if pays_card else "expense"), pays_card
+
+    return {
+        "account": template["account_name"],
+        "account_id": template["account_id"],
+        "tx_date": tx_date,
+        "description": description,
+        "merchant": merchant,
+        "amount": amount,
+        "flow": flow,
+        "is_transfer": is_transfer,
+        "raw_type": raw_type,
+    }
+
+
 def _parse_checking_row(row: Dict[str, str]) -> Dict[str, Any]:
     description = _import_squash(row.get("Description", ""))
     raw_type = str(row.get("Credit or Debit", "")).strip()
@@ -1847,11 +2394,23 @@ def detect_csv_format(header: List[str], first_row: Optional[Dict[str, str]]) ->
     return None
 
 
-def parse_import_csv(filename: str, text: str) -> tuple[str, List[Dict[str, Any]]]:
+def _template_signature_matches(header_fields: set, template: Dict[str, Any]) -> bool:
+    signature = template.get("signature") or []
+    return bool(signature) and all(col in header_fields for col in signature)
+
+
+def parse_import_csv(
+    filename: str,
+    text: str,
+    templates: Optional[List[Dict[str, Any]]] = None,
+    forced_template: Optional[Dict[str, Any]] = None,
+) -> tuple[str, Optional[int], List[Dict[str, Any]]]:
     """Parse a bank/card CSV export into normalized rows.
 
-    Returns (account_label, rows). Raises CsvImportError on an unrecognized
-    format or an unparseable row.
+    Tries the 3 built-in parsers first, then any user templates by signature;
+    `forced_template` skips detection (manual picker). Returns
+    (account_label, account_id, rows). account_id is None for built-in formats
+    (resolved by name at upsert). Raises CsvImportError on an unrecognized format.
     """
     if text.startswith("﻿"):  # strip UTF-8 BOM so header cells match
         text = text[1:]
@@ -1859,24 +2418,40 @@ def parse_import_csv(filename: str, text: str) -> tuple[str, List[Dict[str, Any]
     if reader.fieldnames is None:
         raise CsvImportError("The file is empty or not a valid CSV.")
     raw_rows = list(reader)
-    fmt = detect_csv_format(list(reader.fieldnames), raw_rows[0] if raw_rows else None)
-    if fmt is None:
+    header = list(reader.fieldnames)
+
+    template = forced_template
+    fmt: Optional[str] = None
+    if template is None:
+        fmt = detect_csv_format(header, raw_rows[0] if raw_rows else None)
+        if fmt is None and templates:
+            fields = {str(name).strip() for name in header if name}
+            for candidate in templates:
+                if _template_signature_matches(fields, candidate):
+                    template = candidate
+                    break
+    if fmt is None and template is None:
         raise CsvImportError(
-            "Unrecognized CSV format. Expected a Checking, Visa, or Apple Card export."
+            "Unrecognized CSV format. Expected a Checking, Visa, or Apple Card "
+            "export, or a matching custom template."
         )
-    parser = _ROW_PARSERS[fmt]
 
     parsed: List[Dict[str, Any]] = []
     for index, raw in enumerate(raw_rows):
         if not any(str(value).strip() for value in raw.values()):
             continue  # skip fully blank lines
         try:
-            parsed.append(parser(raw))
+            if template is not None:
+                parsed.append(_parse_template_row(raw, template))
+            else:
+                parsed.append(_ROW_PARSERS[fmt](raw))
         except CsvImportError as exc:
             raise CsvImportError(f"row {index + 2}: {exc}") from exc
 
+    if template is not None:
+        return template["account_name"], int(template["account_id"]), parsed
     account_label = parsed[0]["account"] if parsed else fmt.title()
-    return account_label, parsed
+    return account_label, None, parsed
 
 
 def compute_import_fingerprint(row: Dict[str, Any], occurrence_index: int) -> str:
@@ -1919,6 +2494,12 @@ def upsert_imported_transactions(
     _assign_import_fingerprints(rows)
     fingerprints = [row["fingerprint"] for row in rows]
 
+    # Anchor each row to an account by id at insert time. Prefer an account_id the
+    # parser already resolved (custom templates); otherwise match on account name.
+    name_to_id = {
+        str(a["name"]).lower(): int(a["id"]) for a in load_accounts(user_id)
+    }
+
     inserted = 0
     transfers = 0
     with get_connection() as conn:
@@ -1936,17 +2517,21 @@ def upsert_imported_transactions(
             if fingerprint in already_present or fingerprint in seen_in_batch:
                 continue
             seen_in_batch.add(fingerprint)
+            account_id = row.get("account_id")
+            if account_id is None:
+                account_id = name_to_id.get(str(row["account"]).lower())
             conn.execute(
                 """
                 INSERT INTO imported_transactions (
-                    user_id, account, tx_date, description, merchant, amount,
+                    user_id, account, account_id, tx_date, description, merchant, amount,
                     flow, is_transfer, raw_type, category_id, source_file, fingerprint
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
                 """,
                 [
                     user_id,
                     row["account"],
+                    account_id,
                     row["tx_date"],
                     row["description"],
                     row["merchant"],
@@ -2001,6 +2586,170 @@ def load_imported_accounts(user_id: int) -> List[str]:
             [user_id],
         ).fetchall()
     return [row[0] for row in rows]
+
+
+def load_unmapped_import_labels(user_id: int) -> List[Dict[str, Any]]:
+    """Distinct imported-account labels whose rows are not yet anchored to an
+    account (account_id IS NULL) — i.e. the labels of already-renamed accounts
+    that the exact-name backfill could not match. Each entry: {label, count}."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT account, COUNT(*) AS n
+            FROM imported_transactions
+            WHERE user_id = ? AND account_id IS NULL
+            GROUP BY account
+            ORDER BY account
+            """,
+            [user_id],
+        ).fetchall()
+    return [{"label": row[0], "count": int(row[1])} for row in rows]
+
+
+def map_import_label_to_account(user_id: int, label: str, account_id: int) -> int:
+    """Relink every unanchored imported row carrying `label` to `account_id`, and
+    align its display label to that account's current name. Returns rows updated."""
+    with get_connection() as conn:
+        account = conn.execute(
+            "SELECT name FROM accounts WHERE user_id = ? AND id = ?",
+            [user_id, account_id],
+        ).fetchone()
+        if not account:
+            raise ValueError("Account not found")
+        matched = conn.execute(
+            "SELECT COUNT(*) FROM imported_transactions "
+            "WHERE user_id = ? AND account_id IS NULL AND account = ?",
+            [user_id, label],
+        ).fetchone()[0]
+        conn.execute(
+            """
+            UPDATE imported_transactions
+            SET account_id = ?, account = ?
+            WHERE user_id = ? AND account_id IS NULL AND account = ?
+            """,
+            [account_id, account[0], user_id, label],
+        )
+        return int(matched)
+
+
+IMPORT_TEMPLATE_SIGN_MODES = {"standard", "inverted"}
+
+
+def _row_to_import_template(row: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        signature = json.loads(row.get("signature") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        signature = []
+    if not isinstance(signature, list):
+        signature = []
+    row["signature"] = [str(col) for col in signature]
+    return row
+
+
+def load_import_templates(user_id: int) -> List[Dict[str, Any]]:
+    """User-defined CSV templates joined to their target account (name + type)."""
+    with get_connection() as conn:
+        rows = rows_to_dicts(
+            conn.execute(
+                """
+                SELECT t.id, t.name, t.account_id, t.date_field, t.date_format,
+                       t.amount_field, t.amount_sign, t.type_field, t.credit_value,
+                       t.description_field, t.merchant_field, t.signature,
+                       a.name AS account_name, a.account_type
+                FROM import_templates t
+                JOIN accounts a ON a.id = t.account_id AND a.user_id = t.user_id
+                WHERE t.user_id = ?
+                ORDER BY LOWER(t.name), t.id
+                """,
+                [user_id],
+            )
+        )
+    return [_row_to_import_template(row) for row in rows]
+
+
+def load_import_template(user_id: int, template_id: int) -> Optional[Dict[str, Any]]:
+    for template in load_import_templates(user_id):
+        if int(template["id"]) == int(template_id):
+            return template
+    return None
+
+
+def _clean_signature(columns: List[str]) -> str:
+    cleaned = [str(col).strip() for col in columns if str(col).strip()]
+    return json.dumps(cleaned)
+
+
+def save_import_template(
+    user_id: int,
+    name: str,
+    account_id: int,
+    date_field: str,
+    amount_field: str,
+    description_field: str,
+    signature: List[str],
+    amount_sign: str = "standard",
+    date_format: Optional[str] = None,
+    type_field: Optional[str] = None,
+    credit_value: Optional[str] = None,
+    merchant_field: Optional[str] = None,
+    template_id: Optional[int] = None,
+) -> None:
+    """Create or update a custom import template. Raises ValueError on bad input."""
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("Template name is required")
+    for label, value in (("date column", date_field), ("amount column", amount_field), ("description column", description_field)):
+        if not (value or "").strip():
+            raise ValueError(f"The {label} is required")
+    if amount_sign not in IMPORT_TEMPLATE_SIGN_MODES:
+        raise ValueError("Amount sign must be standard or inverted")
+    sig = [str(c).strip() for c in signature if str(c).strip()]
+    if not sig:
+        raise ValueError("List at least one header column that identifies this format")
+
+    def _opt(value: Optional[str]) -> Optional[str]:
+        value = (value or "").strip()
+        return value or None
+
+    fields = [
+        name, int(account_id), date_field.strip(), _opt(date_format), amount_field.strip(),
+        amount_sign, _opt(type_field), _opt(credit_value), description_field.strip(),
+        _opt(merchant_field), json.dumps(sig),
+    ]
+    with get_connection() as conn:
+        if not conn.execute(
+            "SELECT 1 FROM accounts WHERE id = ? AND user_id = ?", [int(account_id), user_id]
+        ).fetchone():
+            raise ValueError("Target account not found")
+        if template_id:
+            conn.execute(
+                """
+                UPDATE import_templates
+                SET name = ?, account_id = ?, date_field = ?, date_format = ?, amount_field = ?,
+                    amount_sign = ?, type_field = ?, credit_value = ?, description_field = ?,
+                    merchant_field = ?, signature = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                [*fields, int(template_id), user_id],
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO import_templates (
+                    name, account_id, date_field, date_format, amount_field, amount_sign,
+                    type_field, credit_value, description_field, merchant_field, signature, user_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [*fields, user_id],
+            )
+
+
+def delete_import_template(user_id: int, template_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "DELETE FROM import_templates WHERE id = ? AND user_id = ?", [int(template_id), user_id]
+        )
 
 
 def summarize_imported(user_id: int) -> Dict[str, Any]:

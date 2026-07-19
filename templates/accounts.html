@@ -60,6 +60,7 @@
           <th>Account</th>
           <th>Type</th>
           <th>Cycle</th>
+          <th>Amount Due</th>
           <th>Next Payment</th>
           <th>Assigned</th>
           <th>Actions</th>
@@ -75,7 +76,7 @@
             </span>
           </td>
           {% if account.account_type == 'checking' %}
-          <td colspan="2">
+          <td colspan="3">
             <form method="post" action="/accounts/opening-balance" class="inline-balance-form">
               <label class="inline-balance-label">
                 Opening balance{% if first_actual %} (as of {{ first_actual }}){% endif %}
@@ -94,6 +95,17 @@
             {% else %}
             <span class="card-note">set statement &amp; due days</span>
             {% endif %}
+          </td>
+          <td>
+            {% if account.balance %}
+              {% if account.balance.paid %}
+              <span class="table-pill success">Paid</span>
+              <span class="card-note">stmt {{ account.balance.statement_close }}</span>
+              {% else %}
+              <span class="amount-value negative">${{ account.balance.amount_due|currency }}</span>
+              <span class="card-note">stmt {{ account.balance.statement_close }} · due {{ account.balance.due_date }}</span>
+              {% endif %}
+            {% else %}—{% endif %}
           </td>
           <td>
             {% if account.projected %}

@@ -2,9 +2,9 @@
 {% block content %}
 <section class="page-intro">
   <div>
-    <p class="page-kicker">Expected Transactions</p>
-    <h2>Plan what you expect — then reconcile it against reality.</h2>
-    <p>Recurring bills, income, and one-time payments you expect. Mark them paid as they show up in your imported CSV data.</p>
+    <p class="page-kicker">Budget</p>
+    <h2>Budget what you plan — then measure it against reality.</h2>
+    <p>Recurring bills, income, and one-time payments you expect. Track budget vs. actual per category, and reconcile items as they show up in your imported CSV data.</p>
   </div>
   <div class="intro-badge-stack">
     <span class="stat-chip">Today {{ today_iso }}</span>
@@ -13,6 +13,102 @@
     <span class="stat-chip">{{ one_time_items|length }} one-time</span>
   </div>
 </section>
+
+{% if budget_summary %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>Budget vs. Actual</h2>
+    <p>Budgeted (planned recurring + one-time) against actual imported spend for {{ budget_summary.window_start }} → {{ budget_summary.window_end }}. Use the date range in the header (try <strong>This Month</strong>) to change the period.</p>
+  </div>
+
+  <div class="summary-grid compact-grid">
+    <article class="card compact-card">
+      <h3>Budgeted</h3>
+      <p class="amount-value">${{ budget_summary.totals.budgeted|currency }}</p>
+      <p class="card-note">planned expenses</p>
+    </article>
+    <article class="card compact-card">
+      <h3>Actual</h3>
+      <p class="amount-value negative">${{ budget_summary.totals.actual|currency }}</p>
+      <p class="card-note">imported spend</p>
+    </article>
+    <article class="card compact-card">
+      <h3>Difference</h3>
+      <p class="amount-value {{ 'negative' if budget_summary.totals.difference < 0 else 'positive' }}">
+        {{ '-' if budget_summary.totals.difference < 0 else '' }}${{ (budget_summary.totals.difference if budget_summary.totals.difference >= 0 else -budget_summary.totals.difference)|currency }}
+      </p>
+      <p class="card-note">{{ 'over budget' if budget_summary.totals.difference < 0 else 'under budget' }}</p>
+    </article>
+    <article class="card compact-card">
+      <h3>Income</h3>
+      <p class="amount-value positive">${{ budget_summary.income.actual|currency }}</p>
+      <p class="card-note">actual of ${{ budget_summary.income.budgeted|currency }} budgeted</p>
+    </article>
+  </div>
+
+  {% if budget_summary.categories %}
+  <div class="budget-detail-controls">
+    <button type="button" class="button-link js-budget-detail-toggle" aria-expanded="false" aria-controls="budget-vs-actual">
+      Show individual budgets
+    </button>
+  </div>
+  <div class="table-wrap budget-vs-actual-table" id="budget-vs-actual">
+    <table>
+      <thead>
+        <tr>
+          <th>Category</th>
+          <th>Budgeted</th>
+          <th>Actual</th>
+          <th>Difference</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for cat in budget_summary.categories %}
+        <tr class="ledger-row">
+          <td>
+            <span class="category-pill">
+              <span class="category-dot" style="background: {{ cat.color if cat.color else 'var(--muted)' }};"></span>
+              {{ cat.name }}
+            </span>
+          </td>
+          <td class="amount-value">${{ cat.budgeted|currency }}</td>
+          <td class="amount-value negative">${{ cat.actual|currency }}</td>
+          <td class="amount-value {{ 'negative' if cat.difference < 0 else 'positive' }}">
+            {{ '-' if cat.difference < 0 else '' }}${{ (cat.difference if cat.difference >= 0 else -cat.difference)|currency }}
+          </td>
+        </tr>
+        {% for item in cat.line_items %}
+        <tr class="budget-item-row">
+          <td class="budget-item-name">↳ {{ item.name }}</td>
+          <td class="amount-value">${{ item.budgeted|currency }}</td>
+          {% if item.actual > 0 %}
+          <td class="amount-value negative">${{ item.actual|currency }}</td>
+          <td class="amount-value {{ 'negative' if item.difference < 0 else 'positive' }}">
+            {{ '-' if item.difference < 0 else '' }}${{ (item.difference if item.difference >= 0 else -item.difference)|currency }}
+          </td>
+          {% else %}
+          <td class="amount-value card-note">—</td>
+          <td class="amount-value card-note">—</td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+        {% endfor %}
+        <tr class="ledger-row month-summary-row">
+          <td><strong>Total</strong></td>
+          <td class="amount-value"><strong>${{ budget_summary.totals.budgeted|currency }}</strong></td>
+          <td class="amount-value negative"><strong>${{ budget_summary.totals.actual|currency }}</strong></td>
+          <td class="amount-value {{ 'negative' if budget_summary.totals.difference < 0 else 'positive' }}">
+            <strong>{{ '-' if budget_summary.totals.difference < 0 else '' }}${{ (budget_summary.totals.difference if budget_summary.totals.difference >= 0 else -budget_summary.totals.difference)|currency }}</strong>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-state">No budgeted or actual expenses in this period yet.</p>
+  {% endif %}
+</section>
+{% endif %}
 
 {% if suggestions or dismissed_count %}
 <section class="panel">
@@ -380,6 +476,17 @@
 
 <script>
   (() => {
+    // Budget vs. Actual: reveal per-item budgets under each category.
+    const detailToggle = document.querySelector('.js-budget-detail-toggle');
+    const detailTable = document.getElementById('budget-vs-actual');
+    if (detailToggle && detailTable) {
+      detailToggle.addEventListener('click', () => {
+        const showing = detailTable.classList.toggle('show-items');
+        detailToggle.setAttribute('aria-expanded', String(showing));
+        detailToggle.textContent = showing ? 'Hide individual budgets' : 'Show individual budgets';
+      });
+    }
+
     // Add-form type toggle (recurring vs one-time).
     const toggleButtons = Array.from(document.querySelectorAll('.type-toggle-btn'));
     const forms = Array.from(document.querySelectorAll('[data-mode-form]'));

@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from services import (
     EXPECTED_SOURCE_TYPES,
     VALID_KINDS,
+    build_budget_summary,
     confirm_reconciliation,
     count_dismissed_suggestions,
     create_match_rule,
@@ -19,6 +20,7 @@ from services import (
     get_current_user,
     load_accounts,
     load_categories,
+    resolve_budget_window,
     load_expected_item,
     load_expected_items,
     load_match_rules_for_item,
@@ -45,10 +47,23 @@ def _reconcile_path(source_type: str, source_id: int) -> str:
     return f"/expected/{source_type}/{source_id}/reconcile"
 
 
-@router.get("/expected", response_class=HTMLResponse)
-def expected_page(request: Request, msg: str = "", err: int = 0):
+@router.get("/expected")
+def expected_page(request: Request):
+    # Expected has been consolidated into Budget.
+    return RedirectResponse(url="/budget", status_code=303)
+
+
+@router.get("/budget", response_class=HTMLResponse)
+def budget_page(request: Request, start: str = "", end: str = "", msg: str = "", err: int = 0):
     user = get_current_user(request)
     ensure_seed_accounts(user["id"])
+
+    window_start, window_end, invalid_filter = resolve_budget_window(user["id"], start, end)
+    if invalid_filter:
+        msg = "Invalid date filter. Using saved/default range."
+        err = 1
+    budget_summary = build_budget_summary(user["id"], window_start, window_end)
+
     items = load_expected_items(user["id"])
     counts = load_reconciliation_counts(user["id"])
     for item in items:
@@ -60,11 +75,12 @@ def expected_page(request: Request, msg: str = "", err: int = 0):
     dismissed_count = count_dismissed_suggestions(user["id"])
 
     return templates.TemplateResponse(
-        "expected.html",
+        "budget.html",
         template_context(
             request,
             msg,
             err,
+            budget_summary=budget_summary,
             recurring_items=recurring_items,
             one_time_items=one_time_items,
             suggestions=suggestions,
@@ -72,6 +88,10 @@ def expected_page(request: Request, msg: str = "", err: int = 0):
             categories=load_categories(user["id"]),
             accounts=load_accounts(user["id"]),
             today_iso=date.today().isoformat(),
+            start=window_start.isoformat(),
+            end=window_end.isoformat(),
+            show_forecast_window_form=True,
+            window_form_action="/budget",
         ),
     )
 
@@ -80,14 +100,14 @@ def expected_page(request: Request, msg: str = "", err: int = 0):
 def dismiss_suggestion_route(request: Request, suggestion_key: str = Form(...)):
     user = get_current_user(request)
     dismiss_suggestion(user["id"], suggestion_key, reason="dismissed")
-    return redirect_with_message("/expected", "Suggestion dismissed")
+    return redirect_with_message("/budget", "Suggestion dismissed")
 
 
 @router.post("/expected/suggestions/reset")
 def reset_suggestions_route(request: Request):
     user = get_current_user(request)
     reset_dismissed_suggestions(user["id"])
-    return redirect_with_message("/expected", "Dismissed suggestions restored")
+    return redirect_with_message("/budget", "Dismissed suggestions restored")
 
 
 @router.post("/expected/one-time")
@@ -121,9 +141,9 @@ def create_one_time_expected(
                 [cleaned_name, kind, parsed_amount, parsed_date, parsed_category_id, parsed_account_id, user["id"]],
             )
     except ValueError as exc:
-        return redirect_with_message("/expected", str(exc), is_error=True)
+        return redirect_with_message("/budget", str(exc), is_error=True)
 
-    return redirect_with_message("/expected", "One-time expected transaction added")
+    return redirect_with_message("/budget", "One-time expected transaction added")
 
 
 @router.get("/expected/{source_type}/{source_id}/reconcile", response_class=HTMLResponse)
@@ -137,11 +157,11 @@ def reconcile_page(
 ):
     user = get_current_user(request)
     if source_type not in EXPECTED_SOURCE_TYPES:
-        return redirect_with_message("/expected", "Unknown expected item type", is_error=True)
+        return redirect_with_message("/budget", "Unknown expected item type", is_error=True)
 
     item = load_expected_item(user["id"], source_type, source_id)
     if not item:
-        return redirect_with_message("/expected", "Expected item not found", is_error=True)
+        return redirect_with_message("/budget", "Expected item not found", is_error=True)
 
     rules = load_match_rules_for_item(user["id"], source_type, source_id)
     linked = load_reconciliations_for_item(user["id"], source_type, source_id)
@@ -184,7 +204,7 @@ def confirm_match(
     user = get_current_user(request)
     target = _reconcile_path(source_type, source_id)
     if source_type not in EXPECTED_SOURCE_TYPES or not load_expected_item(user["id"], source_type, source_id):
-        return redirect_with_message("/expected", "Expected item not found", is_error=True)
+        return redirect_with_message("/budget", "Expected item not found", is_error=True)
 
     created = confirm_reconciliation(user["id"], source_type, source_id, imported_transaction_id)
     if not created:
@@ -241,7 +261,7 @@ def save_rule(
     user = get_current_user(request)
     target = _reconcile_path(source_type, source_id)
     if source_type not in EXPECTED_SOURCE_TYPES or not load_expected_item(user["id"], source_type, source_id):
-        return redirect_with_message("/expected", "Expected item not found", is_error=True)
+        return redirect_with_message("/budget", "Expected item not found", is_error=True)
 
     try:
         lo, hi = _parse_rule_amount_bounds(amount_mode, amount_exact, amount_min, amount_max)
@@ -284,4 +304,4 @@ def delete_one_time_expected(request: Request, tx_id: int):
             "DELETE FROM expected_match_rules WHERE user_id = ? AND source_type = 'one_time' AND source_id = ?",
             [user["id"], tx_id],
         )
-    return redirect_with_message("/expected", "One-time expected transaction deleted")
+    return redirect_with_message("/budget", "One-time expected transaction deleted")
