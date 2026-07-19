@@ -50,7 +50,7 @@
           <nav class="site-nav" aria-label="Primary">
             <a href="/dashboard" class="{{ 'active' if active_path.startswith('/dashboard') else '' }}">Dashboard</a>
             <a href="/ledger" class="{{ 'active' if active_path.startswith('/ledger') else '' }}">Ledger Forecast</a>
-            <a href="/expected" class="{{ 'active' if active_path.startswith('/expected') or active_path.startswith('/recurring') else '' }}">Expected Transactions</a>
+            <a href="/budget" class="{{ 'active' if active_path.startswith('/budget') or active_path.startswith('/expected') or active_path.startswith('/recurring') else '' }}">Budget</a>
             <a href="/import" class="{{ 'active' if active_path.startswith('/import') else '' }}">Import</a>
             <a href="/accounts" class="{{ 'active' if active_path.startswith('/accounts') else '' }}">Accounts</a>
             <a href="/categories" class="{{ 'active' if active_path.startswith('/categories') else '' }}">Categories</a>
@@ -103,6 +103,7 @@
         </button>
 
         <p class="window-presets" id="window-presets">
+          <button type="button" class="window-preset-link" data-window-preset="thismonth">This Month</button>
           <button type="button" class="window-preset-link" data-window-preset="thisyear">This Year</button>
           <button type="button" class="window-preset-link" data-window-preset="ytd">YTD</button>
           <button type="button" class="window-preset-link" data-window-preset="rolling12">Rolling 12M</button>
@@ -228,7 +229,10 @@
           const today = normalizeDate(new Date());
           let presetStart = today;
           let presetEnd = today;
-          if (preset === 'thisyear') {
+          if (preset === 'thismonth') {
+            presetStart = new Date(today.getFullYear(), today.getMonth(), 1);
+            presetEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+          } else if (preset === 'thisyear') {
             presetStart = new Date(today.getFullYear(), 0, 1);
             presetEnd = new Date(today.getFullYear(), 11, 31);
           } else if (preset === 'ytd') {

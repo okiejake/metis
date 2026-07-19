@@ -1,7 +1,7 @@
 from datetime import date
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from services import (
     VALID_FREQUENCIES,
@@ -10,9 +10,7 @@ from services import (
     dismiss_suggestion,
     get_connection,
     get_current_user,
-    get_setting_float,
     load_accounts,
-    load_all_recurring,
     load_amount_overrides,
     load_categories,
     load_recurring_item_by_id,
@@ -26,8 +24,6 @@ from services import (
     parse_positive_int,
     redirect_with_message,
     save_amount_override,
-    set_setting_float,
-    summarize_frequency,
     template_context,
 )
 from web import templates
@@ -35,37 +31,11 @@ from web import templates
 router = APIRouter()
 
 
-@router.get("/recurring", response_class=HTMLResponse)
-def recurring_page(request: Request, msg: str = "", err: int = 0):
-    user = get_current_user(request)
-    recurring_items = load_all_recurring(user["id"])
-    for item in recurring_items:
-        item["frequency_summary"] = summarize_frequency(item)
-
-    return templates.TemplateResponse(
-        "recurring.html",
-        template_context(
-            request,
-            msg,
-            err,
-            items=recurring_items,
-            categories=load_categories(user["id"]),
-            starting_balance=get_setting_float(user["id"], "starting_balance", 0.0),
-            today_iso=date.today().isoformat(),
-        ),
-    )
-
-
-@router.post("/settings/starting-balance")
-def update_starting_balance(request: Request, value: str = Form(...)):
-    user = get_current_user(request)
-    try:
-        amount = float(value)
-    except ValueError:
-        return redirect_with_message("/recurring", "Starting balance must be a number", is_error=True)
-
-    set_setting_float(user["id"], "starting_balance", amount)
-    return redirect_with_message("/recurring", "Starting balance updated")
+@router.get("/recurring")
+def recurring_page(request: Request):
+    # The standalone recurring list has been consolidated into Budget. The
+    # recurring add/edit/toggle/delete POST endpoints below still live here.
+    return RedirectResponse(url="/budget", status_code=303)
 
 
 @router.post("/recurring")
@@ -87,7 +57,7 @@ def create_recurring_item(
     suggestion_key: str = Form(""),
 ):
     user = get_current_user(request)
-    redirect_target = "/expected" if suggestion_key.strip() else "/recurring"
+    redirect_target = "/budget"
     try:
         cleaned_name = name.strip()
         if not cleaned_name:
@@ -146,9 +116,9 @@ def create_recurring_item(
         # Remember the confirmed suggestion so it stops being suggested.
         dismiss_suggestion(user["id"], suggestion_key, reason="added")
         return redirect_with_message(
-            "/expected", f"Added recurring item “{cleaned_name}” from suggestion"
+            "/budget", f"Added recurring item “{cleaned_name}” from suggestion"
         )
-    return redirect_with_message("/recurring", "Recurring item added")
+    return redirect_with_message("/budget", "Recurring item added")
 
 
 @router.get("/recurring/{item_id}/edit", response_class=HTMLResponse)
@@ -156,7 +126,7 @@ def edit_recurring_item_page(request: Request, item_id: int, msg: str = "", err:
     user = get_current_user(request)
     item = load_recurring_item_by_id(user["id"], item_id)
     if not item:
-        return redirect_with_message("/recurring", "Recurring item not found", is_error=True)
+        return redirect_with_message("/budget", "Recurring item not found", is_error=True)
 
     overrides = load_amount_overrides(item_id)
     current_amount = float(item["amount"])
@@ -200,7 +170,7 @@ def edit_recurring_item(
     user = get_current_user(request)
     existing_item = load_recurring_item_by_id(user["id"], item_id)
     if not existing_item:
-        return redirect_with_message("/recurring", "Recurring item not found", is_error=True)
+        return redirect_with_message("/budget", "Recurring item not found", is_error=True)
 
     try:
         cleaned_name = name.strip()
@@ -290,7 +260,7 @@ def edit_recurring_item(
         target = f"/recurring/{item_id}/edit"
         return redirect_with_message(target, str(exc), is_error=True)
 
-    return redirect_with_message("/recurring", "Recurring item updated")
+    return redirect_with_message("/budget", "Recurring item updated")
 
 
 @router.post("/recurring/{item_id}/toggle")
@@ -305,7 +275,7 @@ def toggle_recurring_item(request: Request, item_id: int):
             """,
             [item_id, user["id"]],
         )
-    return redirect_with_message("/recurring", "Recurring item updated")
+    return redirect_with_message("/budget", "Recurring item updated")
 
 
 @router.post("/recurring/{item_id}/delete")
@@ -324,4 +294,4 @@ def delete_recurring_item(request: Request, item_id: int):
             "DELETE FROM expected_match_rules WHERE user_id = ? AND source_type = 'recurring' AND source_id = ?",
             [user["id"], item_id],
         )
-    return redirect_with_message("/recurring", "Recurring item deleted")
+    return redirect_with_message("/budget", "Recurring item deleted")

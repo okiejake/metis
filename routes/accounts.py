@@ -5,6 +5,7 @@ from fastapi.responses import HTMLResponse
 
 from services import (
     account_cycle_status,
+    card_balance_summary,
     ensure_seed_accounts,
     first_checking_actual_date,
     forecast_card_payments,
@@ -79,6 +80,7 @@ def accounts_page(request: Request, msg: str = "", err: int = 0):
         if account["account_type"] == "credit_card" and account.get("statement_day") and account.get("due_day"):
             account["cycle"] = account_cycle_status(account, today)
             account["projected"] = projected.get(int(account["id"]))
+            account["balance"] = card_balance_summary(user["id"], account)
 
     return templates.TemplateResponse(
         "accounts.html",
@@ -187,6 +189,12 @@ def edit_account(
             conn.execute(
                 "UPDATE accounts SET name = ?, account_type = ?, statement_day = ?, due_day = ? WHERE id = ? AND user_id = ?",
                 [cleaned_name, account_type, parsed_statement, parsed_due, account_id, user["id"]],
+            )
+            # Cascade the rename to imported rows anchored to this account so their
+            # display label follows the account (rows match by stable account_id).
+            conn.execute(
+                "UPDATE imported_transactions SET account = ? WHERE user_id = ? AND account_id = ?",
+                [cleaned_name, user["id"], account_id],
             )
     except ValueError as exc:
         return redirect_with_message(f"/accounts/{account_id}/edit", str(exc), is_error=True)
