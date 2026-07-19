@@ -1810,6 +1810,34 @@ def _budget_actuals_by_category(
     return result
 
 
+def _budget_actuals_by_item(
+    user_id: int, window_start: date, window_end: date
+) -> Dict[tuple, float]:
+    """Actual imported expense in the window attributed to a specific budgeted
+    line item via its reconciliation. Keyed by (source_type, source_id) ->
+    expense as a positive number. Only reconciled, non-transfer imports count;
+    unreconciled category spend belongs to the category, not to any one item."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT r.source_type, r.source_id, COALESCE(SUM(i.amount), 0) AS total
+            FROM imported_transactions i
+            JOIN expected_reconciliations r
+                   ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
+            WHERE i.user_id = ? AND NOT i.is_transfer
+              AND i.tx_date >= ? AND i.tx_date <= ?
+            GROUP BY 1, 2
+            """,
+            [user_id, window_start, window_end],
+        ).fetchall()
+    result: Dict[tuple, float] = {}
+    for source_type, source_id, total in rows:
+        total = float(total)
+        if total < 0:
+            result[(source_type, int(source_id))] = round(-total, 2)
+    return result
+
+
 def build_budget_summary(user_id: int, window_start: date, window_end: date) -> Dict[str, Any]:
     """Budget vs actual vs difference by category for the window. Budgeted =
     recurring occurrences + one-time items in the window; actual = imported spend
@@ -1845,7 +1873,9 @@ def build_budget_summary(user_id: int, window_start: date, window_end: date) -> 
             continue
         bucket = _cat_bucket(item.get("category_name"), item.get("category_color"))
         bucket["budgeted"] += total
-        bucket["line_items"].append({"name": item["name"], "budgeted": round(total, 2), "source": "recurring"})
+        bucket["line_items"].append(
+            {"id": int(item["id"]), "name": item["name"], "budgeted": round(total, 2), "source": "recurring"}
+        )
 
     for row in load_manual_transactions(user_id, window_start, window_end):
         amount = abs(float(row["delta"]))
@@ -1856,10 +1886,13 @@ def build_budget_summary(user_id: int, window_start: date, window_end: date) -> 
             continue
         bucket = _cat_bucket(row.get("category_name"), row.get("category_color"))
         bucket["budgeted"] += amount
-        bucket["line_items"].append({"name": row["description"], "budgeted": round(amount, 2), "source": "one_time"})
+        bucket["line_items"].append(
+            {"id": int(row["id"]), "name": row["description"], "budgeted": round(amount, 2), "source": "one_time"}
+        )
 
-    # --- Actuals, grouped by effective category ---
+    # --- Actuals, grouped by effective category and by reconciled line item ---
     actuals = _budget_actuals_by_category(user_id, window_start, window_end)
+    item_actuals = _budget_actuals_by_item(user_id, window_start, window_end)
     actual_income = sum(bucket["income"] for bucket in actuals.values())
 
     # --- Merge expense categories from both sides ---
@@ -1870,6 +1903,18 @@ def build_budget_summary(user_id: int, window_start: date, window_end: date) -> 
         actual = round(actuals.get(key, {}).get("expense", 0.0), 2)
         name = budget_cats.get(key, {}).get("name") or actuals.get(key, {}).get("name") or "Uncategorized"
         color = budget_cats.get(key, {}).get("color") or actuals.get(key, {}).get("color")
+        line_items = []
+        for li in sorted(
+            budget_cats.get(key, {}).get("line_items", []), key=lambda i: -i["budgeted"]
+        ):
+            li_actual = item_actuals.get((li["source"], li["id"]), 0.0)
+            line_items.append(
+                {
+                    **li,
+                    "actual": li_actual,
+                    "difference": round(li["budgeted"] - li_actual, 2),
+                }
+            )
         categories.append(
             {
                 "name": name,
@@ -1877,9 +1922,7 @@ def build_budget_summary(user_id: int, window_start: date, window_end: date) -> 
                 "budgeted": budgeted,
                 "actual": actual,
                 "difference": round(budgeted - actual, 2),
-                "line_items": sorted(
-                    budget_cats.get(key, {}).get("line_items", []), key=lambda i: -i["budgeted"]
-                ),
+                "line_items": line_items,
             }
         )
     categories.sort(key=lambda c: (-max(c["budgeted"], c["actual"]), c["name"].lower()))
