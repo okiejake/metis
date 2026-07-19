@@ -995,8 +995,27 @@ button.danger,
   background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 92%, transparent) 0%, color-mix(in srgb, var(--surface-muted) 92%, transparent) 100%);
 }
 
-.budget-vs-actual-table {
+.budget-detail-controls {
+  display: flex;
+  justify-content: flex-end;
   margin-top: 1.5rem;
+}
+
+.budget-vs-actual-table {
+  margin-top: 0.75rem;
+}
+
+.budget-vs-actual-table .budget-item-row {
+  display: none;
+}
+
+.budget-vs-actual-table.show-items .budget-item-row {
+  display: table-row;
+}
+
+.budget-item-name {
+  color: var(--muted);
+  font-size: 0.9rem;
 }
 
 table {
