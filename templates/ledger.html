@@ -94,7 +94,12 @@
         </tr>
         {% else %}
         <tr class="ledger-row {{ 'actual-row' if row.source == 'actual' else 'forecast-row' }}">
-          <td>{{ row.date }}</td>
+          <td>
+            {% if row.source == 'card' and row.card_charges %}
+            <button type="button" class="card-expand-toggle js-card-toggle" data-target="card-detail-{{ loop.index }}" aria-expanded="false" aria-label="Show the charges behind this payment">›</button>
+            {% endif %}
+            {{ row.date }}
+          </td>
           <td>
             {% if row.linked and row.raw_name and row.raw_name != row.description %}
             <span class="has-linked-actual" title="Actual: {{ row.raw_name }}">{{ row.description }}</span>
@@ -130,6 +135,37 @@
               </div>
             </details>
             {% endif %}
+          </td>
+        </tr>
+        {% endif %}
+
+        {% if row.row_type != 'month_summary' and row.source == 'card' and row.card_charges %}
+        <tr class="card-detail-row hidden" id="card-detail-{{ loop.index }}">
+          <td colspan="8">
+            <div class="card-detail-wrap">
+              <p class="card-detail-caption">Charges making up this {{ row.description }}</p>
+              <table class="card-detail-table">
+                <thead>
+                  <tr><th>Date</th><th>Charge</th><th>Type</th><th>Amount</th></tr>
+                </thead>
+                <tbody>
+                  {% for charge in row.card_charges %}
+                  <tr>
+                    <td>{{ charge.date }}</td>
+                    <td>{{ charge.description if charge.description else '—' }}</td>
+                    <td>
+                      <span class="table-pill">
+                        {% if charge.kind == 'actual' %}Imported{% elif charge.kind == 'recurring' %}Recurring{% else %}One-time{% endif %}
+                      </span>
+                    </td>
+                    <td class="amount-value {{ 'positive' if charge.delta > 0 else 'negative' }}">
+                      {{ '+' if charge.delta > 0 else '-' }}${{ (charge.delta if charge.delta >= 0 else -charge.delta)|currency }}
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
           </td>
         </tr>
         {% endif %}
@@ -290,5 +326,52 @@
 
     syncDateDisplay(parseIsoDate('{{ today_iso }}'));
   })();
+
+  // Expand/collapse the charges behind a card-payment row.
+  (() => {
+    document.querySelectorAll('.js-card-toggle').forEach((button) => {
+      button.addEventListener('click', () => {
+        const target = document.getElementById(button.dataset.target);
+        if (!target) {
+          return;
+        }
+        const isHidden = target.classList.toggle('hidden');
+        button.setAttribute('aria-expanded', String(!isHidden));
+        button.classList.toggle('is-open', !isHidden);
+      });
+    });
+  })();
 </script>
+
+<style>
+  .card-expand-toggle {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0 0.35rem 0 0;
+    color: inherit;
+    transition: transform 0.15s ease;
+    display: inline-block;
+  }
+  .card-expand-toggle.is-open { transform: rotate(90deg); }
+  .card-detail-wrap {
+    padding: 0.5rem 0.75rem 0.75rem 1.5rem;
+  }
+  .card-detail-caption {
+    font-size: 0.8rem;
+    opacity: 0.7;
+    margin: 0 0 0.4rem;
+  }
+  .card-detail-table {
+    width: 100%;
+    font-size: 0.9rem;
+  }
+  .card-detail-table th {
+    text-align: left;
+    font-weight: 600;
+    opacity: 0.65;
+  }
+</style>
 {% endblock %}
