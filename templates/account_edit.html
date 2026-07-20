@@ -2,7 +2,7 @@
 {% block content %}
 <section class="page-intro">
   <div>
-    <p class="page-kicker"><a href="/accounts" class="back-link">← Accounts</a></p>
+    <p class="page-kicker"><a href="/accounts" class="button-link">← Accounts</a></p>
     <h2>Edit {{ account.name }}</h2>
     <p>Update the account type and, for credit cards, the billing-cycle days.</p>
   </div>
@@ -40,7 +40,7 @@
       <label class="eom-toggle"><input type="checkbox" name="due_eom" value="1" class="eom-checkbox" data-target="due_day" {{ 'checked' if due_is_eom else '' }} /> Last day of month</label>
     </div>
     <div class="full-row">
-      <button type="submit" class="button-emphasis">Save Changes</button>
+      <button type="submit" class="button-link">Save Changes</button>
       <a class="button-link" href="/accounts">Cancel</a>
     </div>
   </form>

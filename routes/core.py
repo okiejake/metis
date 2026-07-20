@@ -14,9 +14,8 @@ from services import (
     normalize_user_slug,
     redirect_with_message,
     resolve_safe_redirect_target,
-    template_context,
 )
-from web import templates
+from web import CurrentUser, render
 
 router = APIRouter()
 
@@ -66,29 +65,25 @@ def switch_user(request: Request, user_slug: str = Form(...), next_path: str = F
 
 
 @router.get("/settings", response_class=HTMLResponse)
-def settings_page(request: Request, section: str = "user-management", msg: str = "", err: int = 0):
-    user = get_current_user(request)
+def settings_page(request: Request, user: CurrentUser, section: str = "user-management", msg: str = "", err: int = 0):
     selected_section = section if section == "user-management" else "user-management"
-    return templates.TemplateResponse(
+    return render(
+        request,
         "settings.html",
-        template_context(
-            request,
-            msg,
-            err,
-            section=selected_section,
-            managed_users=load_all_users(),
-            personal_user=user,
-        ),
+        msg,
+        err,
+        section=selected_section,
+        managed_users=load_all_users(),
+        personal_user=user,
     )
 
 
 @router.post("/settings/personal")
 def update_personal_settings(
-    request: Request,
+    request: Request, user: CurrentUser,
     display_name: str = Form(...),
     email: str = Form(""),
 ):
-    user = get_current_user(request)
     try:
         cleaned_name = display_name.strip()
         if not cleaned_name:

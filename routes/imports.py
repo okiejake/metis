@@ -18,43 +18,38 @@ from services import (
     redirect_with_message,
     save_import_template,
     summarize_imported,
-    template_context,
     upsert_imported_transactions,
 )
-from web import templates
+from web import CurrentUser, render
 
 router = APIRouter()
 
 
 @router.get("/import", response_class=HTMLResponse)
-def import_page(request: Request, account: str = "", msg: str = "", err: int = 0):
-    user = get_current_user(request)
+def import_page(request: Request, user: CurrentUser, account: str = "", msg: str = "", err: int = 0):
     account_filter = account.strip()
-    return templates.TemplateResponse(
+    return render(
+        request,
         "imports.html",
-        template_context(
-            request,
-            msg,
-            err,
-            summary=summarize_imported(user["id"]),
-            transactions=load_imported_transactions(user["id"], account_filter),
-            accounts=load_imported_accounts(user["id"]),
-            account_filter=account_filter,
-            categories=load_categories(user["id"]),
-            unmapped_labels=load_unmapped_import_labels(user["id"]),
-            user_accounts=load_accounts(user["id"]),
-            import_templates=load_import_templates(user["id"]),
-        ),
+        msg,
+        err,
+        summary=summarize_imported(user["id"]),
+        transactions=load_imported_transactions(user["id"], account_filter),
+        accounts=load_imported_accounts(user["id"]),
+        account_filter=account_filter,
+        categories=load_categories(user["id"]),
+        unmapped_labels=load_unmapped_import_labels(user["id"]),
+        user_accounts=load_accounts(user["id"]),
+        import_templates=load_import_templates(user["id"]),
     )
 
 
 @router.post("/import/map-account")
 def map_account(
-    request: Request,
+    request: Request, user: CurrentUser,
     label: str = Form(...),
     account_id: int = Form(...),
 ):
-    user = get_current_user(request)
     try:
         updated = map_import_label_to_account(user["id"], label.strip(), account_id)
     except ValueError as exc:
@@ -119,7 +114,7 @@ async def upload_import(
 
 @router.post("/import/templates")
 def save_template(
-    request: Request,
+    request: Request, user: CurrentUser,
     name: str = Form(...),
     account_id: int = Form(...),
     date_field: str = Form(...),
@@ -133,7 +128,6 @@ def save_template(
     merchant_field: str = Form(""),
     template_id: str = Form(""),
 ):
-    user = get_current_user(request)
     signature_cols = [part.strip() for part in signature.split(",") if part.strip()]
     try:
         save_import_template(
@@ -157,7 +151,6 @@ def save_template(
 
 
 @router.post("/import/templates/{template_id}/delete")
-def remove_template(request: Request, template_id: int):
-    user = get_current_user(request)
+def remove_template(request: Request, user: CurrentUser, template_id: int):
     delete_import_template(user["id"], template_id)
     return redirect_with_message("/import", "Import template deleted.")

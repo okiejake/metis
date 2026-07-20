@@ -130,7 +130,7 @@
                 <form method="post" action="/manual/{{ row.id }}/delete" class="row-action-item-form" onsubmit="return confirm('Delete this one-off transaction?')">
                   <input type="hidden" name="start" value="{{ start }}" />
                   <input type="hidden" name="end" value="{{ end }}" />
-                  <button type="submit" class="row-action-item danger-link">Delete</button>
+                  <button type="submit" class="row-action-item danger">Delete</button>
                 </form>
               </div>
             </details>
@@ -236,7 +236,7 @@
               </label>
 
               <div class="inline-insert-actions">
-                <button type="submit" class="button-emphasis">Add Transaction</button>
+                <button type="submit" class="button-link">Add Transaction</button>
                 <button type="button" class="button-link" id="inline-insert-cancel">Cancel</button>
               </div>
             </form>

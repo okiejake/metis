@@ -11,7 +11,6 @@ from services import (
     forecast_card_payments,
     latest_checking_actual_date,
     get_connection,
-    get_current_user,
     get_setting_float,
     load_account_by_id,
     load_accounts,
@@ -19,9 +18,8 @@ from services import (
     parse_form_bool,
     redirect_with_message,
     set_setting_float,
-    template_context,
 )
-from web import templates
+from web import CurrentUser, render
 
 router = APIRouter()
 
@@ -67,8 +65,7 @@ def _projected_card_payments(user_id: int, horizon_days: int = 150):
 
 
 @router.get("/accounts", response_class=HTMLResponse)
-def accounts_page(request: Request, msg: str = "", err: int = 0):
-    user = get_current_user(request)
+def accounts_page(request: Request, user: CurrentUser, msg: str = "", err: int = 0):
     ensure_seed_accounts(user["id"])
 
     accounts = load_accounts(user["id"])
@@ -82,23 +79,20 @@ def accounts_page(request: Request, msg: str = "", err: int = 0):
             account["projected"] = projected.get(int(account["id"]))
             account["balance"] = card_balance_summary(user["id"], account)
 
-    return templates.TemplateResponse(
+    return render(
+        request,
         "accounts.html",
-        template_context(
-            request,
-            msg,
-            err,
-            accounts=accounts,
-            starting_balance=get_setting_float(user["id"], "starting_balance", 0.0),
-            first_actual=first_checking_actual_date(user["id"]),
-            today_iso=today.isoformat(),
-        ),
+        msg,
+        err,
+        accounts=accounts,
+        starting_balance=get_setting_float(user["id"], "starting_balance", 0.0),
+        first_actual=first_checking_actual_date(user["id"]),
+        today_iso=today.isoformat(),
     )
 
 
 @router.post("/accounts/opening-balance")
-def update_opening_balance(request: Request, value: str = Form(...)):
-    user = get_current_user(request)
+def update_opening_balance(request: Request, user: CurrentUser, value: str = Form(...)):
     try:
         amount = float(value)
     except ValueError:
@@ -110,7 +104,7 @@ def update_opening_balance(request: Request, value: str = Form(...)):
 
 @router.post("/accounts")
 def create_account(
-    request: Request,
+    request: Request, user: CurrentUser,
     name: str = Form(...),
     account_type: str = Form(...),
     statement_day: str = Form(""),
@@ -118,7 +112,6 @@ def create_account(
     statement_eom: str = Form(""),
     due_eom: str = Form(""),
 ):
-    user = get_current_user(request)
     try:
         cleaned_name = name.strip()
         if not cleaned_name:
@@ -145,20 +138,22 @@ def create_account(
 
 
 @router.get("/accounts/{account_id}/edit", response_class=HTMLResponse)
-def edit_account_page(request: Request, account_id: int, msg: str = "", err: int = 0):
-    user = get_current_user(request)
+def edit_account_page(request: Request, user: CurrentUser, account_id: int, msg: str = "", err: int = 0):
     account = load_account_by_id(user["id"], account_id)
     if not account:
         return redirect_with_message("/accounts", "Account not found", is_error=True)
-    return templates.TemplateResponse(
+    return render(
+        request,
         "account_edit.html",
-        template_context(request, msg, err, account=account),
+        msg,
+        err,
+        account=account,
     )
 
 
 @router.post("/accounts/{account_id}/edit")
 def edit_account(
-    request: Request,
+    request: Request, user: CurrentUser,
     account_id: int,
     name: str = Form(...),
     account_type: str = Form(...),
@@ -167,7 +162,6 @@ def edit_account(
     statement_eom: str = Form(""),
     due_eom: str = Form(""),
 ):
-    user = get_current_user(request)
     if not load_account_by_id(user["id"], account_id):
         return redirect_with_message("/accounts", "Account not found", is_error=True)
 
@@ -203,8 +197,7 @@ def edit_account(
 
 
 @router.post("/accounts/{account_id}/delete")
-def delete_account(request: Request, account_id: int):
-    user = get_current_user(request)
+def delete_account(request: Request, user: CurrentUser, account_id: int):
     if not load_account_by_id(user["id"], account_id):
         return redirect_with_message("/accounts", "Account not found", is_error=True)
 

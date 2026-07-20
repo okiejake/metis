@@ -4,36 +4,30 @@ from fastapi.responses import HTMLResponse
 from services import (
     DEFAULT_CATEGORY_COLOR,
     get_connection,
-    get_current_user,
     load_categories_with_usage,
     load_category_by_id,
     normalize_hex_color,
     redirect_with_message,
-    template_context,
 )
-from web import templates
+from web import CurrentUser, render
 
 router = APIRouter()
 
 
 @router.get("/categories", response_class=HTMLResponse)
-def categories_page(request: Request, msg: str = "", err: int = 0):
-    user = get_current_user(request)
-    return templates.TemplateResponse(
+def categories_page(request: Request, user: CurrentUser, msg: str = "", err: int = 0):
+    return render(
+        request,
         "categories.html",
-        template_context(
-            request,
-            msg,
-            err,
-            categories=load_categories_with_usage(user["id"]),
-            default_color=DEFAULT_CATEGORY_COLOR,
-        ),
+        msg,
+        err,
+        categories=load_categories_with_usage(user["id"]),
+        default_color=DEFAULT_CATEGORY_COLOR,
     )
 
 
 @router.post("/categories")
-def create_category(request: Request, name: str = Form(...), color: str = Form(DEFAULT_CATEGORY_COLOR)):
-    user = get_current_user(request)
+def create_category(request: Request, user: CurrentUser, name: str = Form(...), color: str = Form(DEFAULT_CATEGORY_COLOR)):
     try:
         cleaned_name = name.strip()
         if not cleaned_name:
@@ -58,21 +52,22 @@ def create_category(request: Request, name: str = Form(...), color: str = Form(D
 
 
 @router.get("/categories/{category_id}/edit", response_class=HTMLResponse)
-def edit_category_page(request: Request, category_id: int, msg: str = "", err: int = 0):
-    user = get_current_user(request)
+def edit_category_page(request: Request, user: CurrentUser, category_id: int, msg: str = "", err: int = 0):
     category = load_category_by_id(user["id"], category_id)
     if not category:
         return redirect_with_message("/categories", "Category not found", is_error=True)
 
-    return templates.TemplateResponse(
+    return render(
+        request,
         "category_edit.html",
-        template_context(request, msg, err, category=category),
+        msg,
+        err,
+        category=category,
     )
 
 
 @router.post("/categories/{category_id}/edit")
-def edit_category(request: Request, category_id: int, name: str = Form(...), color: str = Form(...)):
-    user = get_current_user(request)
+def edit_category(request: Request, user: CurrentUser, category_id: int, name: str = Form(...), color: str = Form(...)):
     category = load_category_by_id(user["id"], category_id)
     if not category:
         return redirect_with_message("/categories", "Category not found", is_error=True)
@@ -102,8 +97,7 @@ def edit_category(request: Request, category_id: int, name: str = Form(...), col
 
 
 @router.post("/categories/{category_id}/delete")
-def delete_category(request: Request, category_id: int):
-    user = get_current_user(request)
+def delete_category(request: Request, user: CurrentUser, category_id: int):
     if not load_category_by_id(user["id"], category_id):
         return redirect_with_message("/categories", "Category not found", is_error=True)
 
