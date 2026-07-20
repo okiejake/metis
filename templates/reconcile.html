@@ -2,7 +2,7 @@
 {% block content %}
 <section class="page-intro">
   <div>
-    <p class="page-kicker"><a href="/expected" class="back-link">← Expected Transactions</a></p>
+    <p class="page-kicker"><a href="/expected" class="button-link">← Expected Transactions</a></p>
     <h2>Reconcile: {{ item.name }}</h2>
     <p>
       {{ item.kind|capitalize }} · ${{ item.amount|currency }} · {{ item.cadence }}
@@ -92,7 +92,7 @@
       <input type="text" name="pattern" value="{{ rule.pattern }}" class="rule-input" />
       {{ amount_controls(rule.amount_mode, rule.amount_exact, rule.amount_min, rule.amount_max) }}
       <button type="submit" class="button-link">Save</button>
-      <button type="submit" formaction="/expected/rules/{{ rule.id }}/delete" class="button-link danger-link">Delete</button>
+      <button type="submit" formaction="/expected/rules/{{ rule.id }}/delete" class="button-link danger">Delete</button>
     </form>
     {% endfor %}
   </div>
@@ -107,7 +107,7 @@
     <input type="text" name="pattern" value="{{ rule_seed }}" placeholder="e.g. ACH RENT" class="rule-input"
       {{ 'autofocus' if rule_seed else '' }} required />
     {{ amount_controls('any', '', '', '') }}
-    <button type="submit" class="button-emphasis">Save rule</button>
+    <button type="submit" class="button-link">Save rule</button>
   </form>
 </section>
 
@@ -176,7 +176,7 @@
             <form method="post" action="/expected/reconcile/{{ l.recon_id }}/unlink">
               <input type="hidden" name="source_type" value="{{ item.source_type }}" />
               <input type="hidden" name="source_id" value="{{ item.id }}" />
-              <button type="submit" class="button-link danger-link">Unlink</button>
+              <button type="submit" class="button-link danger">Unlink</button>
             </form>
           </td>
         </tr>

@@ -6,7 +6,6 @@ from fastapi.responses import HTMLResponse
 from services import (
     VALID_KINDS,
     get_connection,
-    get_current_user,
     load_categories,
     load_manual_transaction_by_id,
     parse_form_bool,
@@ -14,16 +13,15 @@ from services import (
     parse_optional_category_id,
     parse_positive_float,
     redirect_with_message,
-    template_context,
 )
-from web import templates
+from web import CurrentUser, render
 
 router = APIRouter()
 
 
 @router.post("/manual")
 def create_manual_transaction(
-    request: Request,
+    request: Request, user: CurrentUser,
     name: str = Form(...),
     kind: str = Form(...),
     amount: str = Form(...),
@@ -33,7 +31,6 @@ def create_manual_transaction(
     start: str = Form(...),
     end: str = Form(...),
 ):
-    user = get_current_user(request)
     redirect_target = f"/ledger?start={quote_plus(start)}&end={quote_plus(end)}"
     should_make_recurring = parse_form_bool(make_recurring)
 
@@ -86,30 +83,27 @@ def create_manual_transaction(
 
 
 @router.get("/manual/{tx_id}/edit", response_class=HTMLResponse)
-def edit_manual_transaction_page(request: Request, tx_id: int, start: str = "", end: str = "", msg: str = "", err: int = 0):
-    user = get_current_user(request)
+def edit_manual_transaction_page(request: Request, user: CurrentUser, tx_id: int, start: str = "", end: str = "", msg: str = "", err: int = 0):
     redirect_target = f"/ledger?start={quote_plus(start)}&end={quote_plus(end)}" if start and end else "/ledger"
     transaction = load_manual_transaction_by_id(user["id"], tx_id)
     if not transaction:
         return redirect_with_message(redirect_target, "Manual transaction not found", is_error=True)
 
-    return templates.TemplateResponse(
+    return render(
+        request,
         "manual_edit.html",
-        template_context(
-            request,
-            msg,
-            err,
-            tx=transaction,
-            categories=load_categories(user["id"]),
-            start=start,
-            end=end,
-        ),
+        msg,
+        err,
+        tx=transaction,
+        categories=load_categories(user["id"]),
+        start=start,
+        end=end,
     )
 
 
 @router.post("/manual/{tx_id}/edit")
 def edit_manual_transaction(
-    request: Request,
+    request: Request, user: CurrentUser,
     tx_id: int,
     name: str = Form(...),
     kind: str = Form(...),
@@ -120,7 +114,6 @@ def edit_manual_transaction(
     start: str = Form(...),
     end: str = Form(...),
 ):
-    user = get_current_user(request)
     redirect_target = f"/ledger?start={quote_plus(start)}&end={quote_plus(end)}"
     edit_redirect_target = f"/manual/{tx_id}/edit?start={quote_plus(start)}&end={quote_plus(end)}"
     should_make_recurring = parse_form_bool(make_recurring)
@@ -178,8 +171,7 @@ def edit_manual_transaction(
 
 
 @router.post("/manual/{tx_id}/delete")
-def delete_manual_transaction(request: Request, tx_id: int, start: str = Form(...), end: str = Form(...)):
-    user = get_current_user(request)
+def delete_manual_transaction(request: Request, user: CurrentUser, tx_id: int, start: str = Form(...), end: str = Form(...)):
     with get_connection() as conn:
         conn.execute("DELETE FROM manual_transactions WHERE id = ? AND user_id = ?", [tx_id, user["id"]])
 

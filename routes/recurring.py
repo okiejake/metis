@@ -9,7 +9,6 @@ from services import (
     delete_overrides_for_item,
     dismiss_suggestion,
     get_connection,
-    get_current_user,
     load_accounts,
     load_amount_overrides,
     load_categories,
@@ -24,9 +23,8 @@ from services import (
     parse_positive_int,
     redirect_with_message,
     save_amount_override,
-    template_context,
 )
-from web import templates
+from web import CurrentUser, render
 
 router = APIRouter()
 
@@ -40,7 +38,7 @@ def recurring_page(request: Request):
 
 @router.post("/recurring")
 def create_recurring_item(
-    request: Request,
+    request: Request, user: CurrentUser,
     name: str = Form(...),
     kind: str = Form(...),
     amount: str = Form(...),
@@ -56,7 +54,6 @@ def create_recurring_item(
     semimonthly_day2: str = Form("15"),
     suggestion_key: str = Form(""),
 ):
-    user = get_current_user(request)
     redirect_target = "/budget"
     try:
         cleaned_name = name.strip()
@@ -122,8 +119,7 @@ def create_recurring_item(
 
 
 @router.get("/recurring/{item_id}/edit", response_class=HTMLResponse)
-def edit_recurring_item_page(request: Request, item_id: int, msg: str = "", err: int = 0):
-    user = get_current_user(request)
+def edit_recurring_item_page(request: Request, user: CurrentUser, item_id: int, msg: str = "", err: int = 0):
     item = load_recurring_item_by_id(user["id"], item_id)
     if not item:
         return redirect_with_message("/budget", "Recurring item not found", is_error=True)
@@ -135,22 +131,22 @@ def edit_recurring_item_page(request: Request, item_id: int, msg: str = "", err:
         if ovr["effective_date"] <= today:
             current_amount = float(ovr["amount"])
 
-    return templates.TemplateResponse(
+    return render(
+        request,
         "recurring_edit.html",
-        template_context(
-            request, msg, err,
-            item=item,
-            categories=load_categories(user["id"]),
-            accounts=load_accounts(user["id"]),
-            current_amount=current_amount,
-            has_overrides=len(overrides) > 0,
-        ),
+        msg,
+        err,
+        item=item,
+        categories=load_categories(user["id"]),
+        accounts=load_accounts(user["id"]),
+        current_amount=current_amount,
+        has_overrides=len(overrides) > 0,
     )
 
 
 @router.post("/recurring/{item_id}/edit")
 def edit_recurring_item(
-    request: Request,
+    request: Request, user: CurrentUser,
     item_id: int,
     name: str = Form(...),
     kind: str = Form(...),
@@ -167,7 +163,6 @@ def edit_recurring_item(
     semimonthly_day2: str = Form("15"),
     amount_change_scope: str = Form("all"),
 ):
-    user = get_current_user(request)
     existing_item = load_recurring_item_by_id(user["id"], item_id)
     if not existing_item:
         return redirect_with_message("/budget", "Recurring item not found", is_error=True)
@@ -264,8 +259,7 @@ def edit_recurring_item(
 
 
 @router.post("/recurring/{item_id}/toggle")
-def toggle_recurring_item(request: Request, item_id: int):
-    user = get_current_user(request)
+def toggle_recurring_item(request: Request, user: CurrentUser, item_id: int):
     with get_connection() as conn:
         conn.execute(
             """
@@ -279,8 +273,7 @@ def toggle_recurring_item(request: Request, item_id: int):
 
 
 @router.post("/recurring/{item_id}/delete")
-def delete_recurring_item(request: Request, item_id: int):
-    user = get_current_user(request)
+def delete_recurring_item(request: Request, user: CurrentUser, item_id: int):
     delete_overrides_for_item(item_id)
     with get_connection() as conn:
         conn.execute("DELETE FROM recurring_items WHERE id = ? AND user_id = ?", [item_id, user["id"]])

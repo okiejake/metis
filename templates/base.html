@@ -59,7 +59,7 @@
         </div>
 
         <div class="header-actions">
-          <button type="button" class="button-link amount-toggle-button" id="amount-toggle-button">
+          <button type="button" class="button-link" id="amount-toggle-button">
             <i data-lucide="eye-off" class="menu-icon" aria-hidden="true"></i>
             Hide Amounts
           </button>
@@ -103,12 +103,12 @@
         </button>
 
         <p class="window-presets" id="window-presets">
-          <button type="button" class="window-preset-link" data-window-preset="thismonth">This Month</button>
-          <button type="button" class="window-preset-link" data-window-preset="thisyear">This Year</button>
-          <button type="button" class="window-preset-link" data-window-preset="ytd">YTD</button>
-          <button type="button" class="window-preset-link" data-window-preset="rolling12">Rolling 12M</button>
-          <button type="button" class="window-preset-link" data-window-preset="rolling6">Rolling 6M</button>
-          <button type="button" class="window-preset-link" data-window-preset="next90">Next 90D</button>
+          <button type="button" class="button-link" data-window-preset="thismonth">This Month</button>
+          <button type="button" class="button-link" data-window-preset="thisyear">This Year</button>
+          <button type="button" class="button-link" data-window-preset="ytd">YTD</button>
+          <button type="button" class="button-link" data-window-preset="rolling12">Rolling 12M</button>
+          <button type="button" class="button-link" data-window-preset="rolling6">Rolling 6M</button>
+          <button type="button" class="button-link" data-window-preset="next90">Next 90D</button>
         </p>
       </form>
       <dialog id="window-calendar-dialog" class="calendar-dialog">
@@ -129,7 +129,7 @@
           </div>
           <div class="calendar-actions">
             <button type="button" class="button-link" id="calendar-cancel">Cancel</button>
-            <button type="button" class="button-emphasis" id="calendar-apply">Apply Range</button>
+            <button type="button" class="button-link" id="calendar-apply">Apply Range</button>
           </div>
         </div>
       </dialog>
@@ -253,7 +253,7 @@
           presets.forEach((presetButton) => {
             const [presetStart, presetEnd] = rangeForPreset(presetButton.dataset.windowPreset || '');
             const isActive = currentStart === toIsoDate(presetStart) && currentEnd === toIsoDate(presetEnd);
-            presetButton.classList.toggle('is-active', isActive);
+            presetButton.classList.toggle('active', isActive);
           });
         }
 
@@ -307,7 +307,7 @@
 
           const fallbackApply = document.createElement('button');
           fallbackApply.type = 'submit';
-          fallbackApply.className = 'button-emphasis';
+          fallbackApply.className = 'button-link';
           fallbackApply.textContent = 'Apply';
           form.appendChild(fallbackApply);
           updateHeaderLabel();

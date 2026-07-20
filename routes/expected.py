@@ -17,7 +17,6 @@ from services import (
     ensure_seed_accounts,
     find_amount_suggestions,
     get_connection,
-    get_current_user,
     load_accounts,
     load_categories,
     resolve_budget_window,
@@ -34,11 +33,10 @@ from services import (
     redirect_with_message,
     reset_dismissed_suggestions,
     suggest_rule_pattern,
-    template_context,
     unlink_reconciliation,
     update_match_rule,
 )
-from web import templates
+from web import CurrentUser, render
 
 router = APIRouter()
 
@@ -54,8 +52,7 @@ def expected_page(request: Request):
 
 
 @router.get("/budget", response_class=HTMLResponse)
-def budget_page(request: Request, start: str = "", end: str = "", msg: str = "", err: int = 0):
-    user = get_current_user(request)
+def budget_page(request: Request, user: CurrentUser, start: str = "", end: str = "", msg: str = "", err: int = 0):
     ensure_seed_accounts(user["id"])
 
     window_start, window_end, invalid_filter = resolve_budget_window(user["id"], start, end)
@@ -74,45 +71,41 @@ def budget_page(request: Request, start: str = "", end: str = "", msg: str = "",
     suggestions = detect_recurring_suggestions(user["id"])
     dismissed_count = count_dismissed_suggestions(user["id"])
 
-    return templates.TemplateResponse(
+    return render(
+        request,
         "budget.html",
-        template_context(
-            request,
-            msg,
-            err,
-            budget_summary=budget_summary,
-            recurring_items=recurring_items,
-            one_time_items=one_time_items,
-            suggestions=suggestions,
-            dismissed_count=dismissed_count,
-            categories=load_categories(user["id"]),
-            accounts=load_accounts(user["id"]),
-            today_iso=date.today().isoformat(),
-            start=window_start.isoformat(),
-            end=window_end.isoformat(),
-            show_forecast_window_form=True,
-            window_form_action="/budget",
-        ),
+        msg,
+        err,
+        budget_summary=budget_summary,
+        recurring_items=recurring_items,
+        one_time_items=one_time_items,
+        suggestions=suggestions,
+        dismissed_count=dismissed_count,
+        categories=load_categories(user["id"]),
+        accounts=load_accounts(user["id"]),
+        today_iso=date.today().isoformat(),
+        start=window_start.isoformat(),
+        end=window_end.isoformat(),
+        show_forecast_window_form=True,
+        window_form_action="/budget",
     )
 
 
 @router.post("/expected/suggestions/dismiss")
-def dismiss_suggestion_route(request: Request, suggestion_key: str = Form(...)):
-    user = get_current_user(request)
+def dismiss_suggestion_route(request: Request, user: CurrentUser, suggestion_key: str = Form(...)):
     dismiss_suggestion(user["id"], suggestion_key, reason="dismissed")
     return redirect_with_message("/budget", "Suggestion dismissed")
 
 
 @router.post("/expected/suggestions/reset")
-def reset_suggestions_route(request: Request):
-    user = get_current_user(request)
+def reset_suggestions_route(request: Request, user: CurrentUser):
     reset_dismissed_suggestions(user["id"])
     return redirect_with_message("/budget", "Dismissed suggestions restored")
 
 
 @router.post("/expected/one-time")
 def create_one_time_expected(
-    request: Request,
+    request: Request, user: CurrentUser,
     name: str = Form(...),
     kind: str = Form(...),
     amount: str = Form(...),
@@ -120,7 +113,6 @@ def create_one_time_expected(
     account_id: str = Form(""),
     tx_date: str = Form(...),
 ):
-    user = get_current_user(request)
     try:
         cleaned_name = name.strip()
         if not cleaned_name:
@@ -148,14 +140,13 @@ def create_one_time_expected(
 
 @router.get("/expected/{source_type}/{source_id}/reconcile", response_class=HTMLResponse)
 def reconcile_page(
-    request: Request,
+    request: Request, user: CurrentUser,
     source_type: str,
     source_id: int,
     rule_seed: str = "",
     msg: str = "",
     err: int = 0,
 ):
-    user = get_current_user(request)
     if source_type not in EXPECTED_SOURCE_TYPES:
         return redirect_with_message("/budget", "Unknown expected item type", is_error=True)
 
@@ -177,31 +168,28 @@ def reconcile_page(
         window_end = date.today() + timedelta(days=90)
         occurrences = recurring_occurrence_status(raw, window_start, window_end, linked)
 
-    return templates.TemplateResponse(
+    return render(
+        request,
         "reconcile.html",
-        template_context(
-            request,
-            msg,
-            err,
-            item=item,
-            rules=rules,
-            linked=linked,
-            suggestions=suggestions,
-            occurrences=occurrences,
-            rule_seed=rule_seed,
-        ),
+        msg,
+        err,
+        item=item,
+        rules=rules,
+        linked=linked,
+        suggestions=suggestions,
+        occurrences=occurrences,
+        rule_seed=rule_seed,
     )
 
 
 @router.post("/expected/reconcile/confirm")
 def confirm_match(
-    request: Request,
+    request: Request, user: CurrentUser,
     source_type: str = Form(...),
     source_id: int = Form(...),
     imported_transaction_id: int = Form(...),
     description: str = Form(""),
 ):
-    user = get_current_user(request)
     target = _reconcile_path(source_type, source_id)
     if source_type not in EXPECTED_SOURCE_TYPES or not load_expected_item(user["id"], source_type, source_id):
         return redirect_with_message("/budget", "Expected item not found", is_error=True)
@@ -248,7 +236,7 @@ def _parse_rule_amount_bounds(mode: str, exact: str, minimum: str, maximum: str)
 
 @router.post("/expected/rules")
 def save_rule(
-    request: Request,
+    request: Request, user: CurrentUser,
     source_type: str = Form(...),
     source_id: int = Form(...),
     pattern: str = Form(...),
@@ -258,7 +246,6 @@ def save_rule(
     amount_min: str = Form(""),
     amount_max: str = Form(""),
 ):
-    user = get_current_user(request)
     target = _reconcile_path(source_type, source_id)
     if source_type not in EXPECTED_SOURCE_TYPES or not load_expected_item(user["id"], source_type, source_id):
         return redirect_with_message("/budget", "Expected item not found", is_error=True)
@@ -278,22 +265,19 @@ def save_rule(
 
 
 @router.post("/expected/rules/{rule_id}/delete")
-def remove_rule(request: Request, rule_id: int, source_type: str = Form(...), source_id: int = Form(...)):
-    user = get_current_user(request)
+def remove_rule(request: Request, user: CurrentUser, rule_id: int, source_type: str = Form(...), source_id: int = Form(...)):
     delete_match_rule(user["id"], rule_id)
     return redirect_with_message(_reconcile_path(source_type, source_id), "Match rule deleted")
 
 
 @router.post("/expected/reconcile/{recon_id}/unlink")
-def unlink_match(request: Request, recon_id: int, source_type: str = Form(...), source_id: int = Form(...)):
-    user = get_current_user(request)
+def unlink_match(request: Request, user: CurrentUser, recon_id: int, source_type: str = Form(...), source_id: int = Form(...)):
     unlink_reconciliation(user["id"], recon_id)
     return redirect_with_message(_reconcile_path(source_type, source_id), "Match removed")
 
 
 @router.post("/expected/one-time/{tx_id}/delete")
-def delete_one_time_expected(request: Request, tx_id: int):
-    user = get_current_user(request)
+def delete_one_time_expected(request: Request, user: CurrentUser, tx_id: int):
     with get_connection() as conn:
         conn.execute("DELETE FROM manual_transactions WHERE id = ? AND user_id = ?", [tx_id, user["id"]])
         conn.execute(

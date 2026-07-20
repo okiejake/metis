@@ -6,7 +6,7 @@ import json
 import os
 import re
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 from urllib.parse import quote_plus
 
 import duckdb
@@ -444,44 +444,32 @@ def init_db() -> None:
 
 
 def load_all_users() -> List[Dict[str, Any]]:
-    with get_connection() as conn:
-        cursor = conn.execute(
-            """
+    return query_all("""
             SELECT id, slug, display_name, email
             FROM users
             ORDER BY LOWER(display_name), id
-            """
-        )
-        return rows_to_dicts(cursor)
+            """)
 
 
 def load_user_by_slug(user_slug: str) -> Optional[Dict[str, Any]]:
-    with get_connection() as conn:
-        row = conn.execute(
-            """
+    row = fetch_one("""
             SELECT id, slug, display_name, email
             FROM users
             WHERE slug = ?
             LIMIT 1
-            """,
-            [user_slug],
-        ).fetchone()
+            """, [user_slug])
     if not row:
         return None
     return {"id": int(row[0]), "slug": row[1], "display_name": row[2], "email": row[3] or ""}
 
 
 def load_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
-    with get_connection() as conn:
-        row = conn.execute(
-            """
+    row = fetch_one("""
             SELECT id, slug, display_name, email
             FROM users
             WHERE id = ?
             LIMIT 1
-            """,
-            [user_id],
-        ).fetchone()
+            """, [user_id])
     if not row:
         return None
     return {"id": int(row[0]), "slug": row[1], "display_name": row[2], "email": row[3] or ""}
@@ -491,10 +479,7 @@ def get_default_user() -> Dict[str, Any]:
     default_user = load_user_by_slug(DEFAULT_USER_SLUG)
     if default_user:
         return default_user
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT id, slug, display_name, email FROM users ORDER BY id LIMIT 1"
-        ).fetchone()
+    row = fetch_one("SELECT id, slug, display_name, email FROM users ORDER BY id LIMIT 1")
     if row:
         return {"id": int(row[0]), "slug": row[1], "display_name": row[2], "email": row[3] or ""}
     raise RuntimeError("No users available; database initialization failed")
@@ -546,6 +531,34 @@ def template_context(request: Request, message: str, err: int, **kwargs: Any) ->
 def rows_to_dicts(cursor: duckdb.DuckDBPyConnection) -> List[Dict[str, Any]]:
     columns = [col[0] for col in cursor.description]
     return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
+def _run(conn: duckdb.DuckDBPyConnection, sql: str, params: Optional[Sequence[Any]]):
+    return conn.execute(sql) if params is None else conn.execute(sql, params)
+
+
+def query_all(sql: str, params: Optional[Sequence[Any]] = None) -> List[Dict[str, Any]]:
+    """Open a connection, run a SELECT, return rows as dicts."""
+    with get_connection() as conn:
+        return rows_to_dicts(_run(conn, sql, params))
+
+
+def fetch_one(sql: str, params: Optional[Sequence[Any]] = None) -> Optional[tuple]:
+    """Open a connection, run a query, return the first raw row tuple (or None)."""
+    with get_connection() as conn:
+        return _run(conn, sql, params).fetchone()
+
+
+def fetch_all(sql: str, params: Optional[Sequence[Any]] = None) -> List[tuple]:
+    """Open a connection, run a query, return all raw row tuples."""
+    with get_connection() as conn:
+        return _run(conn, sql, params).fetchall()
+
+
+def execute(sql: str, params: Optional[Sequence[Any]] = None) -> None:
+    """Open a connection and run a single write statement."""
+    with get_connection() as conn:
+        _run(conn, sql, params)
 
 
 def parse_iso_date(value: str) -> date:
@@ -602,8 +615,7 @@ def build_setting_storage_key(user_id: int, key: str) -> str:
 
 def get_setting_value(user_id: int, key: str) -> Optional[str]:
     storage_key = build_setting_storage_key(user_id, key)
-    with get_connection() as conn:
-        row = conn.execute("SELECT value FROM settings WHERE key = ?", [storage_key]).fetchone()
+    row = fetch_one("SELECT value FROM settings WHERE key = ?", [storage_key])
     if not row or row[0] is None:
         return None
     return str(row[0])
@@ -611,15 +623,11 @@ def get_setting_value(user_id: int, key: str) -> Optional[str]:
 
 def set_setting_value(user_id: int, key: str, value: str) -> None:
     storage_key = build_setting_storage_key(user_id, key)
-    with get_connection() as conn:
-        conn.execute(
-            """
+    execute("""
             INSERT INTO settings (key, value)
             VALUES (?, ?)
             ON CONFLICT (key) DO UPDATE SET value = excluded.value
-            """,
-            [storage_key, value],
-        )
+            """, [storage_key, value])
 
 
 def get_setting_float(user_id: int, key: str, default: float = 0.0) -> float:
@@ -699,51 +707,37 @@ def resolve_forecast_window(user_id: int, start: str = "", end: str = "") -> tup
 
 
 def load_categories(user_id: int) -> List[Dict[str, Any]]:
-    with get_connection() as conn:
-        cursor = conn.execute(
-            """
+    rows = query_all("""
             SELECT id, name, color
             FROM categories
             WHERE user_id = ?
             ORDER BY LOWER(name), id
-            """,
-            [user_id],
-        )
-        rows = rows_to_dicts(cursor)
+            """, [user_id])
     for row in rows:
         row["color"] = safe_hex_color(row.get("color"))
     return rows
 
 
 def load_categories_with_usage(user_id: int) -> List[Dict[str, Any]]:
-    with get_connection() as conn:
-        cursor = conn.execute(
-            """
+    rows = query_all("""
             SELECT c.id, c.name, c.color,
                    (SELECT COUNT(*) FROM recurring_items r WHERE r.category_id = c.id AND r.user_id = c.user_id) AS recurring_count,
                    (SELECT COUNT(*) FROM manual_transactions m WHERE m.category_id = c.id AND m.user_id = c.user_id) AS manual_count
             FROM categories c
             WHERE c.user_id = ?
             ORDER BY LOWER(c.name), c.id
-            """,
-            [user_id],
-        )
-        rows = rows_to_dicts(cursor)
+            """, [user_id])
     for row in rows:
         row["color"] = safe_hex_color(row.get("color"))
     return rows
 
 
 def load_category_by_id(user_id: int, category_id: int) -> Optional[Dict[str, Any]]:
-    with get_connection() as conn:
-        row = conn.execute(
-            """
+    row = fetch_one("""
             SELECT id, name, color
             FROM categories
             WHERE id = ? AND user_id = ?
-            """,
-            [category_id, user_id],
-        ).fetchone()
+            """, [category_id, user_id])
     if not row:
         return None
     return {"id": int(row[0]), "name": row[1], "color": safe_hex_color(row[2])}
@@ -805,10 +799,6 @@ def iter_every_n_days(start_anchor: date, window_start: date, window_end: date, 
     while current <= window_end:
         yield current
         current += timedelta(days=step_days)
-
-
-def iter_biweekly(start_anchor: date, window_start: date, window_end: date):
-    yield from iter_every_n_days(start_anchor, window_start, window_end, 14)
 
 
 def iter_monthly(start_anchor: date, window_start: date, window_end: date, interval_months: int, day: int):
@@ -916,9 +906,7 @@ def generate_recurring_transactions(
 
 
 def load_all_recurring(user_id: int) -> List[Dict[str, Any]]:
-    with get_connection() as conn:
-        cursor = conn.execute(
-            """
+    rows = query_all("""
             SELECT r.id, r.name, r.kind, r.amount, r.start_date, r.end_date, r.frequency_type,
                    r.interval_months, r.semimonthly_day1, r.semimonthly_day2, r.day_of_month,
                    r.active, r.created_at, r.category_id, r.account_id, c.name AS category_name, c.color AS category_color
@@ -926,19 +914,14 @@ def load_all_recurring(user_id: int) -> List[Dict[str, Any]]:
             LEFT JOIN categories c ON c.id = r.category_id AND c.user_id = r.user_id
             WHERE r.user_id = ?
             ORDER BY r.active DESC, r.kind, r.name, r.id
-            """,
-            [user_id],
-        )
-        rows = rows_to_dicts(cursor)
+            """, [user_id])
     for row in rows:
         row["category_color"] = safe_hex_color(row.get("category_color"))
     return rows
 
 
 def load_active_recurring(user_id: int) -> List[Dict[str, Any]]:
-    with get_connection() as conn:
-        cursor = conn.execute(
-            """
+    rows = query_all("""
             SELECT r.id, r.name, r.kind, r.amount, r.start_date, r.end_date, r.frequency_type,
                    r.interval_months, r.semimonthly_day1, r.semimonthly_day2, r.day_of_month,
                    r.active, r.created_at, r.category_id, r.account_id, c.name AS category_name, c.color AS category_color
@@ -946,29 +929,21 @@ def load_active_recurring(user_id: int) -> List[Dict[str, Any]]:
             LEFT JOIN categories c ON c.id = r.category_id AND c.user_id = r.user_id
             WHERE r.active = TRUE AND r.user_id = ?
             ORDER BY r.kind, r.name, r.id
-            """,
-            [user_id],
-        )
-        rows = rows_to_dicts(cursor)
+            """, [user_id])
     for row in rows:
         row["category_color"] = safe_hex_color(row.get("category_color"))
     return rows
 
 
 def load_manual_transactions(user_id: int, window_start: date, window_end: date) -> List[Dict[str, Any]]:
-    with get_connection() as conn:
-        cursor = conn.execute(
-            """
+    rows = query_all("""
             SELECT m.id, m.name, m.kind, m.amount, m.tx_date, m.category_id, m.account_id,
                    c.name AS category_name, c.color AS category_color
             FROM manual_transactions m
             LEFT JOIN categories c ON c.id = m.category_id AND c.user_id = m.user_id
             WHERE m.user_id = ? AND m.tx_date >= ? AND m.tx_date <= ?
             ORDER BY m.tx_date, m.id
-            """,
-            [user_id, window_start, window_end],
-        )
-        rows = rows_to_dicts(cursor)
+            """, [user_id, window_start, window_end])
 
     transactions: List[Dict[str, Any]] = []
     for row in rows:
@@ -997,16 +972,12 @@ def load_manual_transactions(user_id: int, window_start: date, window_end: date)
 
 
 def load_manual_transaction_by_id(user_id: int, tx_id: int) -> Optional[Dict[str, Any]]:
-    with get_connection() as conn:
-        row = conn.execute(
-            """
+    row = fetch_one("""
             SELECT m.id, m.name, m.kind, m.amount, m.tx_date, m.category_id, c.name AS category_name, c.color AS category_color
             FROM manual_transactions m
             LEFT JOIN categories c ON c.id = m.category_id AND c.user_id = m.user_id
             WHERE m.id = ? AND m.user_id = ?
-            """,
-            [tx_id, user_id],
-        ).fetchone()
+            """, [tx_id, user_id])
 
     if not row:
         return None
@@ -1028,19 +999,14 @@ def load_manual_transaction_by_id(user_id: int, tx_id: int) -> Optional[Dict[str
 
 
 def load_recurring_item_by_id(user_id: int, item_id: int) -> Optional[Dict[str, Any]]:
-    with get_connection() as conn:
-        cursor = conn.execute(
-            """
+    rows = query_all("""
             SELECT r.id, r.name, r.kind, r.amount, r.start_date, r.end_date, r.frequency_type,
                    r.interval_months, r.semimonthly_day1, r.semimonthly_day2, r.day_of_month,
                    r.active, r.category_id, r.account_id, c.name AS category_name, c.color AS category_color
             FROM recurring_items r
             LEFT JOIN categories c ON c.id = r.category_id AND c.user_id = r.user_id
             WHERE r.id = ? AND r.user_id = ?
-            """,
-            [item_id, user_id],
-        )
-        rows = rows_to_dicts(cursor)
+            """, [item_id, user_id])
     if not rows:
         return None
     rows[0]["category_color"] = safe_hex_color(rows[0].get("category_color"))
@@ -1048,26 +1014,16 @@ def load_recurring_item_by_id(user_id: int, item_id: int) -> Optional[Dict[str, 
 
 
 def load_amount_overrides(recurring_item_id: int) -> List[Dict[str, Any]]:
-    with get_connection() as conn:
-        cursor = conn.execute(
-            "SELECT id, recurring_item_id, effective_date, amount FROM amount_overrides "
-            "WHERE recurring_item_id = ? ORDER BY effective_date ASC",
-            [recurring_item_id],
-        )
-        return rows_to_dicts(cursor)
+    return query_all("SELECT id, recurring_item_id, effective_date, amount FROM amount_overrides "
+            "WHERE recurring_item_id = ? ORDER BY effective_date ASC", [recurring_item_id])
 
 
 def load_amount_overrides_for_items(item_ids: List[int]) -> Dict[int, List[Dict[str, Any]]]:
     if not item_ids:
         return {}
     placeholders = ", ".join("?" for _ in item_ids)
-    with get_connection() as conn:
-        cursor = conn.execute(
-            f"SELECT id, recurring_item_id, effective_date, amount FROM amount_overrides "
-            f"WHERE recurring_item_id IN ({placeholders}) ORDER BY effective_date ASC",
-            item_ids,
-        )
-        rows = rows_to_dicts(cursor)
+    rows = query_all(f"SELECT id, recurring_item_id, effective_date, amount FROM amount_overrides "
+            f"WHERE recurring_item_id IN ({placeholders}) ORDER BY effective_date ASC", item_ids)
     result: Dict[int, List[Dict[str, Any]]] = {}
     for row in rows:
         rid = int(row["recurring_item_id"])
@@ -1088,8 +1044,7 @@ def save_amount_override(recurring_item_id: int, effective_date: date, amount: f
 
 
 def delete_overrides_for_item(recurring_item_id: int) -> None:
-    with get_connection() as conn:
-        conn.execute("DELETE FROM amount_overrides WHERE recurring_item_id = ?", [recurring_item_id])
+    execute("DELETE FROM amount_overrides WHERE recurring_item_id = ?", [recurring_item_id])
 
 
 def summarize_frequency(item: Dict[str, Any]) -> str:
@@ -1173,22 +1128,12 @@ def account_cycle_status(account: Dict[str, Any], today: Optional[date] = None) 
 
 
 def load_accounts(user_id: int) -> List[Dict[str, Any]]:
-    with get_connection() as conn:
-        return rows_to_dicts(
-            conn.execute(
-                "SELECT id, name, account_type, statement_day, due_day FROM accounts "
-                "WHERE user_id = ? ORDER BY account_type, LOWER(name), id",
-                [user_id],
-            )
-        )
+    return query_all("SELECT id, name, account_type, statement_day, due_day FROM accounts "
+                "WHERE user_id = ? ORDER BY account_type, LOWER(name), id", [user_id])
 
 
 def load_account_by_id(user_id: int, account_id: int) -> Optional[Dict[str, Any]]:
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT id, name, account_type, statement_day, due_day FROM accounts WHERE id = ? AND user_id = ?",
-            [account_id, user_id],
-        ).fetchone()
+    row = fetch_one("SELECT id, name, account_type, statement_day, due_day FROM accounts WHERE id = ? AND user_id = ?", [account_id, user_id])
     if not row:
         return None
     return {
@@ -1300,11 +1245,7 @@ def _card_scope_sql(card: Dict[str, Any], prefix: str = "") -> tuple[str, List[A
 
 def latest_checking_actual_date(user_id: int) -> Optional[date]:
     clause, params = _checking_scope_sql(user_id)
-    with get_connection() as conn:
-        row = conn.execute(
-            f"SELECT MAX(tx_date) FROM imported_transactions WHERE user_id = ? AND {clause}",
-            [user_id, *params],
-        ).fetchone()
+    row = fetch_one(f"SELECT MAX(tx_date) FROM imported_transactions WHERE user_id = ? AND {clause}", [user_id, *params])
     value = row[0] if row else None
     if isinstance(value, datetime):
         value = value.date()
@@ -1313,11 +1254,7 @@ def latest_checking_actual_date(user_id: int) -> Optional[date]:
 
 def first_checking_actual_date(user_id: int) -> Optional[date]:
     clause, params = _checking_scope_sql(user_id)
-    with get_connection() as conn:
-        row = conn.execute(
-            f"SELECT MIN(tx_date) FROM imported_transactions WHERE user_id = ? AND {clause}",
-            [user_id, *params],
-        ).fetchone()
+    row = fetch_one(f"SELECT MIN(tx_date) FROM imported_transactions WHERE user_id = ? AND {clause}", [user_id, *params])
     value = row[0] if row else None
     if isinstance(value, datetime):
         value = value.date()
@@ -1328,10 +1265,7 @@ def load_actual_checking_transactions(user_id: int, window_start: date, window_e
     """Real checking-account transactions (imported) mapped to the ledger row
     schema. Amounts are signed (negative = money out). Card payments count."""
     scope_clause, scope_params = _checking_scope_sql(user_id, "i.")
-    with get_connection() as conn:
-        rows = rows_to_dicts(
-            conn.execute(
-                f"""
+    rows = query_all(f"""
                 SELECT i.id, i.tx_date, i.description, i.merchant, i.amount,
                        COALESCE(ri.name, mt.name) AS expected_name,
                        ec.name AS expected_category_name, ec.color AS expected_category_color,
@@ -1350,10 +1284,7 @@ def load_actual_checking_transactions(user_id: int, window_start: date, window_e
                 WHERE i.user_id = ? AND {scope_clause}
                   AND i.tx_date >= ? AND i.tx_date <= ?
                 ORDER BY i.tx_date, i.id
-                """,
-                [user_id, *scope_params, window_start, window_end],
-            )
-        )
+                """, [user_id, *scope_params, window_start, window_end])
 
     transactions: List[Dict[str, Any]] = []
     for row in rows:
@@ -1395,14 +1326,10 @@ def checking_actual_balance_before(user_id: int, cutoff_date: date, opening_bala
     """opening_balance + sum of checking actual deltas strictly before cutoff_date.
     Gives the correct running-balance seed for any window start."""
     clause, params = _checking_scope_sql(user_id)
-    with get_connection() as conn:
-        row = conn.execute(
-            f"""
+    row = fetch_one(f"""
             SELECT COALESCE(SUM(amount), 0) FROM imported_transactions
             WHERE user_id = ? AND {clause} AND tx_date < ?
-            """,
-            [user_id, *params, cutoff_date],
-        ).fetchone()
+            """, [user_id, *params, cutoff_date])
     return float(opening_balance) + float(row[0] if row else 0.0)
 
 
@@ -1410,11 +1337,7 @@ def card_actual_cutover(user_id: int, card: Dict[str, Any]) -> Optional[date]:
     """Latest imported transaction date for a specific card account (by account_id,
     with a name fallback for rows not yet anchored)."""
     clause, params = _card_scope_sql(card)
-    with get_connection() as conn:
-        row = conn.execute(
-            f"SELECT MAX(tx_date) FROM imported_transactions WHERE user_id = ? AND {clause}",
-            [user_id, *params],
-        ).fetchone()
+    row = fetch_one(f"SELECT MAX(tx_date) FROM imported_transactions WHERE user_id = ? AND {clause}", [user_id, *params])
     value = row[0] if row else None
     if isinstance(value, datetime):
         value = value.date()
@@ -1424,27 +1347,19 @@ def card_actual_cutover(user_id: int, card: Dict[str, Any]) -> Optional[date]:
 def _sum_actual_card_charges(user_id: int, card: Dict[str, Any], after: date, close: date) -> float:
     """Net signed sum of a card's real (non-transfer) charges in (after, close]."""
     clause, params = _card_scope_sql(card)
-    with get_connection() as conn:
-        row = conn.execute(
-            f"""
+    row = fetch_one(f"""
             SELECT COALESCE(SUM(amount), 0) FROM imported_transactions
             WHERE user_id = ? AND {clause} AND NOT is_transfer
               AND tx_date > ? AND tx_date <= ?
-            """,
-            [user_id, *params, after, close],
-        ).fetchone()
+            """, [user_id, *params, after, close])
     return float(row[0] if row else 0.0)
 
 
 def _card_payment_dates(user_id: int, card: Dict[str, Any]) -> List[date]:
     """Dates of a card's own recorded payments (imported transfer rows)."""
     clause, params = _card_scope_sql(card)
-    with get_connection() as conn:
-        rows = conn.execute(
-            f"SELECT tx_date FROM imported_transactions "
-            f"WHERE user_id = ? AND {clause} AND is_transfer",
-            [user_id, *params],
-        ).fetchall()
+    rows = fetch_all(f"SELECT tx_date FROM imported_transactions "
+            f"WHERE user_id = ? AND {clause} AND is_transfer", [user_id, *params])
     dates: List[date] = []
     for (value,) in rows:
         dates.append(value.date() if isinstance(value, datetime) else value)
@@ -1454,12 +1369,8 @@ def _card_payment_dates(user_id: int, card: Dict[str, Any]) -> List[date]:
 def _card_payments_between(user_id: int, card: Dict[str, Any], after: date, through: date) -> float:
     """Total magnitude of a card's recorded payments in (after, through]."""
     clause, params = _card_scope_sql(card)
-    with get_connection() as conn:
-        row = conn.execute(
-            f"SELECT COALESCE(SUM(ABS(amount)), 0) FROM imported_transactions "
-            f"WHERE user_id = ? AND {clause} AND is_transfer AND tx_date > ? AND tx_date <= ?",
-            [user_id, *params, after, through],
-        ).fetchone()
+    row = fetch_one(f"SELECT COALESCE(SUM(ABS(amount)), 0) FROM imported_transactions "
+            f"WHERE user_id = ? AND {clause} AND is_transfer AND tx_date > ? AND tx_date <= ?", [user_id, *params, after, through])
     return round(float(row[0] if row else 0.0), 2)
 
 
@@ -1508,18 +1419,12 @@ def _list_actual_card_charges(
     """A card's real (non-transfer) charges in (after, close] as itemized rows
     {date, description, delta, kind:'actual'} — the imported half of a payment."""
     clause, params = _card_scope_sql(card, "i.")
-    with get_connection() as conn:
-        rows = rows_to_dicts(
-            conn.execute(
-                f"SELECT i.tx_date, i.description, i.merchant, i.amount, "
+    rows = query_all(f"SELECT i.tx_date, i.description, i.merchant, i.amount, "
                 f"c.name AS category_name, c.color AS category_color "
                 f"FROM imported_transactions i "
                 f"LEFT JOIN categories c ON c.id = i.category_id AND c.user_id = i.user_id "
                 f"WHERE i.user_id = ? AND {clause} AND NOT i.is_transfer "
-                f"AND i.tx_date > ? AND i.tx_date <= ? ORDER BY i.tx_date, i.id",
-                [user_id, *params, after, close],
-            )
-        )
+                f"AND i.tx_date > ? AND i.tx_date <= ? ORDER BY i.tx_date, i.id", [user_id, *params, after, close])
     items: List[Dict[str, Any]] = []
     for row in rows:
         tx_date = row["tx_date"]
@@ -1643,14 +1548,8 @@ def match_card_payments(user_id: int) -> List[Dict[str, Any]]:
     checking_ids = {aid for aid, a in accounts.items() if a.get("account_type") == "checking"}
     card_ids = {aid for aid, a in accounts.items() if a.get("account_type") == "credit_card"}
 
-    with get_connection() as conn:
-        rows = rows_to_dicts(
-            conn.execute(
-                "SELECT id, account_id, account, tx_date, amount FROM imported_transactions "
-                "WHERE user_id = ? AND is_transfer",
-                [user_id],
-            )
-        )
+    rows = query_all("SELECT id, account_id, account, tx_date, amount FROM imported_transactions "
+                "WHERE user_id = ? AND is_transfer", [user_id])
     checking_txns: List[Dict[str, Any]] = []
     card_txns: List[Dict[str, Any]] = []
     for row in rows:
@@ -1772,9 +1671,7 @@ def _budget_actuals_by_category(
     """Actual imported spend/income in the window grouped by *effective* category
     (COALESCE reconciled item's category, import category). Transfers excluded so
     card payments never count as spending. Returns keyed by lower(name) ('' = none)."""
-    with get_connection() as conn:
-        rows = conn.execute(
-            """
+    rows = fetch_all("""
             SELECT COALESCE(ec.name, ic.name) AS cat_name,
                    COALESCE(ec.color, ic.color) AS cat_color,
                    COALESCE(SUM(i.amount), 0) AS total
@@ -1792,9 +1689,7 @@ def _budget_actuals_by_category(
             WHERE i.user_id = ? AND NOT i.is_transfer
               AND i.tx_date >= ? AND i.tx_date <= ?
             GROUP BY 1, 2
-            """,
-            [user_id, window_start, window_end],
-        ).fetchall()
+            """, [user_id, window_start, window_end])
 
     result: Dict[str, Dict[str, Any]] = {}
     for cat_name, cat_color, total in rows:
@@ -1817,9 +1712,7 @@ def _budget_actuals_by_item(
     line item via its reconciliation. Keyed by (source_type, source_id) ->
     expense as a positive number. Only reconciled, non-transfer imports count;
     unreconciled category spend belongs to the category, not to any one item."""
-    with get_connection() as conn:
-        rows = conn.execute(
-            """
+    rows = fetch_all("""
             SELECT r.source_type, r.source_id, COALESCE(SUM(i.amount), 0) AS total
             FROM imported_transactions i
             JOIN expected_reconciliations r
@@ -1827,9 +1720,7 @@ def _budget_actuals_by_item(
             WHERE i.user_id = ? AND NOT i.is_transfer
               AND i.tx_date >= ? AND i.tx_date <= ?
             GROUP BY 1, 2
-            """,
-            [user_id, window_start, window_end],
-        ).fetchall()
+            """, [user_id, window_start, window_end])
     result: Dict[tuple, float] = {}
     for source_type, source_id, total in rows:
         total = float(total)
@@ -2163,7 +2054,6 @@ def build_monthly_totals(
 # are flagged is_transfer=True so they net out of spending totals.
 # ---------------------------------------------------------------------------
 
-IMPORT_FLOWS = {"income", "expense", "refund", "transfer", "fee"}
 _IMPORT_SQUASH_RE = re.compile(r"\s+")
 _CARD_PAYMENT_RE = re.compile(r"PAYMENT|THANK YOU", re.IGNORECASE)
 _CHECKING_PAYS_CARD_RE = re.compile(
@@ -2568,8 +2458,7 @@ def load_imported_transactions(
     query += " ORDER BY i.tx_date DESC, i.id DESC LIMIT ?"
     params.append(limit)
 
-    with get_connection() as conn:
-        rows = rows_to_dicts(conn.execute(query, params))
+    rows = query_all(query, params)
 
     for row in rows:
         tx_date = row["tx_date"]
@@ -2580,11 +2469,7 @@ def load_imported_transactions(
 
 
 def load_imported_accounts(user_id: int) -> List[str]:
-    with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT DISTINCT account FROM imported_transactions WHERE user_id = ? ORDER BY account",
-            [user_id],
-        ).fetchall()
+    rows = fetch_all("SELECT DISTINCT account FROM imported_transactions WHERE user_id = ? ORDER BY account", [user_id])
     return [row[0] for row in rows]
 
 
@@ -2592,17 +2477,13 @@ def load_unmapped_import_labels(user_id: int) -> List[Dict[str, Any]]:
     """Distinct imported-account labels whose rows are not yet anchored to an
     account (account_id IS NULL) — i.e. the labels of already-renamed accounts
     that the exact-name backfill could not match. Each entry: {label, count}."""
-    with get_connection() as conn:
-        rows = conn.execute(
-            """
+    rows = fetch_all("""
             SELECT account, COUNT(*) AS n
             FROM imported_transactions
             WHERE user_id = ? AND account_id IS NULL
             GROUP BY account
             ORDER BY account
-            """,
-            [user_id],
-        ).fetchall()
+            """, [user_id])
     return [{"label": row[0], "count": int(row[1])} for row in rows]
 
 
@@ -2648,10 +2529,7 @@ def _row_to_import_template(row: Dict[str, Any]) -> Dict[str, Any]:
 
 def load_import_templates(user_id: int) -> List[Dict[str, Any]]:
     """User-defined CSV templates joined to their target account (name + type)."""
-    with get_connection() as conn:
-        rows = rows_to_dicts(
-            conn.execute(
-                """
+    rows = query_all("""
                 SELECT t.id, t.name, t.account_id, t.date_field, t.date_format,
                        t.amount_field, t.amount_sign, t.type_field, t.credit_value,
                        t.description_field, t.merchant_field, t.signature,
@@ -2660,10 +2538,7 @@ def load_import_templates(user_id: int) -> List[Dict[str, Any]]:
                 JOIN accounts a ON a.id = t.account_id AND a.user_id = t.user_id
                 WHERE t.user_id = ?
                 ORDER BY LOWER(t.name), t.id
-                """,
-                [user_id],
-            )
-        )
+                """, [user_id])
     return [_row_to_import_template(row) for row in rows]
 
 
@@ -2672,11 +2547,6 @@ def load_import_template(user_id: int, template_id: int) -> Optional[Dict[str, A
         if int(template["id"]) == int(template_id):
             return template
     return None
-
-
-def _clean_signature(columns: List[str]) -> str:
-    cleaned = [str(col).strip() for col in columns if str(col).strip()]
-    return json.dumps(cleaned)
 
 
 def save_import_template(
@@ -2746,10 +2616,7 @@ def save_import_template(
 
 
 def delete_import_template(user_id: int, template_id: int) -> None:
-    with get_connection() as conn:
-        conn.execute(
-            "DELETE FROM import_templates WHERE id = ? AND user_id = ?", [int(template_id), user_id]
-        )
+    execute("DELETE FROM import_templates WHERE id = ? AND user_id = ?", [int(template_id), user_id])
 
 
 def summarize_imported(user_id: int) -> Dict[str, Any]:
@@ -2804,27 +2671,19 @@ def summarize_imported(user_id: int) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 EXPECTED_SOURCE_TYPES = {"recurring", "one_time"}
-_OPEN_WINDOW_START = date(1970, 1, 1)
-_OPEN_WINDOW_END = date(2999, 12, 31)
 RECONCILE_OCCURRENCE_TOLERANCE_DAYS = 10
 
 
 def load_all_manual_transactions(user_id: int) -> List[Dict[str, Any]]:
     """Raw one-off (manual) transactions for a user, newest first."""
-    with get_connection() as conn:
-        rows = rows_to_dicts(
-            conn.execute(
-                """
+    rows = query_all("""
                 SELECT m.id, m.name, m.kind, m.amount, m.tx_date, m.category_id, m.account_id,
                        c.name AS category_name, c.color AS category_color
                 FROM manual_transactions m
                 LEFT JOIN categories c ON c.id = m.category_id AND c.user_id = m.user_id
                 WHERE m.user_id = ?
                 ORDER BY m.tx_date DESC, m.id DESC
-                """,
-                [user_id],
-            )
-        )
+                """, [user_id])
     for row in rows:
         if isinstance(row["tx_date"], datetime):
             row["tx_date"] = row["tx_date"].date()
@@ -2975,11 +2834,7 @@ def _classify_suggest_cadence(median_gap: float):
 
 
 def load_dismissed_suggestion_keys(user_id: int) -> set:
-    with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT suggestion_key FROM dismissed_suggestions WHERE user_id = ?",
-            [user_id],
-        ).fetchall()
+    rows = fetch_all("SELECT suggestion_key FROM dismissed_suggestions WHERE user_id = ?", [user_id])
     return {row[0] for row in rows}
 
 
@@ -2987,36 +2842,24 @@ def dismiss_suggestion(user_id: int, suggestion_key: str, reason: str = "dismiss
     key = (suggestion_key or "").strip()
     if not key:
         return
-    with get_connection() as conn:
-        conn.execute(
-            """
+    execute("""
             INSERT INTO dismissed_suggestions (user_id, suggestion_key, reason)
             VALUES (?, ?, ?)
             ON CONFLICT DO NOTHING
-            """,
-            [user_id, key, reason],
-        )
+            """, [user_id, key, reason])
 
 
 def count_dismissed_suggestions(user_id: int) -> int:
     """How many suggestions the user manually dismissed (restorable). Excludes
     'added' rows, which suppress already-confirmed items and should stay hidden."""
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) FROM dismissed_suggestions WHERE user_id = ? AND reason = 'dismissed'",
-            [user_id],
-        ).fetchone()
+    row = fetch_one("SELECT COUNT(*) FROM dismissed_suggestions WHERE user_id = ? AND reason = 'dismissed'", [user_id])
     return int(row[0]) if row else 0
 
 
 def reset_dismissed_suggestions(user_id: int) -> None:
     """Restore manually-dismissed suggestions. Leaves 'added' suppressions intact
     so items already turned into recurring rules are not re-suggested."""
-    with get_connection() as conn:
-        conn.execute(
-            "DELETE FROM dismissed_suggestions WHERE user_id = ? AND reason = 'dismissed'",
-            [user_id],
-        )
+    execute("DELETE FROM dismissed_suggestions WHERE user_id = ? AND reason = 'dismissed'", [user_id])
 
 
 def _median(values: List[float]) -> float:
@@ -3065,10 +2908,7 @@ def detect_recurring_suggestions(
     categories = {int(c["id"]): c for c in load_categories(user_id)}
     dismissed = load_dismissed_suggestion_keys(user_id)
 
-    with get_connection() as conn:
-        rows = rows_to_dicts(
-            conn.execute(
-                """
+    rows = query_all("""
                 SELECT i.id, i.account, i.tx_date, i.description, i.merchant,
                        i.amount, i.category_id,
                        CASE WHEN r.source_type = 'recurring' THEN 1 ELSE 0 END AS recon_recurring
@@ -3079,10 +2919,7 @@ def detect_recurring_suggestions(
                   AND NOT i.is_transfer
                   AND i.tx_date >= ?
                 ORDER BY i.tx_date
-                """,
-                [user_id, since],
-            )
-        )
+                """, [user_id, since])
 
     groups: Dict[str, List[Dict[str, Any]]] = {}
     for row in rows:
@@ -3170,10 +3007,7 @@ def find_amount_suggestions(user_id: int, kind: str, amount: float, limit: int =
     target = abs(float(amount))
     tolerance = round(max(target * 0.02, 0.0), 2)
     sign_condition = "i.amount < 0" if kind == "expense" else "i.amount > 0"
-    with get_connection() as conn:
-        rows = rows_to_dicts(
-            conn.execute(
-                f"""
+    rows = query_all(f"""
                 SELECT i.id, i.account, i.tx_date, i.description, i.merchant, i.amount, i.flow
                 FROM imported_transactions i
                 WHERE i.user_id = ?
@@ -3185,10 +3019,7 @@ def find_amount_suggestions(user_id: int, kind: str, amount: float, limit: int =
                   )
                 ORDER BY ABS(ABS(i.amount) - ?) ASC, i.tx_date DESC
                 LIMIT ?
-                """,
-                [user_id, target, tolerance, user_id, target, limit],
-            )
-        )
+                """, [user_id, target, tolerance, user_id, target, limit])
     for row in rows:
         if isinstance(row["tx_date"], datetime):
             row["tx_date"] = row["tx_date"].date()
@@ -3255,14 +3086,8 @@ def _rule_amount_display(amount_min: Any, amount_max: Any) -> Dict[str, Any]:
 
 
 def load_match_rules_for_item(user_id: int, source_type: str, source_id: int) -> List[Dict[str, Any]]:
-    with get_connection() as conn:
-        rules = rows_to_dicts(
-            conn.execute(
-                "SELECT id, pattern, amount_min, amount_max FROM expected_match_rules "
-                "WHERE user_id = ? AND source_type = ? AND source_id = ? ORDER BY id",
-                [user_id, source_type, source_id],
-            )
-        )
+    rules = query_all("SELECT id, pattern, amount_min, amount_max FROM expected_match_rules "
+                "WHERE user_id = ? AND source_type = ? AND source_id = ? ORDER BY id", [user_id, source_type, source_id])
     for rule in rules:
         rule.update(_rule_amount_display(rule.get("amount_min"), rule.get("amount_max")))
     return rules
@@ -3392,12 +3217,8 @@ def create_match_rule(
     if not cleaned:
         raise ValueError("Match pattern cannot be empty")
     lo, hi = _validate_amount_bounds(amount_min, amount_max)
-    with get_connection() as conn:
-        row = conn.execute(
-            "INSERT INTO expected_match_rules (user_id, source_type, source_id, pattern, amount_min, amount_max) "
-            "VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
-            [user_id, source_type, source_id, cleaned, lo, hi],
-        ).fetchone()
+    row = fetch_one("INSERT INTO expected_match_rules (user_id, source_type, source_id, pattern, amount_min, amount_max) "
+            "VALUES (?, ?, ?, ?, ?, ?) RETURNING id", [user_id, source_type, source_id, cleaned, lo, hi])
     resync_item_rules(user_id, source_type, source_id)
     return int(row[0])
 
@@ -3439,17 +3260,11 @@ def delete_match_rule(user_id: int, rule_id: int) -> None:
 
 
 def unlink_reconciliation(user_id: int, recon_id: int) -> None:
-    with get_connection() as conn:
-        conn.execute(
-            "DELETE FROM expected_reconciliations WHERE id = ? AND user_id = ?", [recon_id, user_id]
-        )
+    execute("DELETE FROM expected_reconciliations WHERE id = ? AND user_id = ?", [recon_id, user_id])
 
 
 def load_reconciliations_for_item(user_id: int, source_type: str, source_id: int) -> List[Dict[str, Any]]:
-    with get_connection() as conn:
-        rows = rows_to_dicts(
-            conn.execute(
-                """
+    rows = query_all("""
                 SELECT r.id AS recon_id, r.matched_via, r.imported_transaction_id,
                        i.account, i.tx_date, i.description, i.merchant, i.amount, i.flow
                 FROM expected_reconciliations r
@@ -3457,10 +3272,7 @@ def load_reconciliations_for_item(user_id: int, source_type: str, source_id: int
                   ON i.id = r.imported_transaction_id AND i.user_id = r.user_id
                 WHERE r.user_id = ? AND r.source_type = ? AND r.source_id = ?
                 ORDER BY i.tx_date DESC
-                """,
-                [user_id, source_type, source_id],
-            )
-        )
+                """, [user_id, source_type, source_id])
     for row in rows:
         if isinstance(row["tx_date"], datetime):
             row["tx_date"] = row["tx_date"].date()
@@ -3469,12 +3281,8 @@ def load_reconciliations_for_item(user_id: int, source_type: str, source_id: int
 
 def load_reconciliation_counts(user_id: int) -> Dict[tuple, int]:
     """(source_type, source_id) -> number of linked actuals, for the list page."""
-    with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT source_type, source_id, COUNT(*) FROM expected_reconciliations "
-            "WHERE user_id = ? GROUP BY source_type, source_id",
-            [user_id],
-        ).fetchall()
+    rows = fetch_all("SELECT source_type, source_id, COUNT(*) FROM expected_reconciliations "
+            "WHERE user_id = ? GROUP BY source_type, source_id", [user_id])
     return {(row[0], int(row[1])): int(row[2]) for row in rows}
 
 
