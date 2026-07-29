@@ -1,29 +1,30 @@
+from typing import Optional
+
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 
 from services import (
     DEFAULT_CATEGORY_COLOR,
+    create_category_rule,
+    delete_category_rule,
     get_connection,
-    load_categories_with_usage,
+    load_categories,
     load_category_by_id,
+    load_category_rules,
     normalize_hex_color,
+    parse_optional_float,
     redirect_with_message,
+    set_category_budget,
 )
 from web import CurrentUser, render
 
 router = APIRouter()
 
 
-@router.get("/categories", response_class=HTMLResponse)
-def categories_page(request: Request, user: CurrentUser, msg: str = "", err: int = 0):
-    return render(
-        request,
-        "categories.html",
-        msg,
-        err,
-        categories=load_categories_with_usage(user["id"]),
-        default_color=DEFAULT_CATEGORY_COLOR,
-    )
+@router.get("/categories")
+def categories_page(request: Request, user: CurrentUser):
+    """Retired. Budget is the single hub for budgets and categories."""
+    return redirect_with_message("/budget", "")
 
 
 @router.post("/categories")
@@ -46,23 +47,26 @@ def create_category(request: Request, user: CurrentUser, name: str = Form(...), 
                 [cleaned_name, normalized_color, user["id"]],
             )
     except ValueError as exc:
-        return redirect_with_message("/categories", str(exc), is_error=True)
+        return redirect_with_message("/budget", str(exc), is_error=True)
 
-    return redirect_with_message("/categories", "Category added")
+    return redirect_with_message("/budget", "Category added")
 
 
 @router.get("/categories/{category_id}/edit", response_class=HTMLResponse)
 def edit_category_page(request: Request, user: CurrentUser, category_id: int, msg: str = "", err: int = 0):
     category = load_category_by_id(user["id"], category_id)
     if not category:
-        return redirect_with_message("/categories", "Category not found", is_error=True)
+        return redirect_with_message("/budget", "Category not found", is_error=True)
 
+    rules = [rule for rule in load_category_rules(user["id"]) if int(rule["category_id"]) == category_id]
     return render(
         request,
         "category_edit.html",
         msg,
         err,
         category=category,
+        rules=rules,
+        categories=load_categories(user["id"]),
     )
 
 
@@ -70,7 +74,7 @@ def edit_category_page(request: Request, user: CurrentUser, category_id: int, ms
 def edit_category(request: Request, user: CurrentUser, category_id: int, name: str = Form(...), color: str = Form(...)):
     category = load_category_by_id(user["id"], category_id)
     if not category:
-        return redirect_with_message("/categories", "Category not found", is_error=True)
+        return redirect_with_message("/budget", "Category not found", is_error=True)
 
     try:
         cleaned_name = name.strip()
@@ -90,16 +94,59 @@ def edit_category(request: Request, user: CurrentUser, category_id: int, name: s
                 [cleaned_name, normalized_color, category_id, user["id"]],
             )
     except ValueError as exc:
-        target = f"/categories/{category_id}/edit"
-        return redirect_with_message(target, str(exc), is_error=True)
+        return redirect_with_message(f"/categories/{category_id}/edit", str(exc), is_error=True)
 
-    return redirect_with_message("/categories", "Category updated")
+    return redirect_with_message("/budget", "Category updated")
+
+
+@router.post("/categories/{category_id}/budget")
+def update_category_budget(
+    request: Request, user: CurrentUser, category_id: int, budget_amount: str = Form("")
+):
+    """Set or clear a category's explicit monthly budget. Blank clears it, which
+    hands the category back to a budget derived from its expected items."""
+    if not load_category_by_id(user["id"], category_id):
+        return redirect_with_message("/budget", "Category not found", is_error=True)
+
+    try:
+        amount: Optional[float] = parse_optional_float(budget_amount)
+        set_category_budget(user["id"], category_id, amount)
+    except ValueError as exc:
+        return redirect_with_message("/budget", str(exc), is_error=True)
+
+    return redirect_with_message("/budget", "Budget cleared" if amount is None else "Budget saved")
+
+
+@router.post("/categories/{category_id}/rules")
+def add_category_rule(
+    request: Request, user: CurrentUser, category_id: int,
+    pattern: str = Form(...),
+    amount_min: str = Form(""),
+    amount_max: str = Form(""),
+):
+    try:
+        create_category_rule(
+            user["id"], category_id, pattern,
+            parse_optional_float(amount_min), parse_optional_float(amount_max),
+        )
+    except ValueError as exc:
+        return redirect_with_message(f"/categories/{category_id}/edit", str(exc), is_error=True)
+
+    return redirect_with_message(
+        f"/categories/{category_id}/edit", "Rule saved — matching transactions categorized"
+    )
+
+
+@router.post("/categories/{category_id}/rules/{rule_id}/delete")
+def remove_category_rule(request: Request, user: CurrentUser, category_id: int, rule_id: int):
+    delete_category_rule(user["id"], rule_id)
+    return redirect_with_message(f"/categories/{category_id}/edit", "Rule deleted")
 
 
 @router.post("/categories/{category_id}/delete")
 def delete_category(request: Request, user: CurrentUser, category_id: int):
     if not load_category_by_id(user["id"], category_id):
-        return redirect_with_message("/categories", "Category not found", is_error=True)
+        return redirect_with_message("/budget", "Category not found", is_error=True)
 
     with get_connection() as conn:
         conn.execute(
@@ -110,6 +157,15 @@ def delete_category(request: Request, user: CurrentUser, category_id: int):
             "UPDATE manual_transactions SET category_id = NULL WHERE category_id = ? AND user_id = ?",
             [category_id, user["id"]],
         )
+        # Anything that pointed imported rows at this category goes with it,
+        # otherwise deleted categories leave orphaned splits and rules behind.
+        conn.execute(
+            "UPDATE imported_transactions SET category_id = NULL, category_via = NULL "
+            "WHERE category_id = ? AND user_id = ?",
+            [category_id, user["id"]],
+        )
+        conn.execute("DELETE FROM category_rules WHERE category_id = ? AND user_id = ?", [category_id, user["id"]])
+        conn.execute("DELETE FROM transaction_splits WHERE category_id = ? AND user_id = ?", [category_id, user["id"]])
         conn.execute("DELETE FROM categories WHERE id = ? AND user_id = ?", [category_id, user["id"]])
 
-    return redirect_with_message("/categories", "Category deleted")
+    return redirect_with_message("/budget", "Category deleted")

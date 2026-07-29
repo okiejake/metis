@@ -25,6 +25,9 @@
   --accent: var(--steel-blue);
   --success: var(--green);
   --success-soft: color-mix(in srgb, var(--green) 14%, var(--platinum));
+  /* Overspend. The palette's --danger is steel-blue, but a budget blown past
+     its limit is the one place the UI should actually read as red. */
+  --over: #b3261e;
   --danger: var(--steel-blue);
   --danger-soft: color-mix(in srgb, var(--steel-blue) 14%, var(--platinum));
   --warning: color-mix(in srgb, var(--steel-blue) 70%, var(--green));
@@ -910,16 +913,175 @@ button.danger,
   margin-top: 1.5rem;
 }
 
-.budget-vs-actual-table {
+/* Shared disclosure chevron: ledger card-payment rows and budget categories. */
+.card-expand-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0;
+  color: inherit;
+  transition: transform 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 999px;
+  vertical-align: middle;
+  margin-right: 0.25rem;
+}
+
+.card-expand-toggle.is-open {
+  transform: rotate(90deg);
+}
+
+.budget-detail-controls {
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+
+.budget-expand-controls {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.category-add-form {
   margin-top: 0.75rem;
 }
 
-.budget-vs-actual-table .budget-item-row {
-  display: none;
+/* Budget bars: green fill to the budget, red tail past it. The track spans
+   max(actual, budget), so an overspend reads as proportional overflow. */
+.budget-bars {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 1.1rem;
 }
 
-.budget-vs-actual-table.show-items .budget-item-row {
-  display: table-row;
+.budget-bar-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.budget-bar-figures {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.budget-bar-actual {
+  font-weight: 600;
+}
+
+.budget-bar-sep,
+.budget-bar-target,
+.budget-bar-untargeted {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.budget-bar-over {
+  color: var(--over);
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.budget-bar-track {
+  position: relative;
+  display: flex;
+  height: 0.6rem;
+  margin-top: 0.4rem;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  overflow: hidden;
+}
+
+.budget-bar-fill {
+  background: var(--success);
+  transition: width 0.2s ease;
+}
+
+.budget-bar-overflow {
+  background: var(--over);
+  transition: width 0.2s ease;
+}
+
+.budget-bar-row.no-target .budget-bar-track {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--surface-muted),
+    var(--surface-muted) 6px,
+    transparent 6px,
+    transparent 12px
+  );
+}
+
+.budget-bar-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+
+.budget-bar-detail {
+  margin-top: 0.6rem;
+  padding: 0.6rem 0.75rem 0.7rem 1.75rem;
+  border-left: 2px solid var(--line);
+}
+
+.budget-bar-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.budget-set-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+
+.budget-set-form input {
+  width: 9rem;
+}
+
+.budget-set-label {
+  display: block;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.budget-bar-items {
+  display: grid;
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0;
+  gap: 0.25rem;
+}
+
+.budget-bar-items li {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  font-size: 0.9rem;
+}
+
+.budget-bars-total {
+  margin-top: 1.25rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  flex-wrap: wrap;
 }
 
 .budget-item-name {
@@ -1519,6 +1681,8 @@ body.amounts-hidden .amount-sensitive {
   --muted: color-mix(in srgb, var(--platinum) 70%, var(--ink));
   --line: color-mix(in srgb, var(--platinum) 16%, transparent);
   --line-strong: color-mix(in srgb, var(--platinum) 28%, transparent);
+  /* Lifted so overspend still reads as red against the dark panel. */
+  --over: #f2685c;
   --primary: var(--steel-blue);
   --primary-ink: color-mix(in srgb, var(--platinum) 85%, var(--steel-blue));
   --on-primary: #f6f4f2;

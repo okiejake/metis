@@ -5,6 +5,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from services import (
+    DEFAULT_CATEGORY_COLOR,
     EXPECTED_SOURCE_TYPES,
     VALID_KINDS,
     build_budget_summary,
@@ -84,6 +85,7 @@ def budget_page(request: Request, user: CurrentUser, start: str = "", end: str =
         dismissed_count=dismissed_count,
         categories=load_categories(user["id"]),
         accounts=load_accounts(user["id"]),
+        default_color=DEFAULT_CATEGORY_COLOR,
         today_iso=date.today().isoformat(),
         start=window_start.isoformat(),
         end=window_end.isoformat(),

@@ -160,6 +160,8 @@ def delete_user_and_data(user_id: int) -> None:
         conn.execute("DELETE FROM imported_transactions WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM expected_reconciliations WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM expected_match_rules WHERE user_id = ?", [user_id])
+        conn.execute("DELETE FROM category_rules WHERE user_id = ?", [user_id])
+        conn.execute("DELETE FROM transaction_splits WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM accounts WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM categories WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM settings WHERE key LIKE ?", [f"user:{user_id}:%"])
@@ -178,6 +180,8 @@ def init_db() -> None:
         conn.execute("CREATE SEQUENCE IF NOT EXISTS expected_match_rules_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS accounts_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS import_templates_id_seq START 1")
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS category_rules_id_seq START 1")
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS transaction_splits_id_seq START 1")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -317,6 +321,32 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS transaction_splits (
+                id BIGINT PRIMARY KEY DEFAULT nextval('transaction_splits_id_seq'),
+                user_id BIGINT NOT NULL,
+                imported_transaction_id BIGINT NOT NULL,
+                category_id BIGINT NOT NULL,
+                amount DOUBLE NOT NULL,
+                note TEXT,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS category_rules (
+                id BIGINT PRIMARY KEY DEFAULT nextval('category_rules_id_seq'),
+                user_id BIGINT NOT NULL,
+                category_id BIGINT NOT NULL,
+                pattern TEXT NOT NULL,
+                amount_min DOUBLE,
+                amount_max DOUBLE,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS accounts (
                 id BIGINT PRIMARY KEY DEFAULT nextval('accounts_id_seq'),
                 user_id BIGINT NOT NULL,
@@ -380,6 +410,10 @@ def init_db() -> None:
             conn.execute("ALTER TABLE categories ADD COLUMN color TEXT")
         if not table_has_column(conn, "categories", "user_id"):
             conn.execute("ALTER TABLE categories ADD COLUMN user_id BIGINT")
+        # Optional explicit monthly budget for a category. NULL = derive the budget
+        # from the category's expected items, as before.
+        if not table_has_column(conn, "categories", "budget_amount"):
+            conn.execute("ALTER TABLE categories ADD COLUMN budget_amount DOUBLE")
         if not table_has_column(conn, "recurring_items", "user_id"):
             conn.execute("ALTER TABLE recurring_items ADD COLUMN user_id BIGINT")
         if not table_has_column(conn, "manual_transactions", "user_id"):
@@ -394,6 +428,10 @@ def init_db() -> None:
         # Per-account so no issuer name has to live in the code.
         if not table_has_column(conn, "accounts", "payment_pattern"):
             conn.execute("ALTER TABLE accounts ADD COLUMN payment_pattern TEXT")
+        # How an imported row got its category: 'rule' (set by a category rule, and
+        # therefore safe to recompute) vs 'manual' (you chose it — rules never clobber it).
+        if not table_has_column(conn, "imported_transactions", "category_via"):
+            conn.execute("ALTER TABLE imported_transactions ADD COLUMN category_via TEXT")
         if not table_has_column(conn, "users", "email"):
             conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
         migrate_categories_to_user_scoped_uniqueness(conn, default_user_id)
@@ -429,6 +467,9 @@ def init_db() -> None:
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reconciliation_import_unique ON expected_reconciliations(user_id, imported_transaction_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_reconciliation_source ON expected_reconciliations(user_id, source_type, source_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_match_rules_source ON expected_match_rules(user_id, source_type, source_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_category_rules_user ON category_rules(user_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_category_rules_category ON category_rules(user_id, category_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_transaction_splits_tx ON transaction_splits(user_id, imported_transaction_id)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_user_name_unique ON accounts(user_id, name)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_recurring_items_account ON recurring_items(user_id, account_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_manual_transactions_account ON manual_transactions(user_id, account_id)")
@@ -580,6 +621,21 @@ def parse_positive_float(value: str) -> float:
     amount = float(value)
     if amount <= 0:
         raise ValueError("Amount must be greater than 0")
+    return amount
+
+
+def parse_optional_float(value: str) -> Optional[float]:
+    """Blank -> None, meaning 'no value' (a cleared budget, an unbounded rule).
+    Tolerates the $ and thousands separators people paste in."""
+    cleaned = (value or "").strip().replace(",", "").lstrip("$").strip()
+    if not cleaned:
+        return None
+    try:
+        amount = float(cleaned)
+    except ValueError:
+        raise ValueError("Enter a valid amount")
+    if amount < 0:
+        raise ValueError("Amount cannot be negative")
     return amount
 
 
@@ -738,13 +794,58 @@ def load_categories_with_usage(user_id: int) -> List[Dict[str, Any]]:
 
 def load_category_by_id(user_id: int, category_id: int) -> Optional[Dict[str, Any]]:
     row = fetch_one("""
-            SELECT id, name, color
+            SELECT id, name, color, budget_amount
             FROM categories
             WHERE id = ? AND user_id = ?
             """, [category_id, user_id])
     if not row:
         return None
-    return {"id": int(row[0]), "name": row[1], "color": safe_hex_color(row[2])}
+    return {
+        "id": int(row[0]),
+        "name": row[1],
+        "color": safe_hex_color(row[2]),
+        "budget_amount": float(row[3]) if row[3] is not None else None,
+    }
+
+
+def set_category_budget(user_id: int, category_id: int, amount: Optional[float]) -> None:
+    """Set (or clear, with None) a category's explicit monthly budget. When set it
+    replaces the budget derived from that category's expected items."""
+    if amount is not None and amount < 0:
+        raise ValueError("A budget cannot be negative")
+    execute(
+        "UPDATE categories SET budget_amount = ? WHERE id = ? AND user_id = ?",
+        [amount, category_id, user_id],
+    )
+
+
+def load_category_budgets(user_id: int) -> Dict[str, float]:
+    """lower(name) -> explicit monthly budget, for categories that have one."""
+    rows = fetch_all(
+        "SELECT name, budget_amount FROM categories WHERE user_id = ? AND budget_amount IS NOT NULL",
+        [user_id],
+    )
+    return {str(name).strip().lower(): float(amount) for name, amount in rows}
+
+
+def window_month_fraction(window_start: date, window_end: date) -> float:
+    """How many months the window covers, prorated by days so a full calendar
+    month counts 1.0 and half of March counts 0.5. Explicit budgets are stored
+    monthly, so this is what scales them to whatever window you're looking at."""
+    if window_end < window_start:
+        return 0.0
+    total = 0.0
+    cursor = date(window_start.year, window_start.month, 1)
+    end_month = date(window_end.year, window_end.month, 1)
+    while cursor <= end_month:
+        days_in_month = (add_months(cursor, 1) - cursor).days
+        month_last_day = add_months(cursor, 1) - timedelta(days=1)
+        overlap_start = max(window_start, cursor)
+        overlap_end = min(window_end, month_last_day)
+        if overlap_end >= overlap_start:
+            total += ((overlap_end - overlap_start).days + 1) / days_in_month
+        cursor = add_months(cursor, 1)
+    return round(total, 4)
 
 
 def parse_optional_category_id(user_id: int, value: str) -> Optional[int]:
@@ -1675,26 +1776,49 @@ def _budget_actuals_by_category(
 ) -> Dict[str, Dict[str, Any]]:
     """Actual imported spend/income in the window grouped by *effective* category
     (COALESCE reconciled item's category, import category). Transfers excluded so
-    card payments never count as spending. Returns keyed by lower(name) ('' = none)."""
+    card payments never count as spending. Split transactions contribute each part
+    to its own category and only the remainder to their effective category.
+    Returns keyed by lower(name) ('' = none)."""
     rows = fetch_all("""
-            SELECT COALESCE(ec.name, ic.name) AS cat_name,
-                   COALESCE(ec.color, ic.color) AS cat_color,
-                   COALESCE(SUM(i.amount), 0) AS total
-            FROM imported_transactions i
-            LEFT JOIN expected_reconciliations r
-                   ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
-            LEFT JOIN recurring_items ri
-                   ON r.source_type = 'recurring' AND ri.id = r.source_id AND ri.user_id = i.user_id
-            LEFT JOIN manual_transactions mt
-                   ON r.source_type = 'one_time' AND mt.id = r.source_id AND mt.user_id = i.user_id
-            LEFT JOIN categories ec
-                   ON ec.id = COALESCE(ri.category_id, mt.category_id) AND ec.user_id = i.user_id
-            LEFT JOIN categories ic
-                   ON ic.id = i.category_id AND ic.user_id = i.user_id
-            WHERE i.user_id = ? AND NOT i.is_transfer
-              AND i.tx_date >= ? AND i.tx_date <= ?
+            WITH tx AS (
+                SELECT i.id, i.amount,
+                       COALESCE(ec.name, ic.name) AS cat_name,
+                       COALESCE(ec.color, ic.color) AS cat_color
+                FROM imported_transactions i
+                LEFT JOIN expected_reconciliations r
+                       ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
+                LEFT JOIN recurring_items ri
+                       ON r.source_type = 'recurring' AND ri.id = r.source_id AND ri.user_id = i.user_id
+                LEFT JOIN manual_transactions mt
+                       ON r.source_type = 'one_time' AND mt.id = r.source_id AND mt.user_id = i.user_id
+                LEFT JOIN categories ec
+                       ON ec.id = COALESCE(ri.category_id, mt.category_id) AND ec.user_id = i.user_id
+                LEFT JOIN categories ic
+                       ON ic.id = i.category_id AND ic.user_id = i.user_id
+                WHERE i.user_id = ? AND NOT i.is_transfer
+                  AND i.tx_date >= ? AND i.tx_date <= ?
+            ),
+            allocated AS (
+                SELECT imported_transaction_id AS tx_id, COALESCE(SUM(amount), 0) AS part_total
+                FROM transaction_splits WHERE user_id = ? GROUP BY 1
+            ),
+            parts AS (
+                -- What is left after splitting, on the transaction's own category.
+                SELECT tx.cat_name, tx.cat_color,
+                       SIGN(tx.amount) * (ABS(tx.amount) - COALESCE(a.part_total, 0)) AS total
+                FROM tx LEFT JOIN allocated a ON a.tx_id = tx.id
+                UNION ALL
+                -- Each split part, on the category it was assigned to.
+                SELECT sc.name, sc.color, SIGN(tx.amount) * ts.amount
+                FROM tx
+                JOIN transaction_splits ts
+                       ON ts.imported_transaction_id = tx.id AND ts.user_id = ?
+                JOIN categories sc ON sc.id = ts.category_id AND sc.user_id = ?
+            )
+            SELECT cat_name, cat_color, COALESCE(SUM(total), 0) AS total
+            FROM parts
             GROUP BY 1, 2
-            """, [user_id, window_start, window_end])
+            """, [user_id, window_start, window_end, user_id, user_id, user_id])
 
     result: Dict[str, Dict[str, Any]] = {}
     for cat_name, cat_color, total in rows:
@@ -1716,16 +1840,24 @@ def _budget_actuals_by_item(
     """Actual imported expense in the window attributed to a specific budgeted
     line item via its reconciliation. Keyed by (source_type, source_id) ->
     expense as a positive number. Only reconciled, non-transfer imports count;
-    unreconciled category spend belongs to the category, not to any one item."""
+    unreconciled category spend belongs to the category, not to any one item.
+    Split parts are subtracted — money moved to another category is no longer
+    this line item's spend."""
     rows = fetch_all("""
-            SELECT r.source_type, r.source_id, COALESCE(SUM(i.amount), 0) AS total
+            WITH allocated AS (
+                SELECT imported_transaction_id AS tx_id, COALESCE(SUM(amount), 0) AS part_total
+                FROM transaction_splits WHERE user_id = ? GROUP BY 1
+            )
+            SELECT r.source_type, r.source_id,
+                   COALESCE(SUM(SIGN(i.amount) * (ABS(i.amount) - COALESCE(a.part_total, 0))), 0) AS total
             FROM imported_transactions i
             JOIN expected_reconciliations r
                    ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
+            LEFT JOIN allocated a ON a.tx_id = i.id
             WHERE i.user_id = ? AND NOT i.is_transfer
               AND i.tx_date >= ? AND i.tx_date <= ?
             GROUP BY 1, 2
-            """, [user_id, window_start, window_end])
+            """, [user_id, user_id, window_start, window_end])
     result: Dict[tuple, float] = {}
     for source_type, source_id, total in rows:
         total = float(total)
@@ -1791,14 +1923,31 @@ def build_budget_summary(user_id: int, window_start: date, window_end: date) -> 
     item_actuals = _budget_actuals_by_item(user_id, window_start, window_end)
     actual_income = sum(bucket["income"] for bucket in actuals.values())
 
+    # --- Explicit per-category budgets, prorated to the window ---
+    # A category with its own monthly budget uses it instead of the sum of its
+    # expected items; the items still show underneath as detail.
+    monthly_budgets = load_category_budgets(user_id)
+    months = window_month_fraction(window_start, window_end)
+    category_meta = {c["name"].strip().lower(): c for c in load_categories(user_id)}
+
     # --- Merge expense categories from both sides ---
-    keys = set(budget_cats) | {k for k, v in actuals.items() if v["expense"] > 0.005}
+    keys = set(budget_cats) | {k for k, v in actuals.items() if v["expense"] > 0.005} | set(monthly_budgets)
     categories: List[Dict[str, Any]] = []
     for key in keys:
-        budgeted = round(budget_cats.get(key, {}).get("budgeted", 0.0), 2)
+        explicit_monthly = monthly_budgets.get(key)
+        if explicit_monthly is not None:
+            budgeted = round(explicit_monthly * months, 2)
+        else:
+            budgeted = round(budget_cats.get(key, {}).get("budgeted", 0.0), 2)
         actual = round(actuals.get(key, {}).get("expense", 0.0), 2)
-        name = budget_cats.get(key, {}).get("name") or actuals.get(key, {}).get("name") or "Uncategorized"
-        color = budget_cats.get(key, {}).get("color") or actuals.get(key, {}).get("color")
+        meta = category_meta.get(key, {})
+        name = (
+            budget_cats.get(key, {}).get("name")
+            or actuals.get(key, {}).get("name")
+            or meta.get("name")
+            or "Uncategorized"
+        )
+        color = budget_cats.get(key, {}).get("color") or actuals.get(key, {}).get("color") or meta.get("color")
         line_items = []
         for li in sorted(
             budget_cats.get(key, {}).get("line_items", []), key=lambda i: -i["budgeted"]
@@ -1811,13 +1960,30 @@ def build_budget_summary(user_id: int, window_start: date, window_end: date) -> 
                     "difference": round(li["budgeted"] - li_actual, 2),
                 }
             )
+        # Bar geometry, computed here so the template stays presentational. When
+        # spend exceeds the budget the track spans the actual, so the green stops
+        # at the budget and the red tail is the overage in proportion.
+        # No target means nothing to exceed — without this guard every unbudgeted
+        # category reads as "over" by the whole of its spend.
+        has_target = budgeted > 0.005
+        over = round(max(0.0, actual - budgeted), 2) if has_target else 0.0
+        span = max(actual, budgeted)
+        fill_pct = round(min(actual, budgeted) / span * 100, 2) if has_target and span else 0.0
+        over_pct = round(over / span * 100, 2) if has_target and span else 0.0
+
         categories.append(
             {
+                "id": meta.get("id"),
                 "name": name,
                 "color": safe_hex_color(color),
                 "budgeted": budgeted,
                 "actual": actual,
                 "difference": round(budgeted - actual, 2),
+                "over": over,
+                "has_target": has_target,
+                "explicit_monthly": explicit_monthly,
+                "fill_pct": fill_pct,
+                "over_pct": over_pct,
                 "line_items": line_items,
             }
         )
@@ -1828,6 +1994,7 @@ def build_budget_summary(user_id: int, window_start: date, window_end: date) -> 
     return {
         "window_start": window_start,
         "window_end": window_end,
+        "months": months,
         "categories": categories,
         "totals": {
             "budgeted": total_budgeted,
@@ -3458,6 +3625,301 @@ def reconciled_occurrence_dates(
         if dates:
             settled[item_id] = dates
     return settled
+
+
+# ---------------------------------------------------------------------------
+# Transaction splits
+#
+# One imported transaction, several categories — a $130 store run that is really
+# groceries + kids + household. Parts are stored as positive magnitudes; the sign
+# always follows the parent transaction, so a split can never flip an expense
+# into income.
+#
+# Splitting is partial by design: name the parts you care about and whatever is
+# left (the remainder) stays on the transaction's own effective category. That
+# keeps the ledger honest without forcing you to account for a whole receipt in
+# one sitting. Invariant: 0 <= sum(parts) <= abs(amount).
+# ---------------------------------------------------------------------------
+
+
+def load_imported_transaction_by_id(user_id: int, tx_id: int) -> Optional[Dict[str, Any]]:
+    """One imported transaction with its effective category (a reconciled expected
+    item's category wins over the import's own, matching the ledger and budget)."""
+    rows = query_all("""
+                SELECT i.id, i.tx_date, i.description, i.merchant, i.amount, i.account,
+                       i.is_transfer, i.category_id, i.category_via,
+                       COALESCE(ec.name, ic.name) AS category_name,
+                       COALESCE(ec.color, ic.color) AS category_color,
+                       COALESCE(ri.name, mt.name) AS expected_name
+                FROM imported_transactions i
+                LEFT JOIN expected_reconciliations r
+                       ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
+                LEFT JOIN recurring_items ri
+                       ON r.source_type = 'recurring' AND ri.id = r.source_id AND ri.user_id = i.user_id
+                LEFT JOIN manual_transactions mt
+                       ON r.source_type = 'one_time' AND mt.id = r.source_id AND mt.user_id = i.user_id
+                LEFT JOIN categories ec
+                       ON ec.id = COALESCE(ri.category_id, mt.category_id) AND ec.user_id = i.user_id
+                LEFT JOIN categories ic
+                       ON ic.id = i.category_id AND ic.user_id = i.user_id
+                WHERE i.id = ? AND i.user_id = ?
+                """, [tx_id, user_id])
+    if not rows:
+        return None
+    row = rows[0]
+    if isinstance(row["tx_date"], datetime):
+        row["tx_date"] = row["tx_date"].date()
+    row["category_color"] = safe_hex_color(row.get("category_color"))
+    row["magnitude"] = round(abs(float(row["amount"])), 2)
+    return row
+
+
+def load_transaction_splits(user_id: int, tx_id: int) -> List[Dict[str, Any]]:
+    """Split parts for one transaction, oldest first."""
+    rows = query_all("""
+                SELECT ts.id, ts.category_id, ts.amount, ts.note,
+                       c.name AS category_name, c.color AS category_color
+                FROM transaction_splits ts
+                JOIN categories c ON c.id = ts.category_id AND c.user_id = ts.user_id
+                WHERE ts.user_id = ? AND ts.imported_transaction_id = ?
+                ORDER BY ts.id
+                """, [user_id, tx_id])
+    for row in rows:
+        row["amount"] = round(float(row["amount"]), 2)
+        row["category_color"] = safe_hex_color(row.get("category_color"))
+    return rows
+
+
+def split_remainder(user_id: int, tx_id: int) -> float:
+    """What is left on the transaction's own category after its split parts."""
+    transaction = load_imported_transaction_by_id(user_id, tx_id)
+    if not transaction:
+        return 0.0
+    allocated = sum(part["amount"] for part in load_transaction_splits(user_id, tx_id))
+    return round(float(transaction["magnitude"]) - allocated, 2)
+
+
+def save_transaction_splits(
+    user_id: int, tx_id: int, parts: List[Dict[str, Any]]
+) -> float:
+    """Replace a transaction's split parts wholesale. `parts` is a list of
+    {category_id, amount, note}; blank/zero amounts are dropped so an emptied row
+    in the editor simply removes that part. Returns the resulting remainder."""
+    transaction = load_imported_transaction_by_id(user_id, tx_id)
+    if not transaction:
+        raise ValueError("Transaction not found")
+
+    magnitude = float(transaction["magnitude"])
+    cleaned: List[Dict[str, Any]] = []
+    for part in parts:
+        amount = round(float(part.get("amount") or 0.0), 2)
+        if amount <= 0:
+            continue
+        category_id = int(part["category_id"])
+        if not load_category_by_id(user_id, category_id):
+            raise ValueError("Category not found")
+        cleaned.append({"category_id": category_id, "amount": amount, "note": (part.get("note") or "").strip()})
+
+    allocated = round(sum(part["amount"] for part in cleaned), 2)
+    if allocated > magnitude + 0.005:
+        raise ValueError(
+            f"Split parts total {format_currency(allocated)}, more than the "
+            f"transaction's {format_currency(magnitude)}"
+        )
+
+    with get_connection() as conn:
+        conn.execute(
+            "DELETE FROM transaction_splits WHERE user_id = ? AND imported_transaction_id = ?",
+            [user_id, tx_id],
+        )
+        for part in cleaned:
+            conn.execute(
+                """
+                INSERT INTO transaction_splits (user_id, imported_transaction_id, category_id, amount, note)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                [user_id, tx_id, part["category_id"], part["amount"], part["note"] or None],
+            )
+    return round(magnitude - allocated, 2)
+
+
+def clear_transaction_splits(user_id: int, tx_id: int) -> None:
+    execute(
+        "DELETE FROM transaction_splits WHERE user_id = ? AND imported_transaction_id = ?",
+        [user_id, tx_id],
+    )
+
+
+def split_counts_by_transaction(user_id: int) -> Dict[int, int]:
+    """imported transaction id -> number of split parts, for ledger badges."""
+    rows = fetch_all(
+        "SELECT imported_transaction_id, COUNT(*) FROM transaction_splits "
+        "WHERE user_id = ? GROUP BY 1",
+        [user_id],
+    )
+    return {int(row[0]): int(row[1]) for row in rows}
+
+
+# ---------------------------------------------------------------------------
+# Category rules
+#
+# Name-match rules that categorize imported transactions directly, with no
+# budget or recurring item behind them — for the things that never follow a
+# schedule (card payments, ATM withdrawals, one-off spend you still want named).
+#
+# A rule only ever writes rows it owns (category_via = 'rule'), so a category you
+# picked by hand is never overwritten. Transfers are eligible on purpose: card
+# payments are transfers, and the budget aggregation already excludes transfers,
+# so naming one is presentational and can't distort budget totals.
+# ---------------------------------------------------------------------------
+
+
+def load_category_rules(user_id: int) -> List[Dict[str, Any]]:
+    """All category rules with their category, newest first."""
+    return query_all("""
+                SELECT cr.id, cr.category_id, cr.pattern, cr.amount_min, cr.amount_max,
+                       c.name AS category_name, c.color AS category_color
+                FROM category_rules cr
+                JOIN categories c ON c.id = cr.category_id AND c.user_id = cr.user_id
+                WHERE cr.user_id = ?
+                ORDER BY cr.created_at DESC, cr.id DESC
+                """, [user_id])
+
+
+def create_category_rule(
+    user_id: int,
+    category_id: int,
+    pattern: str,
+    amount_min: Optional[float] = None,
+    amount_max: Optional[float] = None,
+) -> int:
+    """Create a rule and apply it immediately. Returns the new rule id."""
+    cleaned = (pattern or "").strip()
+    if not cleaned:
+        raise ValueError("A match pattern is required")
+    if not load_category_by_id(user_id, category_id):
+        raise ValueError("Category not found")
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO category_rules (user_id, category_id, pattern, amount_min, amount_max)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            [user_id, category_id, cleaned, amount_min, amount_max],
+        )
+        rule_id = int(conn.execute(
+            "SELECT MAX(id) FROM category_rules WHERE user_id = ?", [user_id]
+        ).fetchone()[0])
+    apply_category_rules(user_id, rule_ids=[rule_id])
+    return rule_id
+
+
+def update_category_rule(
+    user_id: int,
+    rule_id: int,
+    category_id: int,
+    pattern: str,
+    amount_min: Optional[float] = None,
+    amount_max: Optional[float] = None,
+) -> None:
+    """Edit a rule, then rebuild every rule-owned category so rows the old
+    pattern claimed are released and the new one is applied."""
+    cleaned = (pattern or "").strip()
+    if not cleaned:
+        raise ValueError("A match pattern is required")
+    if not load_category_by_id(user_id, category_id):
+        raise ValueError("Category not found")
+
+    execute(
+        """
+        UPDATE category_rules SET category_id = ?, pattern = ?, amount_min = ?, amount_max = ?
+        WHERE id = ? AND user_id = ?
+        """,
+        [category_id, cleaned, amount_min, amount_max, rule_id, user_id],
+    )
+    resync_category_rules(user_id)
+
+
+def delete_category_rule(user_id: int, rule_id: int) -> None:
+    execute("DELETE FROM category_rules WHERE id = ? AND user_id = ?", [rule_id, user_id])
+    resync_category_rules(user_id)
+
+
+def apply_category_rules(
+    user_id: int, rule_ids: Optional[List[int]] = None, import_ids: Optional[List[int]] = None
+) -> int:
+    """Categorize imported rows whose description contains a rule pattern. Runs
+    retroactively (rule create/edit) and on new imports (pass import_ids). Rows
+    you categorized by hand are left alone. Returns the number of rows changed."""
+    categorized = 0
+    with get_connection() as conn:
+        rule_columns = "id, category_id, pattern, amount_min, amount_max"
+        if rule_ids is not None:
+            if not rule_ids:
+                return 0
+            placeholders = ", ".join("?" for _ in rule_ids)
+            rules = conn.execute(
+                f"SELECT {rule_columns} FROM category_rules WHERE user_id = ? AND id IN ({placeholders})",
+                [user_id, *rule_ids],
+            ).fetchall()
+        else:
+            rules = conn.execute(
+                f"SELECT {rule_columns} FROM category_rules WHERE user_id = ? ORDER BY id",
+                [user_id],
+            ).fetchall()
+
+        for _rule_id, category_id, pattern, amount_min, amount_max in rules:
+            if not pattern.strip():
+                continue
+            where_params: List[Any] = [user_id, f"%{pattern.upper()}%"]
+            # Optional amount constraint, compared against the magnitude. A small
+            # epsilon absorbs float rounding so an "exact" bound matches cleanly.
+            amount_filter = ""
+            if amount_min is not None:
+                amount_filter += " AND ABS(amount) >= ?"
+                where_params.append(float(amount_min) - 0.005)
+            if amount_max is not None:
+                amount_filter += " AND ABS(amount) <= ?"
+                where_params.append(float(amount_max) + 0.005)
+            import_filter = ""
+            if import_ids is not None:
+                if not import_ids:
+                    continue
+                placeholders = ", ".join("?" for _ in import_ids)
+                import_filter = f" AND id IN ({placeholders})"
+                where_params.extend(import_ids)
+
+            where_sql = f"""
+                WHERE user_id = ?
+                  AND UPPER(description) LIKE ?
+                  AND (category_id IS NULL OR category_via = 'rule')
+                  {amount_filter}
+                  {import_filter}
+                """
+            # Count only rows this rule actually moves, so re-running is honest.
+            changed = conn.execute(
+                f"SELECT COUNT(*) FROM imported_transactions {where_sql} "
+                f"AND category_id IS DISTINCT FROM ?",
+                [*where_params, int(category_id)],
+            ).fetchone()[0]
+            conn.execute(
+                f"UPDATE imported_transactions SET category_id = ?, category_via = 'rule' {where_sql}",
+                [int(category_id), *where_params],
+            )
+            categorized += int(changed)
+    return categorized
+
+
+def resync_category_rules(user_id: int) -> int:
+    """Release every rule-owned category, then re-apply all rules from scratch.
+    Hand-picked categories (category_via IS NULL) survive untouched."""
+    execute(
+        "UPDATE imported_transactions SET category_id = NULL, category_via = NULL "
+        "WHERE user_id = ? AND category_via = 'rule'",
+        [user_id],
+    )
+    return apply_category_rules(user_id)
 
 
 def settled_one_time_ids(user_id: int, through: date) -> set:

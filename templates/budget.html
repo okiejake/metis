@@ -17,7 +17,7 @@
 {% if budget_summary %}
 <section class="panel">
   <div class="panel-head">
-    <h2>Budget vs. Actual</h2>
+    <h2>Categories</h2>
     <p>Budgeted (planned recurring + one-time) against actual imported spend for {{ budget_summary.window_start }} → {{ budget_summary.window_end }}. Use the date range in the header (try <strong>This Month</strong>) to change the period.</p>
   </div>
 
@@ -48,62 +48,110 @@
 
   {% if budget_summary.categories %}
   <div class="budget-detail-controls">
-    <button type="button" class="button-link js-budget-detail-toggle" aria-expanded="false" aria-controls="budget-vs-actual">
-      Show individual budgets
+    <div class="budget-expand-controls">
+      <button type="button" class="button-link js-budget-expand-all">Expand all</button>
+      <button type="button" class="button-link js-budget-collapse-all">Collapse all</button>
+    </div>
+    <button type="button" class="button-link js-category-add-toggle" aria-expanded="false" aria-controls="category-add">
+      New category
     </button>
   </div>
-  <div class="table-wrap budget-vs-actual-table" id="budget-vs-actual">
-    <table>
-      <thead>
-        <tr>
-          <th>Category</th>
-          <th>Budgeted</th>
-          <th>Actual</th>
-          <th>Difference</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for cat in budget_summary.categories %}
-        <tr class="ledger-row">
-          <td>
-            <span class="category-pill">
-              <span class="category-dot" style="background: {{ cat.color if cat.color else 'var(--muted)' }};"></span>
-              {{ cat.name }}
-            </span>
-          </td>
-          <td class="amount-value">${{ cat.budgeted|currency }}</td>
-          <td class="amount-value negative">${{ cat.actual|currency }}</td>
-          <td class="amount-value {{ 'negative' if cat.difference < 0 else 'positive' }}">
-            {{ '-' if cat.difference < 0 else '' }}${{ (cat.difference if cat.difference >= 0 else -cat.difference)|currency }}
-          </td>
-        </tr>
-        {% for item in cat.line_items %}
-        <tr class="budget-item-row">
-          <td class="budget-item-name">↳ {{ item.name }}</td>
-          <td class="amount-value">${{ item.budgeted|currency }}</td>
-          {% if item.actual > 0 %}
-          <td class="amount-value negative">${{ item.actual|currency }}</td>
-          <td class="amount-value {{ 'negative' if item.difference < 0 else 'positive' }}">
-            {{ '-' if item.difference < 0 else '' }}${{ (item.difference if item.difference >= 0 else -item.difference)|currency }}
-          </td>
-          {% else %}
-          <td class="amount-value card-note">—</td>
-          <td class="amount-value card-note">—</td>
+
+  <form method="post" action="/categories" class="inline-form category-add-form hidden" id="category-add">
+    <label>
+      Name
+      <input type="text" name="name" placeholder="e.g. Groceries" required />
+    </label>
+    <label>
+      Color
+      <input type="color" name="color" value="{{ default_color }}" required />
+    </label>
+    <button type="submit" class="button-link">Add Category</button>
+  </form>
+
+  <ul class="budget-bars" id="budget-vs-actual-bars">
+    {% for cat in budget_summary.categories %}
+    <li class="budget-bar-row {{ 'is-over' if cat.over > 0 else '' }}{{ ' no-target' if not cat.has_target else '' }}">
+      <div class="budget-bar-head">
+        <span class="budget-bar-label">
+          <button type="button" class="card-expand-toggle js-budget-toggle"
+                  data-target="budget-detail-{{ loop.index }}" aria-expanded="false"
+                  aria-label="Show the budget detail for {{ cat.name }}">›</button>
+          <span class="category-pill">
+            <span class="category-dot" style="background: {{ cat.color if cat.color else 'var(--muted)' }};"></span>
+            {{ cat.name }}
+          </span>
+        </span>
+        <span class="budget-bar-figures">
+          <span class="budget-bar-actual">${{ cat.actual|currency }}</span>
+          {% if cat.has_target %}
+          <span class="budget-bar-sep">/</span>
+          <span class="budget-bar-target">${{ cat.budgeted|currency }}</span>
+          {% if cat.over > 0 %}
+          <span class="budget-bar-over">▲ ${{ cat.over|currency }}</span>
           {% endif %}
-        </tr>
-        {% endfor %}
-        {% endfor %}
-        <tr class="ledger-row month-summary-row">
-          <td><strong>Total</strong></td>
-          <td class="amount-value"><strong>${{ budget_summary.totals.budgeted|currency }}</strong></td>
-          <td class="amount-value negative"><strong>${{ budget_summary.totals.actual|currency }}</strong></td>
-          <td class="amount-value {{ 'negative' if budget_summary.totals.difference < 0 else 'positive' }}">
-            <strong>{{ '-' if budget_summary.totals.difference < 0 else '' }}${{ (budget_summary.totals.difference if budget_summary.totals.difference >= 0 else -budget_summary.totals.difference)|currency }}</strong>
-          </td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
+          {% else %}
+          <span class="budget-bar-untargeted">no budget</span>
+          {% endif %}
+        </span>
+      </div>
+
+      <div class="budget-bar-track"
+           title="{{ cat.name }} — actual ${{ cat.actual|currency }}{% if cat.has_target %}, budget ${{ cat.budgeted|currency }}{% if cat.over > 0 %}, over by ${{ cat.over|currency }}{% else %}, ${{ cat.difference|currency }} left{% endif %}{% else %}, no budget set{% endif %}">
+        <span class="budget-bar-fill" style="width: {{ cat.fill_pct }}%;"></span>
+        {% if cat.over_pct > 0 %}
+        <span class="budget-bar-overflow" style="width: {{ cat.over_pct }}%;"></span>
+        {% endif %}
+      </div>
+
+      <div class="budget-bar-detail hidden" id="budget-detail-{{ loop.index }}">
+        {% if cat.line_items %}
+        <ul class="budget-bar-items">
+          {% for item in cat.line_items %}
+          <li>
+            <span class="budget-item-name">↳ {{ item.name }}</span>
+            <span class="amount-value">${{ item.budgeted|currency }} budgeted</span>
+            {% if item.actual > 0 %}
+            <span class="amount-value negative">${{ item.actual|currency }} actual</span>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% elif cat.explicit_monthly is not none %}
+        <p class="card-detail-caption">Budgeted directly, not from expected items.</p>
+        {% else %}
+        <p class="card-detail-caption">No expected items in this category yet.</p>
+        {% endif %}
+
+        <div class="budget-bar-actions">
+          {% if cat.id %}
+          <form method="post" action="/categories/{{ cat.id }}/budget" class="budget-set-form">
+            <label>
+              <span class="budget-set-label">Monthly budget</span>
+              <input type="number" name="budget_amount" step="0.01" min="0"
+                     value="{{ '%.2f'|format(cat.explicit_monthly) if cat.explicit_monthly is not none else '' }}"
+                     placeholder="{{ 'set a budget' if not cat.has_target else 'from expected items' }}" />
+            </label>
+            <button type="submit" class="button-link">Save</button>
+          </form>
+          <a class="button-link" href="/categories/{{ cat.id }}/edit">Edit category</a>
+          {% endif %}
+        </div>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+
+  <p class="budget-bars-total">
+    <strong>Total</strong>
+    ${{ budget_summary.totals.actual|currency }} actual of ${{ budget_summary.totals.budgeted|currency }} budgeted
+    <span class="{{ 'negative' if budget_summary.totals.difference < 0 else 'positive' }}">
+      ({{ '-' if budget_summary.totals.difference < 0 else '' }}${{ (budget_summary.totals.difference if budget_summary.totals.difference >= 0 else -budget_summary.totals.difference)|currency }})
+    </span>
+    {% if budget_summary.months and budget_summary.months != 1.0 %}
+    <span class="card-note">Monthly budgets are prorated across {{ '%.1f'|format(budget_summary.months) }} months in this window.</span>
+    {% endif %}
+  </p>
   {% else %}
   <p class="empty-state">No budgeted or actual expenses in this period yet.</p>
   {% endif %}
@@ -477,13 +525,40 @@
 <script>
   (() => {
     // Budget vs. Actual: reveal per-item budgets under each category.
-    const detailToggle = document.querySelector('.js-budget-detail-toggle');
-    const detailTable = document.getElementById('budget-vs-actual');
-    if (detailToggle && detailTable) {
-      detailToggle.addEventListener('click', () => {
-        const showing = detailTable.classList.toggle('show-items');
-        detailToggle.setAttribute('aria-expanded', String(showing));
-        detailToggle.textContent = showing ? 'Hide individual budgets' : 'Show individual budgets';
+    // Expand/collapse a category's budget detail, mirroring the ledger's
+    // card-payment rows.
+    const categoryToggles = Array.from(document.querySelectorAll('.js-budget-toggle'));
+    function setExpanded(button, expanded) {
+      const target = document.getElementById(button.dataset.target);
+      if (!target) { return; }
+      target.classList.toggle('hidden', !expanded);
+      button.setAttribute('aria-expanded', String(expanded));
+      button.classList.toggle('is-open', expanded);
+    }
+    categoryToggles.forEach((button) => {
+      button.addEventListener('click', () => {
+        const target = document.getElementById(button.dataset.target);
+        setExpanded(button, target ? target.classList.contains('hidden') : false);
+      });
+    });
+
+    const expandAll = document.querySelector('.js-budget-expand-all');
+    const collapseAll = document.querySelector('.js-budget-collapse-all');
+    if (expandAll) {
+      expandAll.addEventListener('click', () => categoryToggles.forEach((b) => setExpanded(b, true)));
+    }
+    if (collapseAll) {
+      collapseAll.addEventListener('click', () => categoryToggles.forEach((b) => setExpanded(b, false)));
+    }
+
+    // New-category form, tucked away until asked for.
+    const categoryToggle = document.querySelector('.js-category-add-toggle');
+    const categoryForm = document.getElementById('category-add');
+    if (categoryToggle && categoryForm) {
+      categoryToggle.addEventListener('click', () => {
+        const showing = !categoryForm.classList.toggle('hidden');
+        categoryToggle.setAttribute('aria-expanded', String(showing));
+        if (showing) { categoryForm.querySelector('input[name="name"]').focus(); }
       });
     }
 
