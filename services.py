@@ -410,6 +410,10 @@ def init_db() -> None:
             conn.execute("ALTER TABLE categories ADD COLUMN color TEXT")
         if not table_has_column(conn, "categories", "user_id"):
             conn.execute("ALTER TABLE categories ADD COLUMN user_id BIGINT")
+        # Optional explicit monthly budget for a category. NULL = derive the budget
+        # from the category's expected items, as before.
+        if not table_has_column(conn, "categories", "budget_amount"):
+            conn.execute("ALTER TABLE categories ADD COLUMN budget_amount DOUBLE")
         if not table_has_column(conn, "recurring_items", "user_id"):
             conn.execute("ALTER TABLE recurring_items ADD COLUMN user_id BIGINT")
         if not table_has_column(conn, "manual_transactions", "user_id"):
@@ -616,6 +620,21 @@ def parse_positive_float(value: str) -> float:
     return amount
 
 
+def parse_optional_float(value: str) -> Optional[float]:
+    """Blank -> None, meaning 'no value' (a cleared budget, an unbounded rule).
+    Tolerates the $ and thousands separators people paste in."""
+    cleaned = (value or "").strip().replace(",", "").lstrip("$").strip()
+    if not cleaned:
+        return None
+    try:
+        amount = float(cleaned)
+    except ValueError:
+        raise ValueError("Enter a valid amount")
+    if amount < 0:
+        raise ValueError("Amount cannot be negative")
+    return amount
+
+
 def parse_day(value: str, fallback: int) -> int:
     cleaned = value.strip()
     if not cleaned:
@@ -771,13 +790,58 @@ def load_categories_with_usage(user_id: int) -> List[Dict[str, Any]]:
 
 def load_category_by_id(user_id: int, category_id: int) -> Optional[Dict[str, Any]]:
     row = fetch_one("""
-            SELECT id, name, color
+            SELECT id, name, color, budget_amount
             FROM categories
             WHERE id = ? AND user_id = ?
             """, [category_id, user_id])
     if not row:
         return None
-    return {"id": int(row[0]), "name": row[1], "color": safe_hex_color(row[2])}
+    return {
+        "id": int(row[0]),
+        "name": row[1],
+        "color": safe_hex_color(row[2]),
+        "budget_amount": float(row[3]) if row[3] is not None else None,
+    }
+
+
+def set_category_budget(user_id: int, category_id: int, amount: Optional[float]) -> None:
+    """Set (or clear, with None) a category's explicit monthly budget. When set it
+    replaces the budget derived from that category's expected items."""
+    if amount is not None and amount < 0:
+        raise ValueError("A budget cannot be negative")
+    execute(
+        "UPDATE categories SET budget_amount = ? WHERE id = ? AND user_id = ?",
+        [amount, category_id, user_id],
+    )
+
+
+def load_category_budgets(user_id: int) -> Dict[str, float]:
+    """lower(name) -> explicit monthly budget, for categories that have one."""
+    rows = fetch_all(
+        "SELECT name, budget_amount FROM categories WHERE user_id = ? AND budget_amount IS NOT NULL",
+        [user_id],
+    )
+    return {str(name).strip().lower(): float(amount) for name, amount in rows}
+
+
+def window_month_fraction(window_start: date, window_end: date) -> float:
+    """How many months the window covers, prorated by days so a full calendar
+    month counts 1.0 and half of March counts 0.5. Explicit budgets are stored
+    monthly, so this is what scales them to whatever window you're looking at."""
+    if window_end < window_start:
+        return 0.0
+    total = 0.0
+    cursor = date(window_start.year, window_start.month, 1)
+    end_month = date(window_end.year, window_end.month, 1)
+    while cursor <= end_month:
+        days_in_month = (add_months(cursor, 1) - cursor).days
+        month_last_day = add_months(cursor, 1) - timedelta(days=1)
+        overlap_start = max(window_start, cursor)
+        overlap_end = min(window_end, month_last_day)
+        if overlap_end >= overlap_start:
+            total += ((overlap_end - overlap_start).days + 1) / days_in_month
+        cursor = add_months(cursor, 1)
+    return round(total, 4)
 
 
 def parse_optional_category_id(user_id: int, value: str) -> Optional[int]:
@@ -1854,14 +1918,31 @@ def build_budget_summary(user_id: int, window_start: date, window_end: date) -> 
     item_actuals = _budget_actuals_by_item(user_id, window_start, window_end)
     actual_income = sum(bucket["income"] for bucket in actuals.values())
 
+    # --- Explicit per-category budgets, prorated to the window ---
+    # A category with its own monthly budget uses it instead of the sum of its
+    # expected items; the items still show underneath as detail.
+    monthly_budgets = load_category_budgets(user_id)
+    months = window_month_fraction(window_start, window_end)
+    category_meta = {c["name"].strip().lower(): c for c in load_categories(user_id)}
+
     # --- Merge expense categories from both sides ---
-    keys = set(budget_cats) | {k for k, v in actuals.items() if v["expense"] > 0.005}
+    keys = set(budget_cats) | {k for k, v in actuals.items() if v["expense"] > 0.005} | set(monthly_budgets)
     categories: List[Dict[str, Any]] = []
     for key in keys:
-        budgeted = round(budget_cats.get(key, {}).get("budgeted", 0.0), 2)
+        explicit_monthly = monthly_budgets.get(key)
+        if explicit_monthly is not None:
+            budgeted = round(explicit_monthly * months, 2)
+        else:
+            budgeted = round(budget_cats.get(key, {}).get("budgeted", 0.0), 2)
         actual = round(actuals.get(key, {}).get("expense", 0.0), 2)
-        name = budget_cats.get(key, {}).get("name") or actuals.get(key, {}).get("name") or "Uncategorized"
-        color = budget_cats.get(key, {}).get("color") or actuals.get(key, {}).get("color")
+        meta = category_meta.get(key, {})
+        name = (
+            budget_cats.get(key, {}).get("name")
+            or actuals.get(key, {}).get("name")
+            or meta.get("name")
+            or "Uncategorized"
+        )
+        color = budget_cats.get(key, {}).get("color") or actuals.get(key, {}).get("color") or meta.get("color")
         line_items = []
         for li in sorted(
             budget_cats.get(key, {}).get("line_items", []), key=lambda i: -i["budgeted"]
@@ -1874,13 +1955,30 @@ def build_budget_summary(user_id: int, window_start: date, window_end: date) -> 
                     "difference": round(li["budgeted"] - li_actual, 2),
                 }
             )
+        # Bar geometry, computed here so the template stays presentational. When
+        # spend exceeds the budget the track spans the actual, so the green stops
+        # at the budget and the red tail is the overage in proportion.
+        # No target means nothing to exceed — without this guard every unbudgeted
+        # category reads as "over" by the whole of its spend.
+        has_target = budgeted > 0.005
+        over = round(max(0.0, actual - budgeted), 2) if has_target else 0.0
+        span = max(actual, budgeted)
+        fill_pct = round(min(actual, budgeted) / span * 100, 2) if has_target and span else 0.0
+        over_pct = round(over / span * 100, 2) if has_target and span else 0.0
+
         categories.append(
             {
+                "id": meta.get("id"),
                 "name": name,
                 "color": safe_hex_color(color),
                 "budgeted": budgeted,
                 "actual": actual,
                 "difference": round(budgeted - actual, 2),
+                "over": over,
+                "has_target": has_target,
+                "explicit_monthly": explicit_monthly,
+                "fill_pct": fill_pct,
+                "over_pct": over_pct,
                 "line_items": line_items,
             }
         )
@@ -1891,6 +1989,7 @@ def build_budget_summary(user_id: int, window_start: date, window_end: date) -> 
     return {
         "window_start": window_start,
         "window_end": window_end,
+        "months": months,
         "categories": categories,
         "totals": {
             "budgeted": total_budgeted,
