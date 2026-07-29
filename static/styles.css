@@ -1014,14 +1014,23 @@ button.danger,
   transition: width 0.2s ease;
 }
 
-.budget-bar-row.no-target .budget-bar-track {
+/* Spend in a category with no budget: shown to scale, but hatched so it reads
+   as "tracked, not budgeted" rather than as progress toward something. */
+.budget-bar-neutral {
+  transition: width 0.2s ease;
   background: repeating-linear-gradient(
     135deg,
-    var(--surface-muted),
-    var(--surface-muted) 6px,
-    transparent 6px,
-    transparent 12px
+    var(--muted) 0,
+    var(--muted) 3px,
+    transparent 3px,
+    transparent 7px
   );
+  opacity: 0.55;
+}
+
+.budget-bar-under {
+  color: var(--muted);
+  font-size: 0.86rem;
 }
 
 .budget-bar-label {
@@ -1071,7 +1080,12 @@ button.danger,
   display: flex;
   gap: 0.75rem;
   align-items: baseline;
+  justify-content: space-between;
   font-size: 0.9rem;
+}
+
+.budget-bar-items .budget-bar-figures {
+  font-size: 0.86rem;
 }
 
 .budget-bars-total {

@@ -1866,6 +1866,30 @@ def _budget_actuals_by_item(
     return result
 
 
+def _apply_bar_geometry(categories: List[Dict[str, Any]]) -> None:
+    """Size every category bar against one shared scale so the widths are
+    comparable at a glance.
+
+    The largest category — by whichever is greater, its budget or its actual —
+    fills the track, and every other category is drawn in proportion to it. A
+    small category reads as a short bar. Scaling each bar to its own total
+    instead made every row look full, which hid the one thing the bars exist to
+    show: relative size."""
+    scale = max((max(cat["actual"], cat["budgeted"]) for cat in categories), default=0.0)
+    for cat in categories:
+        if scale <= 0.005:
+            cat["fill_pct"] = cat["over_pct"] = cat["neutral_pct"] = 0.0
+        elif cat["has_target"]:
+            cat["fill_pct"] = round(min(cat["actual"], cat["budgeted"]) / scale * 100, 2)
+            cat["over_pct"] = round(cat["over"] / scale * 100, 2)
+            cat["neutral_pct"] = 0.0
+        else:
+            # Nothing to fill toward, so the bar just shows the spend, muted.
+            cat["fill_pct"] = 0.0
+            cat["over_pct"] = 0.0
+            cat["neutral_pct"] = round(cat["actual"] / scale * 100, 2)
+
+
 def build_budget_summary(user_id: int, window_start: date, window_end: date) -> Dict[str, Any]:
     """Budget vs actual vs difference by category for the window. Budgeted =
     recurring occurrences + one-time items in the window; actual = imported spend
@@ -1960,16 +1984,10 @@ def build_budget_summary(user_id: int, window_start: date, window_end: date) -> 
                     "difference": round(li["budgeted"] - li_actual, 2),
                 }
             )
-        # Bar geometry, computed here so the template stays presentational. When
-        # spend exceeds the budget the track spans the actual, so the green stops
-        # at the budget and the red tail is the overage in proportion.
         # No target means nothing to exceed — without this guard every unbudgeted
         # category reads as "over" by the whole of its spend.
         has_target = budgeted > 0.005
         over = round(max(0.0, actual - budgeted), 2) if has_target else 0.0
-        span = max(actual, budgeted)
-        fill_pct = round(min(actual, budgeted) / span * 100, 2) if has_target and span else 0.0
-        over_pct = round(over / span * 100, 2) if has_target and span else 0.0
 
         categories.append(
             {
@@ -1982,11 +2000,11 @@ def build_budget_summary(user_id: int, window_start: date, window_end: date) -> 
                 "over": over,
                 "has_target": has_target,
                 "explicit_monthly": explicit_monthly,
-                "fill_pct": fill_pct,
-                "over_pct": over_pct,
                 "line_items": line_items,
             }
         )
+
+    _apply_bar_geometry(categories)
     categories.sort(key=lambda c: (-max(c["budgeted"], c["actual"]), c["name"].lower()))
 
     total_budgeted = round(sum(c["budgeted"] for c in categories), 2)
