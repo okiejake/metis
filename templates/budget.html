@@ -87,8 +87,10 @@
           {% if cat.has_target %}
           <span class="budget-bar-sep">/</span>
           <span class="budget-bar-target">${{ cat.budgeted|currency }}</span>
-          {% if cat.over > 0 %}
-          <span class="budget-bar-over">▲ ${{ cat.over|currency }}</span>
+          {% if cat.difference < 0 %}
+          <span class="budget-bar-over">▲ ${{ (-cat.difference)|currency }}</span>
+          {% elif cat.difference > 0 %}
+          <span class="budget-bar-under">▼ ${{ cat.difference|currency }}</span>
           {% endif %}
           {% else %}
           <span class="budget-bar-untargeted">no budget</span>
@@ -98,9 +100,13 @@
 
       <div class="budget-bar-track"
            title="{{ cat.name }} — actual ${{ cat.actual|currency }}{% if cat.has_target %}, budget ${{ cat.budgeted|currency }}{% if cat.over > 0 %}, over by ${{ cat.over|currency }}{% else %}, ${{ cat.difference|currency }} left{% endif %}{% else %}, no budget set{% endif %}">
+        {% if cat.neutral_pct > 0 %}
+        <span class="budget-bar-neutral" style="width: {{ cat.neutral_pct }}%;"></span>
+        {% else %}
         <span class="budget-bar-fill" style="width: {{ cat.fill_pct }}%;"></span>
         {% if cat.over_pct > 0 %}
         <span class="budget-bar-overflow" style="width: {{ cat.over_pct }}%;"></span>
+        {% endif %}
         {% endif %}
       </div>
 
@@ -109,11 +115,17 @@
         <ul class="budget-bar-items">
           {% for item in cat.line_items %}
           <li>
-            <span class="budget-item-name">↳ {{ item.name }}</span>
-            <span class="amount-value">${{ item.budgeted|currency }} budgeted</span>
-            {% if item.actual > 0 %}
-            <span class="amount-value negative">${{ item.actual|currency }} actual</span>
-            {% endif %}
+            <span class="budget-item-name">• {{ item.name }}</span>
+            <span class="budget-bar-figures">
+              <span class="budget-bar-actual">${{ item.actual|currency }}</span>
+              <span class="budget-bar-sep">/</span>
+              <span class="budget-bar-target">${{ item.budgeted|currency }}</span>
+              {% if item.difference < 0 %}
+              <span class="budget-bar-over">▲ ${{ (-item.difference)|currency }}</span>
+              {% elif item.difference > 0 %}
+              <span class="budget-bar-under">▼ ${{ item.difference|currency }}</span>
+              {% endif %}
+            </span>
           </li>
           {% endfor %}
         </ul>
