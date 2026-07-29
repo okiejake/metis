@@ -27,22 +27,49 @@ example:
 > "You're forecasted to have X amount above your $5,000 cash buffer in your checking
 > account. Consider additional investments to help keep your money growing."
 
+## Data policy — read this first
+
+**Never** put real financial or personal data anywhere in this repository. This is a
+public repo, and the app is built around one of the most sensitive datasets a person
+has.
+
+This applies to **committed code, commit messages, code comments, PR titles and
+descriptions, issues, and documentation** — everywhere, without exception:
+
+- No real transaction amounts, balances, or dollar figures taken from actual data.
+- No merchant, vendor, payee, employer, bank, or account names from actual data.
+- No account numbers, routing numbers, card numbers, or transaction identifiers.
+- No names, addresses, emails, phone numbers, or any other personally identifiable
+  information.
+- No real CSV exports, database files, or fixtures derived from them.
+
+**When describing verification or debugging**, say what was proven, not what the data
+said. Write "splitting a portion off an expense moved exactly that amount between
+categories with the total unchanged" — never the actual figures, and never the vendor
+whose bill it was.
+
+**Test data must be synthetic.** If an example is needed, invent it: round numbers,
+obviously fake names ("Acme Utilities", "Example Bank").
+
+Real data lives only in the local, gitignored `finance.duckdb`. If real data does reach
+a commit or a published description, treat it as an incident: scrub it before pushing
+where possible, and raise it immediately if it is already public.
+
 ## Development cycle
 
 **Release tag format:** `v0.0.0`
 
-**Feature branches:** `[release-tag]/dev/feature-description`
+**Feature branches:** `type/short-description` (e.g. `feat/import-templates`,
+`fix/ledger-double-count`, `chore/repo-policy`).
 - Branch off of `main`.
-- Merged into `qa` rough-and-wild — informal, fast iteration.
+- PR straight into `main` — there is no `qa` branch.
+- Squash-and-merge, so `main` keeps one clean commit per change.
 
-**QA:** `qa` always has exactly **one `[release-tag]` in flight at a time**.
-- For each fix during QA, write a `[release-tag]/qa/fix-description` branch.
-
-**Release:** when the QA fixes are done, PR `qa` → `main` and **squash-and-merge**.
-- PR **title** = the `[release-tag]`.
-- PR **description** = a summary of the features and the QA commits.
-- Keeping features and QA commits distinct helps us categorize the type of work: quick
-  iteration vs. what needed feedback to get right.
+**Releases:** cut a **GitHub release** off `main`, tagged `v0.0.0`.
+- The tag is created from `main` at the point being released.
+- Release notes summarize the changes since the previous tag.
+- Releasing is a separate act from merging: `main` is always shippable, and a release
+  marks a point worth naming.
 
 ## Long-term goals to build toward
 
