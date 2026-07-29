@@ -390,6 +390,10 @@ def init_db() -> None:
             conn.execute("ALTER TABLE manual_transactions ADD COLUMN account_id BIGINT")
         if not table_has_column(conn, "imported_transactions", "account_id"):
             conn.execute("ALTER TABLE imported_transactions ADD COLUMN account_id BIGINT")
+        # How a payment to this card appears on the funding account's statement.
+        # Per-account so no issuer name has to live in the code.
+        if not table_has_column(conn, "accounts", "payment_pattern"):
+            conn.execute("ALTER TABLE accounts ADD COLUMN payment_pattern TEXT")
         if not table_has_column(conn, "users", "email"):
             conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
         migrate_categories_to_user_scoped_uniqueness(conn, default_user_id)
@@ -1128,12 +1132,12 @@ def account_cycle_status(account: Dict[str, Any], today: Optional[date] = None) 
 
 
 def load_accounts(user_id: int) -> List[Dict[str, Any]]:
-    return query_all("SELECT id, name, account_type, statement_day, due_day FROM accounts "
+    return query_all("SELECT id, name, account_type, statement_day, due_day, payment_pattern FROM accounts "
                 "WHERE user_id = ? ORDER BY account_type, LOWER(name), id", [user_id])
 
 
 def load_account_by_id(user_id: int, account_id: int) -> Optional[Dict[str, Any]]:
-    row = fetch_one("SELECT id, name, account_type, statement_day, due_day FROM accounts WHERE id = ? AND user_id = ?", [account_id, user_id])
+    row = fetch_one("SELECT id, name, account_type, statement_day, due_day, payment_pattern FROM accounts WHERE id = ? AND user_id = ?", [account_id, user_id])
     if not row:
         return None
     return {
@@ -1142,6 +1146,7 @@ def load_account_by_id(user_id: int, account_id: int) -> Optional[Dict[str, Any]
         "account_type": row[2],
         "statement_day": row[3],
         "due_day": row[4],
+        "payment_pattern": row[5] or "",
     }
 
 
@@ -2081,9 +2086,51 @@ def build_monthly_totals(
 
 _IMPORT_SQUASH_RE = re.compile(r"\s+")
 _CARD_PAYMENT_RE = re.compile(r"PAYMENT|THANK YOU", re.IGNORECASE)
-_CHECKING_PAYS_CARD_RE = re.compile(
-    r"APPLECARD|GS\s*BANK|BANKCARD|VISA|CARD PAYMENT|CREDIT CARD", re.IGNORECASE
-)
+
+# How a payment to a card looks on the funding account's statement varies by
+# issuer, so it is configured per card account (accounts.payment_pattern) rather
+# than hardcoded. These generic hints are the fallback for a card that has no
+# pattern set yet — they describe what a card payment is called in general, and
+# deliberately name no institution.
+GENERIC_CARD_PAYMENT_HINTS = ("CARD PAYMENT", "CREDIT CARD", "CARDMEMBER", "PAYMENT TO CARD")
+
+
+def _matches_any(text: str, patterns: Sequence[str]) -> bool:
+    """Case-insensitive 'contains any of'. Substring rather than regex so a
+    pattern typed into the accounts form can't blow up on stray metacharacters."""
+    haystack = (text or "").upper()
+    return any(pattern and pattern in haystack for pattern in patterns)
+
+
+def card_payment_patterns(user_id: int) -> List[str]:
+    """Uppercased patterns that mark a debit on a funding account as a payment to
+    one of this user's credit cards.
+
+    The generic hints are added whenever at least one card still has no pattern,
+    so configuring one card never silently stops detecting payments to the others.
+    Once every card is configured the hints drop away, and matching is exactly
+    what the user specified."""
+    rows = fetch_all(
+        "SELECT payment_pattern FROM accounts "
+        "WHERE user_id = ? AND account_type = 'credit_card'",
+        [user_id],
+    )
+    configured = [str(row[0]).strip().upper() for row in rows if row[0] and str(row[0]).strip()]
+    any_unconfigured = any(not row[0] or not str(row[0]).strip() for row in rows)
+    if not rows or any_unconfigured:
+        return configured + list(GENERIC_CARD_PAYMENT_HINTS)
+    return configured
+
+
+def suggest_payment_pattern(account_name: str) -> str:
+    """A starting guess for a card's payment pattern: the most distinctive word in
+    its name. 'Acme Rewards Card' -> 'ACME'. Meant to be edited, not trusted."""
+    skip = {"CARD", "CREDIT", "THE", "MY", "BANK", "VISA", "REWARDS", "ACCOUNT"}
+    words = [word for word in re.split(r"[^A-Za-z0-9]+", account_name or "") if word]
+    for word in words:
+        if len(word) > 2 and word.upper() not in skip:
+            return word.upper()
+    return words[0].upper() if words else ""
 
 
 class CsvImportError(ValueError):
@@ -2155,7 +2202,9 @@ def _parse_import_date_with(value: str, date_format: Optional[str]) -> date:
     return _parse_import_date(value)
 
 
-def _parse_template_row(row: Dict[str, str], template: Dict[str, Any]) -> Dict[str, Any]:
+def _parse_template_row(
+    row: Dict[str, str], template: Dict[str, Any], transfer_patterns: Sequence[str] = ()
+) -> Dict[str, Any]:
     """Normalize a CSV row using a user-defined template. Output mirrors the
     built-in parsers' keys and additionally carries the target account_id."""
     description = _import_squash(row.get(template["description_field"], ""))
@@ -2184,7 +2233,7 @@ def _parse_template_row(row: Dict[str, str], template: Dict[str, Any]) -> Dict[s
         else:
             amount, flow, is_transfer = magnitude, ("refund" if target_is_card else "income"), False
     else:
-        pays_card = (not target_is_card) and bool(_CHECKING_PAYS_CARD_RE.search(description.upper()))
+        pays_card = (not target_is_card) and _matches_any(description, transfer_patterns or ())
         amount, flow, is_transfer = -magnitude, ("transfer" if pays_card else "expense"), pays_card
 
     return {
@@ -2200,15 +2249,15 @@ def _parse_template_row(row: Dict[str, str], template: Dict[str, Any]) -> Dict[s
     }
 
 
-def _parse_checking_row(row: Dict[str, str]) -> Dict[str, Any]:
+def _parse_checking_row(row: Dict[str, str], transfer_patterns: Sequence[str] = ()) -> Dict[str, Any]:
     description = _import_squash(row.get("Description", ""))
     raw_type = str(row.get("Credit or Debit", "")).strip()
     is_credit = raw_type == "Credit"
     magnitude = abs(_parse_import_amount(row.get("Amount", "0")))
     # Credit -> money in (+), Debit -> money out (-).
     amount = magnitude if is_credit else -magnitude
-    # A debit whose description names a card issuer is a card payment (transfer).
-    pays_card = bool(_CHECKING_PAYS_CARD_RE.search(description.upper())) and not is_credit
+    # A debit matching one of the user's card payment patterns is a transfer.
+    pays_card = (not is_credit) and _matches_any(description, transfer_patterns or ())
     if is_credit:
         flow = "income"
     elif pays_card:
@@ -2227,7 +2276,7 @@ def _parse_checking_row(row: Dict[str, str]) -> Dict[str, Any]:
     }
 
 
-def _parse_visa_row(row: Dict[str, str]) -> Dict[str, Any]:
+def _parse_visa_row(row: Dict[str, str], transfer_patterns: Sequence[str] = ()) -> Dict[str, Any]:
     description = _import_squash(row.get("Description", ""))
     raw_type = str(row.get("Credit or Debit", "")).strip()
     is_credit = raw_type == "Credit"
@@ -2255,7 +2304,7 @@ def _parse_visa_row(row: Dict[str, str]) -> Dict[str, Any]:
     }
 
 
-def _parse_apple_row(row: Dict[str, str]) -> Dict[str, Any]:
+def _parse_apple_row(row: Dict[str, str], transfer_patterns: Sequence[str] = ()) -> Dict[str, Any]:
     description = _import_squash(row.get("Description", ""))
     merchant = _import_squash(row.get("Merchant", ""))
     raw_type = str(row.get("Type", "")).strip()
@@ -2319,6 +2368,7 @@ def parse_import_csv(
     text: str,
     templates: Optional[List[Dict[str, Any]]] = None,
     forced_template: Optional[Dict[str, Any]] = None,
+    transfer_patterns: Optional[Sequence[str]] = None,
 ) -> tuple[str, Optional[int], List[Dict[str, Any]]]:
     """Parse a bank/card CSV export into normalized rows.
 
@@ -2327,6 +2377,7 @@ def parse_import_csv(
     (account_label, account_id, rows). account_id is None for built-in formats
     (resolved by name at upsert). Raises CsvImportError on an unrecognized format.
     """
+    patterns = tuple(transfer_patterns or GENERIC_CARD_PAYMENT_HINTS)
     if text.startswith("﻿"):  # strip UTF-8 BOM so header cells match
         text = text[1:]
     reader = csv.DictReader(io.StringIO(text))
@@ -2357,9 +2408,9 @@ def parse_import_csv(
             continue  # skip fully blank lines
         try:
             if template is not None:
-                parsed.append(_parse_template_row(raw, template))
+                parsed.append(_parse_template_row(raw, template, patterns))
             else:
-                parsed.append(_ROW_PARSERS[fmt](raw))
+                parsed.append(_ROW_PARSERS[fmt](raw, patterns))
         except CsvImportError as exc:
             raise CsvImportError(f"row {index + 2}: {exc}") from exc
 

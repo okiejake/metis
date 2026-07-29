@@ -39,6 +39,18 @@
       </label>
       <label class="eom-toggle"><input type="checkbox" name="due_eom" value="1" class="eom-checkbox" data-target="due_day" {{ 'checked' if due_is_eom else '' }} /> Last day of month</label>
     </div>
+    <div data-field="payment_pattern" class="conditional full-row {{ 'hidden' if account.account_type != 'credit_card' else '' }}">
+      <label>How payments to this card appear on your other statement
+        <input type="text" name="payment_pattern" value="{{ account.payment_pattern }}"
+               placeholder="{{ suggested_pattern }}" />
+      </label>
+      <p class="card-note">
+        When you pay this card, your checking statement shows some text — enter a
+        distinctive part of it. Metis uses it to recognize those debits as transfers
+        between your own accounts rather than spending. Leave blank to fall back to
+        generic wording like "CARD PAYMENT".
+      </p>
+    </div>
     <div class="full-row">
       <button type="submit" class="button-link">Save Changes</button>
       <a class="button-link" href="/accounts">Cancel</a>
@@ -51,10 +63,12 @@
     const typeSelect = document.getElementById('account_type');
     const statementField = document.querySelector('[data-field="statement_day"]');
     const dueField = document.querySelector('[data-field="due_day"]');
+    const patternField = document.querySelector('[data-field="payment_pattern"]');
     function sync() {
       const isCard = typeSelect.value === 'credit_card';
       statementField.classList.toggle('hidden', !isCard);
       dueField.classList.toggle('hidden', !isCard);
+      if (patternField) { patternField.classList.toggle('hidden', !isCard); }
     }
     if (typeSelect) {
       typeSelect.addEventListener('change', sync);

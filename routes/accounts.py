@@ -4,6 +4,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 
 from services import (
+    suggest_payment_pattern,
     account_cycle_status,
     card_balance_summary,
     ensure_seed_accounts,
@@ -109,6 +110,7 @@ def create_account(
     account_type: str = Form(...),
     statement_day: str = Form(""),
     due_day: str = Form(""),
+    payment_pattern: str = Form(""),
     statement_eom: str = Form(""),
     due_eom: str = Form(""),
 ):
@@ -119,6 +121,8 @@ def create_account(
         parsed_statement, parsed_due = _parse_account_form(
             account_type, statement_day, due_day, statement_eom, due_eom
         )
+        # Only cards fund payments from another account, so only cards carry one.
+        cleaned_pattern = payment_pattern.strip().upper() if account_type == "credit_card" else ""
 
         with get_connection() as conn:
             existing = conn.execute(
@@ -128,8 +132,8 @@ def create_account(
             if existing:
                 raise ValueError("An account with this name already exists")
             conn.execute(
-                "INSERT INTO accounts (user_id, name, account_type, statement_day, due_day) VALUES (?, ?, ?, ?, ?)",
-                [user["id"], cleaned_name, account_type, parsed_statement, parsed_due],
+                "INSERT INTO accounts (user_id, name, account_type, statement_day, due_day, payment_pattern) VALUES (?, ?, ?, ?, ?, ?)",
+                [user["id"], cleaned_name, account_type, parsed_statement, parsed_due, cleaned_pattern],
             )
     except ValueError as exc:
         return redirect_with_message("/accounts", str(exc), is_error=True)
@@ -148,6 +152,7 @@ def edit_account_page(request: Request, user: CurrentUser, account_id: int, msg:
         msg,
         err,
         account=account,
+        suggested_pattern=suggest_payment_pattern(account["name"]),
     )
 
 
@@ -159,6 +164,7 @@ def edit_account(
     account_type: str = Form(...),
     statement_day: str = Form(""),
     due_day: str = Form(""),
+    payment_pattern: str = Form(""),
     statement_eom: str = Form(""),
     due_eom: str = Form(""),
 ):
@@ -172,6 +178,8 @@ def edit_account(
         parsed_statement, parsed_due = _parse_account_form(
             account_type, statement_day, due_day, statement_eom, due_eom
         )
+        # Only cards fund payments from another account, so only cards carry one.
+        cleaned_pattern = payment_pattern.strip().upper() if account_type == "credit_card" else ""
 
         with get_connection() as conn:
             existing = conn.execute(
@@ -181,8 +189,8 @@ def edit_account(
             if existing:
                 raise ValueError("An account with this name already exists")
             conn.execute(
-                "UPDATE accounts SET name = ?, account_type = ?, statement_day = ?, due_day = ? WHERE id = ? AND user_id = ?",
-                [cleaned_name, account_type, parsed_statement, parsed_due, account_id, user["id"]],
+                "UPDATE accounts SET name = ?, account_type = ?, statement_day = ?, due_day = ?, payment_pattern = ? WHERE id = ? AND user_id = ?",
+                [cleaned_name, account_type, parsed_statement, parsed_due, cleaned_pattern, account_id, user["id"]],
             )
             # Cascade the rename to imported rows anchored to this account so their
             # display label follows the account (rows match by stable account_id).

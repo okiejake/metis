@@ -4,6 +4,7 @@ from fastapi.responses import HTMLResponse
 from services import (
     CsvImportError,
     apply_match_rules,
+    card_payment_patterns,
     delete_import_template,
     get_current_user,
     load_accounts,
@@ -92,7 +93,10 @@ async def upload_import(
 
     try:
         account_label, _account_id, rows = parse_import_csv(
-            filename, text, templates=load_import_templates(user["id"]), forced_template=forced_template
+            filename, text,
+            templates=load_import_templates(user["id"]),
+            forced_template=forced_template,
+            transfer_patterns=card_payment_patterns(user["id"]),
         )
         result = upsert_imported_transactions(user["id"], rows, filename)
     except CsvImportError as exc:
