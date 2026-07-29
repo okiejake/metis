@@ -1852,7 +1852,9 @@ def collect_blended_transactions(user_id: int, window_start: date, window_end: d
         forecast_start = window_start
 
     if forecast_start <= window_end:
-        transactions.extend(collect_window_transactions(user_id, forecast_start, window_end))
+        transactions.extend(
+            collect_window_transactions(user_id, forecast_start, window_end, paid_through=cutover)
+        )
         transactions.extend(forecast_card_payments(user_id, forecast_start, window_end, cutover))
 
     transactions.sort(
@@ -1866,7 +1868,15 @@ def collect_blended_transactions(user_id: int, window_start: date, window_end: d
     return transactions
 
 
-def collect_window_transactions(user_id: int, window_start: date, window_end: date) -> List[Dict[str, Any]]:
+def collect_window_transactions(
+    user_id: int,
+    window_start: date,
+    window_end: date,
+    paid_through: Optional[date] = None,
+) -> List[Dict[str, Any]]:
+    """Expected (recurring + one-off) rows for a window. `paid_through` is the
+    actuals cutover: occurrences already settled by an actual on/before it are
+    dropped, so an item paid ahead of its due date is not counted twice."""
     accounts = load_accounts_map(user_id)
     gen_start = window_start
 
@@ -1874,10 +1884,25 @@ def collect_window_transactions(user_id: int, window_start: date, window_end: da
     active_items = load_active_recurring(user_id)
     item_ids = [int(item["id"]) for item in active_items]
     overrides_by_id = load_amount_overrides_for_items(item_ids)
+    settled_dates = (
+        reconciled_occurrence_dates(user_id, active_items, paid_through, window_end)
+        if paid_through is not None
+        else {}
+    )
     for item in active_items:
         item_overrides = overrides_by_id.get(int(item["id"]), [])
-        raw.extend(generate_recurring_transactions(item, gen_start, window_end, overrides=item_overrides))
-    raw.extend(load_manual_transactions(user_id, gen_start, window_end))
+        rows = generate_recurring_transactions(item, gen_start, window_end, overrides=item_overrides)
+        settled = settled_dates.get(int(item["id"]))
+        if settled:
+            rows = [row for row in rows if row["date"] not in settled]
+        raw.extend(rows)
+
+    manual_rows = load_manual_transactions(user_id, gen_start, window_end)
+    if paid_through is not None:
+        settled_one_time = settled_one_time_ids(user_id, paid_through)
+        if settled_one_time:
+            manual_rows = [row for row in manual_rows if int(row["id"]) not in settled_one_time]
+    raw.extend(manual_rows)
 
     transactions = _apply_cash_flow_deferral(raw, accounts, window_start, window_end)
 
@@ -2666,12 +2691,24 @@ def summarize_imported(user_id: int) -> Dict[str, Any]:
 # (one-time). Reconciliation links an imported (actual) transaction to an
 # expected item. A confirmed link seeds an editable description substring rule
 # (expected_match_rules) that auto-links matching actuals, both historical and
-# on future imports. This layer is status/audit only; it does not change the
-# forecast ledger math.
+# on future imports. Beyond status/audit, this layer feeds the ledger one fact:
+# which forecast occurrences are already settled by an actual (see
+# reconciled_occurrence_dates / settled_one_time_ids) so they are not counted twice.
 # ---------------------------------------------------------------------------
 
 EXPECTED_SOURCE_TYPES = {"recurring", "one_time"}
 RECONCILE_OCCURRENCE_TOLERANCE_DAYS = 10
+RECONCILE_OCCURRENCE_LOOKBACK_DAYS = 400
+
+
+def occurrence_history_start(item: Dict[str, Any]) -> date:
+    """Where to begin generating a recurring item's occurrences when matching them
+    against linked actuals. Shared by the reconcile view and the ledger so both
+    walk the same occurrences and can never disagree about what is paid."""
+    item_start = item["start_date"]
+    if isinstance(item_start, datetime):
+        item_start = item_start.date()
+    return max(item_start, date.today() - timedelta(days=RECONCILE_OCCURRENCE_LOOKBACK_DAYS))
 
 
 def load_all_manual_transactions(user_id: int) -> List[Dict[str, Any]]:
@@ -3263,20 +3300,41 @@ def unlink_reconciliation(user_id: int, recon_id: int) -> None:
     execute("DELETE FROM expected_reconciliations WHERE id = ? AND user_id = ?", [recon_id, user_id])
 
 
-def load_reconciliations_for_item(user_id: int, source_type: str, source_id: int) -> List[Dict[str, Any]]:
-    rows = query_all("""
-                SELECT r.id AS recon_id, r.matched_via, r.imported_transaction_id,
+def _load_reconciliation_rows(
+    user_id: int, source_type: str, source_id: Optional[int] = None
+) -> List[Dict[str, Any]]:
+    """Linked actuals for one source type, optionally narrowed to a single item."""
+    sql = """
+                SELECT r.source_id, r.id AS recon_id, r.matched_via, r.imported_transaction_id,
                        i.account, i.tx_date, i.description, i.merchant, i.amount, i.flow
                 FROM expected_reconciliations r
                 JOIN imported_transactions i
                   ON i.id = r.imported_transaction_id AND i.user_id = r.user_id
-                WHERE r.user_id = ? AND r.source_type = ? AND r.source_id = ?
-                ORDER BY i.tx_date DESC
-                """, [user_id, source_type, source_id])
+                WHERE r.user_id = ? AND r.source_type = ?
+                """
+    params: List[Any] = [user_id, source_type]
+    if source_id is not None:
+        sql += " AND r.source_id = ?"
+        params.append(source_id)
+
+    rows = query_all(sql + " ORDER BY i.tx_date DESC", params)
     for row in rows:
         if isinstance(row["tx_date"], datetime):
             row["tx_date"] = row["tx_date"].date()
     return rows
+
+
+def load_reconciliations_for_item(user_id: int, source_type: str, source_id: int) -> List[Dict[str, Any]]:
+    return _load_reconciliation_rows(user_id, source_type, source_id)
+
+
+def load_reconciliations_by_item(user_id: int, source_type: str) -> Dict[int, List[Dict[str, Any]]]:
+    """Linked actuals grouped by source id — the batched form of
+    load_reconciliations_for_item, so a whole-ledger pass costs one query."""
+    grouped: Dict[int, List[Dict[str, Any]]] = {}
+    for row in _load_reconciliation_rows(user_id, source_type):
+        grouped.setdefault(int(row["source_id"]), []).append(row)
+    return grouped
 
 
 def load_reconciliation_counts(user_id: int) -> Dict[tuple, int]:
@@ -3316,4 +3374,50 @@ def recurring_occurrence_status(
             }
         )
     return result
+
+
+def reconciled_occurrence_dates(
+    user_id: int, items: List[Dict[str, Any]], through: date, window_end: date
+) -> Dict[int, set]:
+    """recurring item id -> occurrence dates already settled by a linked actual
+    dated on/before `through` (the checking actuals cutover).
+
+    A bill paid early straddles the cutover: the actual lands in the actuals half
+    of the ledger while its scheduled occurrence still falls in the forecast half,
+    so the ledger would count the same money twice. Matching mirrors
+    recurring_occurrence_status, so the occurrence the reconcile page calls paid is
+    exactly the one dropped from the forecast."""
+    linked_by_item = load_reconciliations_by_item(user_id, "recurring")
+    if not linked_by_item:
+        return {}
+
+    settled: Dict[int, set] = {}
+    for item in items:
+        item_id = int(item["id"])
+        linked = linked_by_item.get(item_id)
+        if not linked:
+            continue
+        dates = {
+            occurrence["date"]
+            for occurrence in recurring_occurrence_status(
+                item, occurrence_history_start(item), window_end, linked
+            )
+            if occurrence["paid"] and occurrence["match"]["tx_date"] <= through
+        }
+        if dates:
+            settled[item_id] = dates
+    return settled
+
+
+def settled_one_time_ids(user_id: int, through: date) -> set:
+    """One-time expected items already settled by a linked actual dated on/before
+    `through`. A one-time item has a single occurrence, so any link settles it."""
+    rows = fetch_all("""
+                SELECT DISTINCT r.source_id
+                FROM expected_reconciliations r
+                JOIN imported_transactions i
+                  ON i.id = r.imported_transaction_id AND i.user_id = r.user_id
+                WHERE r.user_id = ? AND r.source_type = 'one_time' AND i.tx_date <= ?
+                """, [user_id, through])
+    return {int(row[0]) for row in rows}
 
