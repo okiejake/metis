@@ -913,7 +913,37 @@ button.danger,
   margin-top: 1.5rem;
 }
 
+/* Shared disclosure chevron: ledger card-payment rows and budget categories. */
+.card-expand-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0;
+  color: inherit;
+  transition: transform 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 999px;
+  vertical-align: middle;
+  margin-right: 0.25rem;
+}
+
+.card-expand-toggle.is-open {
+  transform: rotate(90deg);
+}
+
 .budget-detail-controls {
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+
+.budget-expand-controls {
+  display: flex;
   gap: 0.75rem;
 }
 
@@ -994,16 +1024,23 @@ button.danger,
   );
 }
 
-.budget-bar-actions {
-  display: none;
-  align-items: flex-end;
-  gap: 0.6rem;
-  margin-top: 0.5rem;
-  flex-wrap: wrap;
+.budget-bar-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
 }
 
-.budget-bars.show-items .budget-bar-actions {
+.budget-bar-detail {
+  margin-top: 0.6rem;
+  padding: 0.6rem 0.75rem 0.7rem 1.75rem;
+  border-left: 2px solid var(--line);
+}
+
+.budget-bar-actions {
   display: flex;
+  align-items: flex-end;
+  gap: 0.6rem;
+  flex-wrap: wrap;
 }
 
 .budget-set-form {
@@ -1023,15 +1060,11 @@ button.danger,
 }
 
 .budget-bar-items {
-  display: none;
-  list-style: none;
-  margin: 0.5rem 0 0;
-  padding: 0 0 0 0.5rem;
-  gap: 0.25rem;
-}
-
-.budget-bars.show-items .budget-bar-items {
   display: grid;
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0;
+  gap: 0.25rem;
 }
 
 .budget-bar-items li {

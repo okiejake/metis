@@ -17,7 +17,7 @@
 {% if budget_summary %}
 <section class="panel">
   <div class="panel-head">
-    <h2>Budget vs. Actual</h2>
+    <h2>Categories</h2>
     <p>Budgeted (planned recurring + one-time) against actual imported spend for {{ budget_summary.window_start }} → {{ budget_summary.window_end }}. Use the date range in the header (try <strong>This Month</strong>) to change the period.</p>
   </div>
 
@@ -48,9 +48,10 @@
 
   {% if budget_summary.categories %}
   <div class="budget-detail-controls">
-    <button type="button" class="button-link js-budget-detail-toggle" aria-expanded="false" aria-controls="budget-vs-actual">
-      Show individual budgets
-    </button>
+    <div class="budget-expand-controls">
+      <button type="button" class="button-link js-budget-expand-all">Expand all</button>
+      <button type="button" class="button-link js-budget-collapse-all">Collapse all</button>
+    </div>
     <button type="button" class="button-link js-category-add-toggle" aria-expanded="false" aria-controls="category-add">
       New category
     </button>
@@ -72,9 +73,14 @@
     {% for cat in budget_summary.categories %}
     <li class="budget-bar-row {{ 'is-over' if cat.over > 0 else '' }}{{ ' no-target' if not cat.has_target else '' }}">
       <div class="budget-bar-head">
-        <span class="category-pill">
-          <span class="category-dot" style="background: {{ cat.color if cat.color else 'var(--muted)' }};"></span>
-          {{ cat.name }}
+        <span class="budget-bar-label">
+          <button type="button" class="card-expand-toggle js-budget-toggle"
+                  data-target="budget-detail-{{ loop.index }}" aria-expanded="false"
+                  aria-label="Show the budget detail for {{ cat.name }}">›</button>
+          <span class="category-pill">
+            <span class="category-dot" style="background: {{ cat.color if cat.color else 'var(--muted)' }};"></span>
+            {{ cat.name }}
+          </span>
         </span>
         <span class="budget-bar-figures">
           <span class="budget-bar-actual">${{ cat.actual|currency }}</span>
@@ -98,34 +104,40 @@
         {% endif %}
       </div>
 
-      <div class="budget-bar-actions">
-        {% if cat.id %}
-        <form method="post" action="/categories/{{ cat.id }}/budget" class="budget-set-form">
-          <label>
-            <span class="budget-set-label">Monthly budget</span>
-            <input type="number" name="budget_amount" step="0.01" min="0"
-                   value="{{ '%.2f'|format(cat.explicit_monthly) if cat.explicit_monthly is not none else '' }}"
-                   placeholder="{{ 'set a budget' if not cat.has_target else 'from expected items' }}" />
-          </label>
-          <button type="submit" class="button-link">Save</button>
-        </form>
-        <a class="button-link" href="/categories/{{ cat.id }}/edit">Edit</a>
+      <div class="budget-bar-detail hidden" id="budget-detail-{{ loop.index }}">
+        {% if cat.line_items %}
+        <ul class="budget-bar-items">
+          {% for item in cat.line_items %}
+          <li>
+            <span class="budget-item-name">↳ {{ item.name }}</span>
+            <span class="amount-value">${{ item.budgeted|currency }} budgeted</span>
+            {% if item.actual > 0 %}
+            <span class="amount-value negative">${{ item.actual|currency }} actual</span>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% elif cat.explicit_monthly is not none %}
+        <p class="card-detail-caption">Budgeted directly, not from expected items.</p>
+        {% else %}
+        <p class="card-detail-caption">No expected items in this category yet.</p>
         {% endif %}
-      </div>
 
-      {% if cat.line_items %}
-      <ul class="budget-bar-items">
-        {% for item in cat.line_items %}
-        <li>
-          <span class="budget-item-name">↳ {{ item.name }}</span>
-          <span class="amount-value">${{ item.budgeted|currency }} budgeted</span>
-          {% if item.actual > 0 %}
-          <span class="amount-value negative">${{ item.actual|currency }} actual</span>
+        <div class="budget-bar-actions">
+          {% if cat.id %}
+          <form method="post" action="/categories/{{ cat.id }}/budget" class="budget-set-form">
+            <label>
+              <span class="budget-set-label">Monthly budget</span>
+              <input type="number" name="budget_amount" step="0.01" min="0"
+                     value="{{ '%.2f'|format(cat.explicit_monthly) if cat.explicit_monthly is not none else '' }}"
+                     placeholder="{{ 'set a budget' if not cat.has_target else 'from expected items' }}" />
+            </label>
+            <button type="submit" class="button-link">Save</button>
+          </form>
+          <a class="button-link" href="/categories/{{ cat.id }}/edit">Edit category</a>
           {% endif %}
-        </li>
-        {% endfor %}
-      </ul>
-      {% endif %}
+        </div>
+      </div>
     </li>
     {% endfor %}
   </ul>
@@ -513,14 +525,30 @@
 <script>
   (() => {
     // Budget vs. Actual: reveal per-item budgets under each category.
-    const detailToggle = document.querySelector('.js-budget-detail-toggle');
-    const barList = document.getElementById('budget-vs-actual-bars');
-    if (detailToggle && barList) {
-      detailToggle.addEventListener('click', () => {
-        const showing = barList.classList.toggle('show-items');
-        detailToggle.setAttribute('aria-expanded', String(showing));
-        detailToggle.textContent = showing ? 'Hide individual budgets' : 'Show individual budgets';
+    // Expand/collapse a category's budget detail, mirroring the ledger's
+    // card-payment rows.
+    const categoryToggles = Array.from(document.querySelectorAll('.js-budget-toggle'));
+    function setExpanded(button, expanded) {
+      const target = document.getElementById(button.dataset.target);
+      if (!target) { return; }
+      target.classList.toggle('hidden', !expanded);
+      button.setAttribute('aria-expanded', String(expanded));
+      button.classList.toggle('is-open', expanded);
+    }
+    categoryToggles.forEach((button) => {
+      button.addEventListener('click', () => {
+        const target = document.getElementById(button.dataset.target);
+        setExpanded(button, target ? target.classList.contains('hidden') : false);
       });
+    });
+
+    const expandAll = document.querySelector('.js-budget-expand-all');
+    const collapseAll = document.querySelector('.js-budget-collapse-all');
+    if (expandAll) {
+      expandAll.addEventListener('click', () => categoryToggles.forEach((b) => setExpanded(b, true)));
+    }
+    if (collapseAll) {
+      collapseAll.addEventListener('click', () => categoryToggles.forEach((b) => setExpanded(b, false)));
     }
 
     // New-category form, tucked away until asked for.
