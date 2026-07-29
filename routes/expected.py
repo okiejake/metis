@@ -25,6 +25,7 @@ from services import (
     load_match_rules_for_item,
     load_reconciliation_counts,
     load_reconciliations_for_item,
+    occurrence_history_start,
     parse_iso_date,
     parse_optional_account_id,
     parse_optional_category_id,
@@ -161,12 +162,10 @@ def reconcile_page(
     occurrences = None
     if source_type == "recurring":
         raw = item["raw"]
-        start = raw["start_date"]
-        if hasattr(start, "date") and not isinstance(start, date):
-            start = start.date()
-        window_start = max(start, date.today() - timedelta(days=400))
         window_end = date.today() + timedelta(days=90)
-        occurrences = recurring_occurrence_status(raw, window_start, window_end, linked)
+        occurrences = recurring_occurrence_status(
+            raw, occurrence_history_start(raw), window_end, linked
+        )
 
     return render(
         request,
