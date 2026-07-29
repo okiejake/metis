@@ -161,6 +161,7 @@ def delete_user_and_data(user_id: int) -> None:
         conn.execute("DELETE FROM expected_reconciliations WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM expected_match_rules WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM category_rules WHERE user_id = ?", [user_id])
+        conn.execute("DELETE FROM transaction_splits WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM accounts WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM categories WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM settings WHERE key LIKE ?", [f"user:{user_id}:%"])
@@ -180,6 +181,7 @@ def init_db() -> None:
         conn.execute("CREATE SEQUENCE IF NOT EXISTS accounts_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS import_templates_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS category_rules_id_seq START 1")
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS transaction_splits_id_seq START 1")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -319,6 +321,19 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS transaction_splits (
+                id BIGINT PRIMARY KEY DEFAULT nextval('transaction_splits_id_seq'),
+                user_id BIGINT NOT NULL,
+                imported_transaction_id BIGINT NOT NULL,
+                category_id BIGINT NOT NULL,
+                amount DOUBLE NOT NULL,
+                note TEXT,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS category_rules (
                 id BIGINT PRIMARY KEY DEFAULT nextval('category_rules_id_seq'),
                 user_id BIGINT NOT NULL,
@@ -446,6 +461,7 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_match_rules_source ON expected_match_rules(user_id, source_type, source_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_category_rules_user ON category_rules(user_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_category_rules_category ON category_rules(user_id, category_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_transaction_splits_tx ON transaction_splits(user_id, imported_transaction_id)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_user_name_unique ON accounts(user_id, name)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_recurring_items_account ON recurring_items(user_id, account_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_manual_transactions_account ON manual_transactions(user_id, account_id)")
@@ -1691,26 +1707,49 @@ def _budget_actuals_by_category(
 ) -> Dict[str, Dict[str, Any]]:
     """Actual imported spend/income in the window grouped by *effective* category
     (COALESCE reconciled item's category, import category). Transfers excluded so
-    card payments never count as spending. Returns keyed by lower(name) ('' = none)."""
+    card payments never count as spending. Split transactions contribute each part
+    to its own category and only the remainder to their effective category.
+    Returns keyed by lower(name) ('' = none)."""
     rows = fetch_all("""
-            SELECT COALESCE(ec.name, ic.name) AS cat_name,
-                   COALESCE(ec.color, ic.color) AS cat_color,
-                   COALESCE(SUM(i.amount), 0) AS total
-            FROM imported_transactions i
-            LEFT JOIN expected_reconciliations r
-                   ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
-            LEFT JOIN recurring_items ri
-                   ON r.source_type = 'recurring' AND ri.id = r.source_id AND ri.user_id = i.user_id
-            LEFT JOIN manual_transactions mt
-                   ON r.source_type = 'one_time' AND mt.id = r.source_id AND mt.user_id = i.user_id
-            LEFT JOIN categories ec
-                   ON ec.id = COALESCE(ri.category_id, mt.category_id) AND ec.user_id = i.user_id
-            LEFT JOIN categories ic
-                   ON ic.id = i.category_id AND ic.user_id = i.user_id
-            WHERE i.user_id = ? AND NOT i.is_transfer
-              AND i.tx_date >= ? AND i.tx_date <= ?
+            WITH tx AS (
+                SELECT i.id, i.amount,
+                       COALESCE(ec.name, ic.name) AS cat_name,
+                       COALESCE(ec.color, ic.color) AS cat_color
+                FROM imported_transactions i
+                LEFT JOIN expected_reconciliations r
+                       ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
+                LEFT JOIN recurring_items ri
+                       ON r.source_type = 'recurring' AND ri.id = r.source_id AND ri.user_id = i.user_id
+                LEFT JOIN manual_transactions mt
+                       ON r.source_type = 'one_time' AND mt.id = r.source_id AND mt.user_id = i.user_id
+                LEFT JOIN categories ec
+                       ON ec.id = COALESCE(ri.category_id, mt.category_id) AND ec.user_id = i.user_id
+                LEFT JOIN categories ic
+                       ON ic.id = i.category_id AND ic.user_id = i.user_id
+                WHERE i.user_id = ? AND NOT i.is_transfer
+                  AND i.tx_date >= ? AND i.tx_date <= ?
+            ),
+            allocated AS (
+                SELECT imported_transaction_id AS tx_id, COALESCE(SUM(amount), 0) AS part_total
+                FROM transaction_splits WHERE user_id = ? GROUP BY 1
+            ),
+            parts AS (
+                -- What is left after splitting, on the transaction's own category.
+                SELECT tx.cat_name, tx.cat_color,
+                       SIGN(tx.amount) * (ABS(tx.amount) - COALESCE(a.part_total, 0)) AS total
+                FROM tx LEFT JOIN allocated a ON a.tx_id = tx.id
+                UNION ALL
+                -- Each split part, on the category it was assigned to.
+                SELECT sc.name, sc.color, SIGN(tx.amount) * ts.amount
+                FROM tx
+                JOIN transaction_splits ts
+                       ON ts.imported_transaction_id = tx.id AND ts.user_id = ?
+                JOIN categories sc ON sc.id = ts.category_id AND sc.user_id = ?
+            )
+            SELECT cat_name, cat_color, COALESCE(SUM(total), 0) AS total
+            FROM parts
             GROUP BY 1, 2
-            """, [user_id, window_start, window_end])
+            """, [user_id, window_start, window_end, user_id, user_id, user_id])
 
     result: Dict[str, Dict[str, Any]] = {}
     for cat_name, cat_color, total in rows:
@@ -1732,16 +1771,24 @@ def _budget_actuals_by_item(
     """Actual imported expense in the window attributed to a specific budgeted
     line item via its reconciliation. Keyed by (source_type, source_id) ->
     expense as a positive number. Only reconciled, non-transfer imports count;
-    unreconciled category spend belongs to the category, not to any one item."""
+    unreconciled category spend belongs to the category, not to any one item.
+    Split parts are subtracted — money moved to another category is no longer
+    this line item's spend."""
     rows = fetch_all("""
-            SELECT r.source_type, r.source_id, COALESCE(SUM(i.amount), 0) AS total
+            WITH allocated AS (
+                SELECT imported_transaction_id AS tx_id, COALESCE(SUM(amount), 0) AS part_total
+                FROM transaction_splits WHERE user_id = ? GROUP BY 1
+            )
+            SELECT r.source_type, r.source_id,
+                   COALESCE(SUM(SIGN(i.amount) * (ABS(i.amount) - COALESCE(a.part_total, 0))), 0) AS total
             FROM imported_transactions i
             JOIN expected_reconciliations r
                    ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
+            LEFT JOIN allocated a ON a.tx_id = i.id
             WHERE i.user_id = ? AND NOT i.is_transfer
               AND i.tx_date >= ? AND i.tx_date <= ?
             GROUP BY 1, 2
-            """, [user_id, window_start, window_end])
+            """, [user_id, user_id, window_start, window_end])
     result: Dict[tuple, float] = {}
     for source_type, source_id, total in rows:
         total = float(total)
@@ -3428,6 +3475,139 @@ def reconciled_occurrence_dates(
         if dates:
             settled[item_id] = dates
     return settled
+
+
+# ---------------------------------------------------------------------------
+# Transaction splits
+#
+# One imported transaction, several categories — a $130 store run that is really
+# groceries + kids + household. Parts are stored as positive magnitudes; the sign
+# always follows the parent transaction, so a split can never flip an expense
+# into income.
+#
+# Splitting is partial by design: name the parts you care about and whatever is
+# left (the remainder) stays on the transaction's own effective category. That
+# keeps the ledger honest without forcing you to account for a whole receipt in
+# one sitting. Invariant: 0 <= sum(parts) <= abs(amount).
+# ---------------------------------------------------------------------------
+
+
+def load_imported_transaction_by_id(user_id: int, tx_id: int) -> Optional[Dict[str, Any]]:
+    """One imported transaction with its effective category (a reconciled expected
+    item's category wins over the import's own, matching the ledger and budget)."""
+    rows = query_all("""
+                SELECT i.id, i.tx_date, i.description, i.merchant, i.amount, i.account,
+                       i.is_transfer, i.category_id, i.category_via,
+                       COALESCE(ec.name, ic.name) AS category_name,
+                       COALESCE(ec.color, ic.color) AS category_color,
+                       COALESCE(ri.name, mt.name) AS expected_name
+                FROM imported_transactions i
+                LEFT JOIN expected_reconciliations r
+                       ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
+                LEFT JOIN recurring_items ri
+                       ON r.source_type = 'recurring' AND ri.id = r.source_id AND ri.user_id = i.user_id
+                LEFT JOIN manual_transactions mt
+                       ON r.source_type = 'one_time' AND mt.id = r.source_id AND mt.user_id = i.user_id
+                LEFT JOIN categories ec
+                       ON ec.id = COALESCE(ri.category_id, mt.category_id) AND ec.user_id = i.user_id
+                LEFT JOIN categories ic
+                       ON ic.id = i.category_id AND ic.user_id = i.user_id
+                WHERE i.id = ? AND i.user_id = ?
+                """, [tx_id, user_id])
+    if not rows:
+        return None
+    row = rows[0]
+    if isinstance(row["tx_date"], datetime):
+        row["tx_date"] = row["tx_date"].date()
+    row["category_color"] = safe_hex_color(row.get("category_color"))
+    row["magnitude"] = round(abs(float(row["amount"])), 2)
+    return row
+
+
+def load_transaction_splits(user_id: int, tx_id: int) -> List[Dict[str, Any]]:
+    """Split parts for one transaction, oldest first."""
+    rows = query_all("""
+                SELECT ts.id, ts.category_id, ts.amount, ts.note,
+                       c.name AS category_name, c.color AS category_color
+                FROM transaction_splits ts
+                JOIN categories c ON c.id = ts.category_id AND c.user_id = ts.user_id
+                WHERE ts.user_id = ? AND ts.imported_transaction_id = ?
+                ORDER BY ts.id
+                """, [user_id, tx_id])
+    for row in rows:
+        row["amount"] = round(float(row["amount"]), 2)
+        row["category_color"] = safe_hex_color(row.get("category_color"))
+    return rows
+
+
+def split_remainder(user_id: int, tx_id: int) -> float:
+    """What is left on the transaction's own category after its split parts."""
+    transaction = load_imported_transaction_by_id(user_id, tx_id)
+    if not transaction:
+        return 0.0
+    allocated = sum(part["amount"] for part in load_transaction_splits(user_id, tx_id))
+    return round(float(transaction["magnitude"]) - allocated, 2)
+
+
+def save_transaction_splits(
+    user_id: int, tx_id: int, parts: List[Dict[str, Any]]
+) -> float:
+    """Replace a transaction's split parts wholesale. `parts` is a list of
+    {category_id, amount, note}; blank/zero amounts are dropped so an emptied row
+    in the editor simply removes that part. Returns the resulting remainder."""
+    transaction = load_imported_transaction_by_id(user_id, tx_id)
+    if not transaction:
+        raise ValueError("Transaction not found")
+
+    magnitude = float(transaction["magnitude"])
+    cleaned: List[Dict[str, Any]] = []
+    for part in parts:
+        amount = round(float(part.get("amount") or 0.0), 2)
+        if amount <= 0:
+            continue
+        category_id = int(part["category_id"])
+        if not load_category_by_id(user_id, category_id):
+            raise ValueError("Category not found")
+        cleaned.append({"category_id": category_id, "amount": amount, "note": (part.get("note") or "").strip()})
+
+    allocated = round(sum(part["amount"] for part in cleaned), 2)
+    if allocated > magnitude + 0.005:
+        raise ValueError(
+            f"Split parts total {format_currency(allocated)}, more than the "
+            f"transaction's {format_currency(magnitude)}"
+        )
+
+    with get_connection() as conn:
+        conn.execute(
+            "DELETE FROM transaction_splits WHERE user_id = ? AND imported_transaction_id = ?",
+            [user_id, tx_id],
+        )
+        for part in cleaned:
+            conn.execute(
+                """
+                INSERT INTO transaction_splits (user_id, imported_transaction_id, category_id, amount, note)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                [user_id, tx_id, part["category_id"], part["amount"], part["note"] or None],
+            )
+    return round(magnitude - allocated, 2)
+
+
+def clear_transaction_splits(user_id: int, tx_id: int) -> None:
+    execute(
+        "DELETE FROM transaction_splits WHERE user_id = ? AND imported_transaction_id = ?",
+        [user_id, tx_id],
+    )
+
+
+def split_counts_by_transaction(user_id: int) -> Dict[int, int]:
+    """imported transaction id -> number of split parts, for ledger badges."""
+    rows = fetch_all(
+        "SELECT imported_transaction_id, COUNT(*) FROM transaction_splits "
+        "WHERE user_id = ? GROUP BY 1",
+        [user_id],
+    )
+    return {int(row[0]): int(row[1]) for row in rows}
 
 
 # ---------------------------------------------------------------------------

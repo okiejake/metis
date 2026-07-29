@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-intro">
+  <div>
+    <p class="page-kicker">Split Transaction</p>
+    <h2>Assign this transaction to more than one category.</h2>
+    <p>Name the parts you care about. Whatever is left stays on the transaction's own category, so you never have to account for a whole receipt in one sitting.</p>
+  </div>
+  <div class="intro-badge-stack">
+    <span class="stat-chip">{{ transaction.tx_date }}</span>
+    <span class="stat-chip">${{ transaction.magnitude|currency }}</span>
+    {% if transaction.category_name %}
+    <span class="stat-chip">{{ transaction.category_name }}</span>
+    {% endif %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>{{ transaction.merchant or transaction.description }}</h2>
+    <p>{{ transaction.account }} · {{ transaction.description }}</p>
+  </div>
+
+  <form method="post" action="/transactions/{{ transaction.id }}/split">
+    <div class="table-wrap">
+      <table class="split-table">
+        <thead>
+          <tr>
+            <th>Category</th>
+            <th>Amount</th>
+            <th>Note</th>
+          </tr>
+        </thead>
+        <tbody id="split-rows">
+          {% for split in splits %}
+          <tr class="split-row">
+            <td>
+              <select name="category_id">
+                <option value="">Remove this part</option>
+                {% for category in categories %}
+                <option value="{{ category.id }}" {{ 'selected' if category.id == split.category_id else '' }}>{{ category.name }}</option>
+                {% endfor %}
+              </select>
+            </td>
+            <td><input type="number" name="amount" step="0.01" min="0" value="{{ '%.2f'|format(split.amount) }}" /></td>
+            <td><input type="text" name="note" value="{{ split.note or '' }}" placeholder="Optional" /></td>
+          </tr>
+          {% endfor %}
+          <tr class="split-row">
+            <td>
+              <select name="category_id">
+                <option value="">Choose a category</option>
+                {% for category in categories %}
+                <option value="{{ category.id }}">{{ category.name }}</option>
+                {% endfor %}
+              </select>
+            </td>
+            <td><input type="number" name="amount" step="0.01" min="0" placeholder="0.00" /></td>
+            <td><input type="text" name="note" placeholder="Optional" /></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="split-remainder">
+      Transaction total <strong>${{ transaction.magnitude|currency }}</strong>
+      · remainder on {{ transaction.category_name or 'no category' }}
+      <strong id="split-remainder-value">${{ remainder|currency }}</strong>
+    </p>
+
+    <div class="split-actions">
+      <button type="button" class="button-link js-split-add">Add another part</button>
+      <button type="submit" class="button-link">Save Split</button>
+      <a class="button-link" href="/ledger">Back to Ledger</a>
+    </div>
+  </form>
+
+  {% if splits %}
+  <form method="post" action="/transactions/{{ transaction.id }}/split/clear" class="inline-form">
+    <button type="submit" class="button-link">Remove all parts</button>
+  </form>
+  {% endif %}
+</section>
+
+<script>
+  (function () {
+    const rows = document.getElementById('split-rows');
+    const total = {{ transaction.magnitude }};
+    const remainderValue = document.getElementById('split-remainder-value');
+
+    function recalcRemainder() {
+      let allocated = 0;
+      rows.querySelectorAll('input[name="amount"]').forEach(function (input) {
+        const value = parseFloat(input.value);
+        if (!isNaN(value) && value > 0) { allocated += value; }
+      });
+      const remainder = total - allocated;
+      remainderValue.textContent = '$' + remainder.toFixed(2);
+      remainderValue.classList.toggle('negative', remainder < -0.005);
+    }
+
+    document.querySelector('.js-split-add').addEventListener('click', function () {
+      const template = rows.querySelector('.split-row:last-child');
+      const clone = template.cloneNode(true);
+      clone.querySelectorAll('input').forEach(function (input) { input.value = ''; });
+      clone.querySelector('select').selectedIndex = 0;
+      rows.appendChild(clone);
+      recalcRemainder();
+    });
+
+    rows.addEventListener('input', recalcRemainder);
+    recalcRemainder();
+  })();
+</script>
+{% endblock %}

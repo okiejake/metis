@@ -9,6 +9,7 @@ from routes.imports import router as imports_router
 from routes.manual import router as manual_router
 from routes.overview import router as overview_router
 from routes.recurring import router as recurring_router
+from routes.splits import router as splits_router
 from services import attach_user_cookie, format_currency, init_db
 from web import templates
 
@@ -39,6 +40,7 @@ app.include_router(overview_router)
 app.include_router(imports_router)
 app.include_router(expected_router)
 app.include_router(accounts_router)
+app.include_router(splits_router)
 
 
 if __name__ == "__main__":
