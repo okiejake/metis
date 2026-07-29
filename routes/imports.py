@@ -3,6 +3,7 @@ from fastapi.responses import HTMLResponse
 
 from services import (
     CsvImportError,
+    apply_category_rules,
     apply_match_rules,
     delete_import_template,
     get_current_user,
@@ -98,8 +99,10 @@ async def upload_import(
     except CsvImportError as exc:
         return redirect_with_message("/import", str(exc), is_error=True)
 
-    # Auto-reconcile: apply the user's match rules to any newly imported actuals.
+    # Auto-reconcile, then categorize: apply the user's match rules and category
+    # rules to any newly imported actuals.
     auto_matched = apply_match_rules(user["id"]) if result["inserted"] else 0
+    auto_categorized = apply_category_rules(user["id"]) if result["inserted"] else 0
 
     message = (
         f"{account_label}: imported {result['inserted']} new, "
@@ -109,6 +112,8 @@ async def upload_import(
         message += f" ({result['transfers']} transfers flagged)"
     if auto_matched:
         message += f" · auto-matched {auto_matched} to expected items"
+    if auto_categorized:
+        message += f" · categorized {auto_categorized}"
     return redirect_with_message("/import", message)
 
 

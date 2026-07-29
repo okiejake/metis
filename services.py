@@ -160,6 +160,7 @@ def delete_user_and_data(user_id: int) -> None:
         conn.execute("DELETE FROM imported_transactions WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM expected_reconciliations WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM expected_match_rules WHERE user_id = ?", [user_id])
+        conn.execute("DELETE FROM category_rules WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM accounts WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM categories WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM settings WHERE key LIKE ?", [f"user:{user_id}:%"])
@@ -178,6 +179,7 @@ def init_db() -> None:
         conn.execute("CREATE SEQUENCE IF NOT EXISTS expected_match_rules_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS accounts_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS import_templates_id_seq START 1")
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS category_rules_id_seq START 1")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -317,6 +319,19 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS category_rules (
+                id BIGINT PRIMARY KEY DEFAULT nextval('category_rules_id_seq'),
+                user_id BIGINT NOT NULL,
+                category_id BIGINT NOT NULL,
+                pattern TEXT NOT NULL,
+                amount_min DOUBLE,
+                amount_max DOUBLE,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS accounts (
                 id BIGINT PRIMARY KEY DEFAULT nextval('accounts_id_seq'),
                 user_id BIGINT NOT NULL,
@@ -390,6 +405,10 @@ def init_db() -> None:
             conn.execute("ALTER TABLE manual_transactions ADD COLUMN account_id BIGINT")
         if not table_has_column(conn, "imported_transactions", "account_id"):
             conn.execute("ALTER TABLE imported_transactions ADD COLUMN account_id BIGINT")
+        # How an imported row got its category: 'rule' (set by a category rule, and
+        # therefore safe to recompute) vs 'manual' (you chose it — rules never clobber it).
+        if not table_has_column(conn, "imported_transactions", "category_via"):
+            conn.execute("ALTER TABLE imported_transactions ADD COLUMN category_via TEXT")
         if not table_has_column(conn, "users", "email"):
             conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
         migrate_categories_to_user_scoped_uniqueness(conn, default_user_id)
@@ -425,6 +444,8 @@ def init_db() -> None:
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reconciliation_import_unique ON expected_reconciliations(user_id, imported_transaction_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_reconciliation_source ON expected_reconciliations(user_id, source_type, source_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_match_rules_source ON expected_match_rules(user_id, source_type, source_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_category_rules_user ON category_rules(user_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_category_rules_category ON category_rules(user_id, category_id)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_user_name_unique ON accounts(user_id, name)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_recurring_items_account ON recurring_items(user_id, account_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_manual_transactions_account ON manual_transactions(user_id, account_id)")
@@ -3407,6 +3428,168 @@ def reconciled_occurrence_dates(
         if dates:
             settled[item_id] = dates
     return settled
+
+
+# ---------------------------------------------------------------------------
+# Category rules
+#
+# Name-match rules that categorize imported transactions directly, with no
+# budget or recurring item behind them — for the things that never follow a
+# schedule (card payments, ATM withdrawals, one-off spend you still want named).
+#
+# A rule only ever writes rows it owns (category_via = 'rule'), so a category you
+# picked by hand is never overwritten. Transfers are eligible on purpose: card
+# payments are transfers, and the budget aggregation already excludes transfers,
+# so naming one is presentational and can't distort budget totals.
+# ---------------------------------------------------------------------------
+
+
+def load_category_rules(user_id: int) -> List[Dict[str, Any]]:
+    """All category rules with their category, newest first."""
+    return query_all("""
+                SELECT cr.id, cr.category_id, cr.pattern, cr.amount_min, cr.amount_max,
+                       c.name AS category_name, c.color AS category_color
+                FROM category_rules cr
+                JOIN categories c ON c.id = cr.category_id AND c.user_id = cr.user_id
+                WHERE cr.user_id = ?
+                ORDER BY cr.created_at DESC, cr.id DESC
+                """, [user_id])
+
+
+def create_category_rule(
+    user_id: int,
+    category_id: int,
+    pattern: str,
+    amount_min: Optional[float] = None,
+    amount_max: Optional[float] = None,
+) -> int:
+    """Create a rule and apply it immediately. Returns the new rule id."""
+    cleaned = (pattern or "").strip()
+    if not cleaned:
+        raise ValueError("A match pattern is required")
+    if not load_category_by_id(user_id, category_id):
+        raise ValueError("Category not found")
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO category_rules (user_id, category_id, pattern, amount_min, amount_max)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            [user_id, category_id, cleaned, amount_min, amount_max],
+        )
+        rule_id = int(conn.execute(
+            "SELECT MAX(id) FROM category_rules WHERE user_id = ?", [user_id]
+        ).fetchone()[0])
+    apply_category_rules(user_id, rule_ids=[rule_id])
+    return rule_id
+
+
+def update_category_rule(
+    user_id: int,
+    rule_id: int,
+    category_id: int,
+    pattern: str,
+    amount_min: Optional[float] = None,
+    amount_max: Optional[float] = None,
+) -> None:
+    """Edit a rule, then rebuild every rule-owned category so rows the old
+    pattern claimed are released and the new one is applied."""
+    cleaned = (pattern or "").strip()
+    if not cleaned:
+        raise ValueError("A match pattern is required")
+    if not load_category_by_id(user_id, category_id):
+        raise ValueError("Category not found")
+
+    execute(
+        """
+        UPDATE category_rules SET category_id = ?, pattern = ?, amount_min = ?, amount_max = ?
+        WHERE id = ? AND user_id = ?
+        """,
+        [category_id, cleaned, amount_min, amount_max, rule_id, user_id],
+    )
+    resync_category_rules(user_id)
+
+
+def delete_category_rule(user_id: int, rule_id: int) -> None:
+    execute("DELETE FROM category_rules WHERE id = ? AND user_id = ?", [rule_id, user_id])
+    resync_category_rules(user_id)
+
+
+def apply_category_rules(
+    user_id: int, rule_ids: Optional[List[int]] = None, import_ids: Optional[List[int]] = None
+) -> int:
+    """Categorize imported rows whose description contains a rule pattern. Runs
+    retroactively (rule create/edit) and on new imports (pass import_ids). Rows
+    you categorized by hand are left alone. Returns the number of rows changed."""
+    categorized = 0
+    with get_connection() as conn:
+        rule_columns = "id, category_id, pattern, amount_min, amount_max"
+        if rule_ids is not None:
+            if not rule_ids:
+                return 0
+            placeholders = ", ".join("?" for _ in rule_ids)
+            rules = conn.execute(
+                f"SELECT {rule_columns} FROM category_rules WHERE user_id = ? AND id IN ({placeholders})",
+                [user_id, *rule_ids],
+            ).fetchall()
+        else:
+            rules = conn.execute(
+                f"SELECT {rule_columns} FROM category_rules WHERE user_id = ? ORDER BY id",
+                [user_id],
+            ).fetchall()
+
+        for _rule_id, category_id, pattern, amount_min, amount_max in rules:
+            if not pattern.strip():
+                continue
+            where_params: List[Any] = [user_id, f"%{pattern.upper()}%"]
+            # Optional amount constraint, compared against the magnitude. A small
+            # epsilon absorbs float rounding so an "exact" bound matches cleanly.
+            amount_filter = ""
+            if amount_min is not None:
+                amount_filter += " AND ABS(amount) >= ?"
+                where_params.append(float(amount_min) - 0.005)
+            if amount_max is not None:
+                amount_filter += " AND ABS(amount) <= ?"
+                where_params.append(float(amount_max) + 0.005)
+            import_filter = ""
+            if import_ids is not None:
+                if not import_ids:
+                    continue
+                placeholders = ", ".join("?" for _ in import_ids)
+                import_filter = f" AND id IN ({placeholders})"
+                where_params.extend(import_ids)
+
+            where_sql = f"""
+                WHERE user_id = ?
+                  AND UPPER(description) LIKE ?
+                  AND (category_id IS NULL OR category_via = 'rule')
+                  {amount_filter}
+                  {import_filter}
+                """
+            # Count only rows this rule actually moves, so re-running is honest.
+            changed = conn.execute(
+                f"SELECT COUNT(*) FROM imported_transactions {where_sql} "
+                f"AND category_id IS DISTINCT FROM ?",
+                [*where_params, int(category_id)],
+            ).fetchone()[0]
+            conn.execute(
+                f"UPDATE imported_transactions SET category_id = ?, category_via = 'rule' {where_sql}",
+                [int(category_id), *where_params],
+            )
+            categorized += int(changed)
+    return categorized
+
+
+def resync_category_rules(user_id: int) -> int:
+    """Release every rule-owned category, then re-apply all rules from scratch.
+    Hand-picked categories (category_via IS NULL) survive untouched."""
+    execute(
+        "UPDATE imported_transactions SET category_id = NULL, category_via = NULL "
+        "WHERE user_id = ? AND category_via = 'rule'",
+        [user_id],
+    )
+    return apply_category_rules(user_id)
 
 
 def settled_one_time_ids(user_id: int, through: date) -> set:
