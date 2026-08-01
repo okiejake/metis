@@ -31,13 +31,14 @@
         document.documentElement.setAttribute('data-theme', preferredTheme);
       })();
     </script>
-    <link rel="stylesheet" href="/static/styles.css?v=20260729b" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260730a" />
   </head>
   <body>
     <div class="app-glow app-glow-one" aria-hidden="true"></div>
     <div class="app-glow app-glow-two" aria-hidden="true"></div>
     <div class="app-grid" aria-hidden="true"></div>
 
+    {% if chrome %}
     {% set user_initial = (current_user.display_name[:1] if current_user.display_name else '?')|upper %}
     {% set active_path = request.url.path %}
     <header class="site-header">
@@ -82,10 +83,12 @@
                 <i data-lucide="settings-2" class="menu-icon" aria-hidden="true"></i>
                 Settings
               </a>
-              <button type="button" class="user-menu-action buttonless">
-                <i data-lucide="log-out" class="menu-icon" aria-hidden="true"></i>
-                Logout
-              </button>
+              <form method="post" action="/logout">
+                <button type="submit" class="user-menu-action buttonless">
+                  <i data-lucide="log-out" class="menu-icon" aria-hidden="true"></i>
+                  Sign out
+                </button>
+              </form>
             </div>
           </details>
         </div>
@@ -133,6 +136,7 @@
       </dialog>
       {% endif %}
     </header>
+    {% endif %}
 
     <main class="container">
       {% if message %}

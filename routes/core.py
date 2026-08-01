@@ -2,6 +2,9 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from services import (
+    PASSWORD_MIN_LENGTH,
+    authenticate,
+    clear_session_cookie,
     create_user_record,
     delete_user_and_data,
     get_connection,
@@ -11,9 +14,9 @@ from services import (
     load_user_by_id,
     load_user_by_slug,
     normalize_user_email,
-    normalize_user_slug,
     redirect_with_message,
     resolve_safe_redirect_target,
+    set_user_password,
 )
 from web import CurrentUser, render
 
@@ -46,22 +49,6 @@ def create_user(
         resolve_safe_redirect_target(next_path),
         f"User '{(display_name or '').strip()}' created",
     )
-
-
-@router.post("/users/switch")
-def switch_user(request: Request, user_slug: str = Form(...), next_path: str = Form("/dashboard")):
-    try:
-        normalized_slug = normalize_user_slug(user_slug)
-    except ValueError:
-        return redirect_with_message(resolve_safe_redirect_target(next_path), "Invalid user selection", is_error=True)
-
-    user = load_user_by_slug(normalized_slug)
-    if not user:
-        return redirect_with_message(resolve_safe_redirect_target(next_path), "User not found", is_error=True)
-
-    request.state.current_user = user
-    request.state.current_user_slug = user["slug"]
-    return redirect_with_message(resolve_safe_redirect_target(next_path), f"Switched to {user['display_name']}")
 
 
 @router.get("/settings", response_class=HTMLResponse)
@@ -104,11 +91,59 @@ def update_personal_settings(
     return redirect_with_message("/settings?section=user-management", "Personal details updated")
 
 
-@router.post("/settings/personal/passkey")
-def add_passkey_placeholder():
+@router.post("/settings/personal/password")
+def change_password(
+    request: Request, user: CurrentUser,
+    current_password: str = Form(...),
+    password: str = Form(...),
+    confirm: str = Form(...),
+):
+    """Change your own password. The current one is required so a borrowed
+    session can't lock you out of your own data, and every session is dropped
+    afterwards — including this one, so you sign back in."""
+    try:
+        authenticate(user["slug"], current_password)
+    except ValueError:
+        return redirect_with_message(
+            "/settings?section=user-management", "Your current password is incorrect", is_error=True
+        )
+    try:
+        set_user_password(user["id"], password, confirm)
+    except ValueError as exc:
+        return redirect_with_message("/settings?section=user-management", str(exc), is_error=True)
+
+    response = RedirectResponse(url="/login", status_code=303)
+    clear_session_cookie(response)
+    return response
+
+
+@router.post("/settings/users/{user_id}/password")
+def set_other_user_password(
+    request: Request, user: CurrentUser, user_id: int,
+    password: str = Form(...),
+    confirm: str = Form(...),
+):
+    """Give another profile a password, so a second person in the household can
+    actually sign in. Profiles created before auth — and any created since — have
+    none, which leaves their data present but unreachable.
+
+    This follows the same trust model as the rest of user management on this page:
+    anyone signed in can administer profiles. Fine for a household; it is the
+    thing to revisit if Metis ever hosts unrelated users."""
+    target = load_user_by_id(user_id)
+    if not target:
+        return redirect_with_message(
+            "/settings?section=user-management", "Profile not found", is_error=True
+        )
+    try:
+        set_user_password(user_id, password, confirm)
+    except ValueError as exc:
+        return redirect_with_message("/settings?section=user-management", str(exc), is_error=True)
+
+    note = " You have been signed out of that profile." if user_id == user["id"] else ""
     return redirect_with_message(
         "/settings?section=user-management",
-        "Passkey support is coming soon",
+        f"Password set for {target['display_name']}.{note}",
     )
 
 

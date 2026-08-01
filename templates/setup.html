@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="auth-shell">
+  <div class="auth-card auth-card-wide">
+    <p class="brand-kicker">First run</p>
+    <h1 class="auth-brand">secure metis</h1>
+    <p class="auth-lede">
+      Your data is already here — it just has no password on it yet. Set one and
+      you'll be signed in. Until you do, this is the only page Metis will serve.
+    </p>
+
+    {% if pending_users %}
+    <form method="post" action="/setup" class="auth-form">
+      {% if pending_users|length > 1 %}
+      <label>
+        Profile
+        <select name="user_id" required>
+          {% for candidate in pending_users %}
+          <option value="{{ candidate.id }}">{{ candidate.display_name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% else %}
+      <input type="hidden" name="user_id" value="{{ pending_users[0].id }}" />
+      <p class="auth-note">Securing <strong>{{ pending_users[0].display_name }}</strong></p>
+      {% endif %}
+
+      <label>
+        Password
+        <input type="password" name="password" autocomplete="new-password"
+               minlength="{{ min_length }}" autofocus required />
+      </label>
+      <label>
+        Confirm password
+        <input type="password" name="confirm" autocomplete="new-password"
+               minlength="{{ min_length }}" required />
+      </label>
+      <p class="auth-note">At least {{ min_length }} characters. Length beats punctuation.</p>
+      <button type="submit" class="button-link auth-submit">Set Password &amp; Sign In</button>
+    </form>
+
+    {% if pending_users|length > 1 %}
+    <p class="auth-note">
+      The other {{ pending_users|length - 1 }} profile(s) stay locked until you give each one a
+      password from Settings.
+    </p>
+    {% endif %}
+    {% else %}
+    <p class="empty-state">No profiles found — Metis could not initialize its database.</p>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

@@ -1,4 +1,7 @@
+from urllib.parse import quote_plus
+
 from fastapi import FastAPI, Request
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from routes.accounts import router as accounts_router
@@ -8,9 +11,17 @@ from routes.expected import router as expected_router
 from routes.imports import router as imports_router
 from routes.manual import router as manual_router
 from routes.overview import router as overview_router
+from routes.auth import router as auth_router
 from routes.recurring import router as recurring_router
 from routes.splits import router as splits_router
-from services import attach_user_cookie, format_currency, init_db
+from services import (
+    SESSION_COOKIE,
+    any_user_has_password,
+    format_currency,
+    init_db,
+    load_session_user,
+    purge_expired_sessions,
+)
 from web import templates
 
 app = FastAPI(title="Metis Finance Tracker")
@@ -21,17 +32,43 @@ templates.env.filters["currency"] = format_currency
 @app.on_event("startup")
 def startup_event() -> None:
     init_db()
+    purge_expired_sessions()
+
+
+# Paths reachable without a session. Everything else — all 50-odd routes — is
+# gated by the middleware below, so a new route is private by default rather than
+# private only if someone remembers to decorate it.
+PUBLIC_PATH_PREFIXES = ("/static/",)
+PUBLIC_PATHS = {"/login", "/logout", "/setup", "/favicon.ico"}
 
 
 @app.middleware("http")
-async def persist_current_user_cookie(request: Request, call_next):
-    response = await call_next(request)
-    user_slug = getattr(request.state, "current_user_slug", "")
-    if user_slug:
-        attach_user_cookie(response, user_slug)
-    return response
+async def require_session(request: Request, call_next):
+    """Resolve the signed-in user, or send them to sign in.
+
+    Identity comes only from the session cookie. On a database that predates
+    auth no password exists yet, so everything routes to /setup until one is
+    created — the app is never briefly open while you get around to it."""
+    path = request.url.path
+    if path.startswith(PUBLIC_PATH_PREFIXES) or path in PUBLIC_PATHS:
+        return await call_next(request)
+
+    if not any_user_has_password():
+        return RedirectResponse(url="/setup", status_code=303)
+
+    user = load_session_user(request.cookies.get(SESSION_COOKIE, ""))
+    if not user:
+        target = request.url.path
+        if request.url.query:
+            target = f"{target}?{request.url.query}"
+        return RedirectResponse(url=f"/login?next={quote_plus(target)}", status_code=303)
+
+    request.state.current_user = user
+    request.state.current_user_slug = user["slug"]
+    return await call_next(request)
 
 
+app.include_router(auth_router)
 app.include_router(core_router)
 app.include_router(categories_router)
 app.include_router(recurring_router)

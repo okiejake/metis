@@ -40,15 +40,30 @@
         </div>
       </form>
 
-      <form method="post" action="/settings/personal/passkey" class="inline-form">
-        <button type="submit">Add Passkey</button>
+      <form method="post" action="/settings/personal/password" class="grid-form compact">
+        <label>
+          Current password
+          <input type="password" name="current_password" autocomplete="current-password" required />
+        </label>
+        <label>
+          New password
+          <input type="password" name="password" autocomplete="new-password" minlength="10" required />
+        </label>
+        <label>
+          Confirm new password
+          <input type="password" name="confirm" autocomplete="new-password" minlength="10" required />
+        </label>
+        <button type="submit" class="button-link">Change Password</button>
       </form>
+      <p class="card-note">
+        Changing your password signs out every device, including this one.
+      </p>
     </section>
 
     <section class="panel">
       <div class="panel-head">
         <h2>Admin Table</h2>
-        <p>Edit, switch, or remove workspace users.</p>
+        <p>Edit profiles, give them a password so they can sign in, or remove them.</p>
       </div>
       {% if managed_users %}
       <div class="table-wrap">
@@ -71,7 +86,17 @@
                     <input type="text" name="display_name" value="{{ user_row.display_name }}" required />
                     <input type="email" name="email" value="{{ user_row.email }}" placeholder="name@example.com" />
                     <button type="submit">Save</button>
-                    <a href="/dashboard?user={{ user_row.slug }}" class="button-link">{{ 'Active' if user_row.id == current_user.id else 'Use' }}</a>
+                    {% if user_row.id == current_user.id %}
+                    <span class="table-pill success">signed in</span>
+                    {% elif not user_row.has_password %}
+                    <span class="table-pill neutral" title="This profile has no password, so nobody can sign in as it">no password</span>
+                    {% endif %}
+                  </form>
+                  <form method="post" action="/settings/users/{{ user_row.id }}/password" class="settings-user-row-form">
+                    <input type="password" name="password" placeholder="{{ 'Set a password' if not user_row.has_password else 'New password' }}"
+                           autocomplete="new-password" minlength="10" required />
+                    <input type="password" name="confirm" placeholder="Confirm" autocomplete="new-password" minlength="10" required />
+                    <button type="submit">{{ 'Enable Sign In' if not user_row.has_password else 'Reset Password' }}</button>
                   </form>
                   <form
                     method="post"
