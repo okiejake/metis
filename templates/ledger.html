@@ -88,7 +88,7 @@
             </span>
           </td>
           <td class="amount-value">${{ row.income|currency }}</td>
-          <td class="amount-value">${{ row.expense|currency }}</td>
+          <td class="amount-value negative">${{ row.expense|currency }}</td>
           <td class="amount-value {{ 'negative' if row.running_balance < 0 else '' }}{% if row.date.isoformat() == today_iso %} today-balance{% endif %}">${{ row.running_balance|currency }}</td>
           <td class="row-action-cell"></td>
         </tr>
@@ -122,7 +122,7 @@
             {% endif %}
           </td>
           <td class="amount-value">{% if row.income > 0 %}${{ row.income|currency }}{% else %}-{% endif %}</td>
-          <td class="amount-value">{% if row.expense > 0 %}${{ row.expense|currency }}{% else %}-{% endif %}</td>
+          <td class="amount-value negative">{% if row.expense > 0 %}${{ row.expense|currency }}{% else %}-{% endif %}</td>
           <td class="amount-value {{ 'negative' if row.running_balance < 0 else '' }}{% if row.date.isoformat() == today_iso %} today-balance{% endif %}">${{ row.running_balance|currency }}</td>
           <td class="row-action-cell">
             {% if row.source == 'manual' %}
