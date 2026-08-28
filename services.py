@@ -1558,7 +1558,7 @@ def _iter_card_cycles(card: Dict[str, Any], window_start: date, window_end: date
 def forecast_card_payments(
     user_id: int, window_start: date, window_end: date, cutover: Optional[date]
 ) -> List[Dict[str, Any]]:
-    """One projected '{card} payment' per cycle whose due date is in the window and
+    """One projected '{card} statement' per cycle whose due date is in the window and
     after the checking cutover. Amount = the card's actual charges in the cycle +
     expected card charges — the latter counted only after that card's own import
     cutover, so a charge that is both imported and expected is not double-counted."""
@@ -1641,7 +1641,7 @@ def forecast_card_payments(
             payments.append(
                 {
                     "date": due,
-                    "description": f"{card['name']} payment",
+                    "description": f"{card['name']} statement",
                     "source": "card",
                     "income": delta if delta > 0 else 0.0,
                     "expense": -delta if delta < 0 else 0.0,

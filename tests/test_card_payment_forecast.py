@@ -88,6 +88,7 @@ def test_unpaid_statement_projects_the_whole_balance(db, user_id, accounts):
     projected = rows_on(forecast(db, user_id), DUE)
 
     assert len(projected) == 1
+    assert projected[0]["description"] == "Example Card statement"
     assert projected[0]["delta"] == -STATEMENT_TOTAL
 
 
