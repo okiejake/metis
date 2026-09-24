@@ -98,6 +98,89 @@ def migrate_card_payment_signs(conn: duckdb.DuckDBPyConnection) -> int:
     return int(affected)
 
 
+# Labels the built-in parsers stamp on a row before it is fingerprinted. Custom
+# templates use their account's name, which the candidates below already cover.
+BUILT_IN_IMPORT_LABELS = ("Checking", "Visa", "Apple Card")
+FINGERPRINT_MAX_OCCURRENCE = 4
+
+
+def migrate_card_payment_fingerprints(conn: duckdb.DuckDBPyConnection) -> Dict[str, int]:
+    """Re-key card payments whose sign migrate_card_payment_signs flipped, and
+    remove the duplicates the stale keys already let in. Returns counts.
+
+    A fingerprint hashes the signed amount, so a payment flipped to positive
+    still carries the key of its old negative self. Re-importing the same export
+    computes the positive key, finds no match, and inserts the payment a second
+    time — which pays the card down twice and makes the next statement look
+    overpaid.
+
+    The key also hashes the export's label, which is not stored, so it is
+    recovered by trying every label the row could have been imported under. A
+    row is only touched when a candidate reproduces its stored key exactly, so
+    nothing is re-keyed or removed on a guess. Of a proven duplicate pair the
+    later import goes, unless something references it; then the earlier one
+    goes instead, and if both are referenced both stay."""
+    candidates = set(BUILT_IN_IMPORT_LABELS)
+    for sql in (
+        "SELECT DISTINCT name FROM accounts",
+        "SELECT DISTINCT account FROM imported_transactions",
+        "SELECT DISTINCT COALESCE(NULLIF(display_label, ''), label) FROM import_account_links",
+    ):
+        candidates.update(str(row[0]) for row in conn.execute(sql).fetchall() if row[0])
+
+    rows = conn.execute(
+        """
+        SELECT id, user_id, tx_date, amount, description, fingerprint
+        FROM imported_transactions
+        WHERE is_transfer AND amount > 0
+          AND account_id IN (SELECT id FROM accounts WHERE account_type = 'credit_card')
+        ORDER BY id
+        """
+    ).fetchall()
+    referenced = {
+        int(row[0])
+        for row in conn.execute(
+            "SELECT imported_transaction_id FROM expected_reconciliations "
+            "UNION SELECT imported_transaction_id FROM transaction_splits"
+        ).fetchall()
+    }
+
+    rekeyed = removed = 0
+    for tx_id, user_id, tx_date, amount, description, stored in rows:
+        tx_date = tx_date.date() if isinstance(tx_date, datetime) else tx_date
+        current_key = None
+        for label in candidates:
+            for occurrence in range(FINGERPRINT_MAX_OCCURRENCE):
+                legacy = {"account": label, "tx_date": tx_date, "amount": -amount, "description": description}
+                if compute_import_fingerprint(legacy, occurrence) == stored:
+                    current_key = compute_import_fingerprint({**legacy, "amount": amount}, occurrence)
+                    break
+            if current_key:
+                break
+        if current_key is None:
+            continue  # already current, or imported under a label we cannot recover
+
+        twin = conn.execute(
+            "SELECT id FROM imported_transactions WHERE user_id = ? AND fingerprint = ? AND id <> ?",
+            [user_id, current_key, tx_id],
+        ).fetchone()
+        if twin is None:
+            conn.execute(
+                "UPDATE imported_transactions SET fingerprint = ? WHERE id = ?", [current_key, tx_id]
+            )
+            rekeyed += 1
+        elif int(twin[0]) not in referenced:
+            conn.execute("DELETE FROM imported_transactions WHERE id = ?", [int(twin[0])])
+            conn.execute(
+                "UPDATE imported_transactions SET fingerprint = ? WHERE id = ?", [current_key, tx_id]
+            )
+            removed += 1
+        elif tx_id not in referenced:
+            conn.execute("DELETE FROM imported_transactions WHERE id = ?", [tx_id])
+            removed += 1
+    return {"rekeyed": rekeyed, "removed": removed}
+
+
 def migrate_categories_to_user_scoped_uniqueness(
     conn: duckdb.DuckDBPyConnection, default_user_id: int
 ) -> None:
@@ -525,6 +608,7 @@ def init_db() -> None:
             conn.execute("ALTER TABLE users ADD COLUMN locked_until TIMESTAMP")
         migrate_categories_to_user_scoped_uniqueness(conn, default_user_id)
         migrate_card_payment_signs(conn)
+        migrate_card_payment_fingerprints(conn)
         conn.execute(
             "UPDATE categories SET color = ? WHERE color IS NULL OR TRIM(color) = ''",
             [DEFAULT_CATEGORY_COLOR],
@@ -3094,6 +3178,12 @@ def _assign_import_fingerprints(rows: List[Dict[str, Any]]) -> None:
         occurrence = seen.get(base_key, 0)
         seen[base_key] = occurrence + 1
         row["fingerprint"] = compute_import_fingerprint(row, occurrence)
+        # A card payment used to be stored negative, and a row imported then still
+        # carries that key; checking it too keeps a re-import from adding it twice.
+        if row.get("is_transfer") and float(row["amount"]) > 0:
+            row["legacy_fingerprint"] = compute_import_fingerprint(
+                {**row, "amount": -float(row["amount"])}, occurrence
+            )
 
 
 def upsert_imported_transactions(
@@ -3106,6 +3196,7 @@ def upsert_imported_transactions(
 
     _assign_import_fingerprints(rows)
     fingerprints = [row["fingerprint"] for row in rows]
+    fingerprints += [row["legacy_fingerprint"] for row in rows if row.get("legacy_fingerprint")]
 
     # Anchor each row to an account by id at insert time. Prefer an account_id the
     # parser already resolved (custom templates); otherwise resolve the export's
@@ -3131,6 +3222,8 @@ def upsert_imported_transactions(
         for row in rows:
             fingerprint = row["fingerprint"]
             if fingerprint in already_present or fingerprint in seen_in_batch:
+                continue
+            if row.get("legacy_fingerprint") in already_present:
                 continue
             seen_in_batch.add(fingerprint)
             account_id = row.get("account_id")
