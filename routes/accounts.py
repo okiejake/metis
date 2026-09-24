@@ -218,6 +218,10 @@ def delete_account(request: Request, user: CurrentUser, account_id: int):
             "UPDATE manual_transactions SET account_id = NULL WHERE account_id = ? AND user_id = ?",
             [account_id, user["id"]],
         )
+        conn.execute(
+            "DELETE FROM card_statements WHERE account_id = ? AND user_id = ?",
+            [account_id, user["id"]],
+        )
         conn.execute("DELETE FROM accounts WHERE id = ? AND user_id = ?", [account_id, user["id"]])
 
     return redirect_with_message("/accounts", "Account deleted")

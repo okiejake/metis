@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% import "_statement_macros.html" as stmt %}
+{% block content %}
+<section class="page-intro">
+  <div>
+    <p class="page-kicker">Statements</p>
+    <h2>Every card statement, closed and coming.</h2>
+    <p>Each statement is built from the transactions you import for that card. Enter the balance your issuer printed and Metis checks the two agree.</p>
+  </div>
+  {% if card and latest %}
+  <div class="intro-badge-stack">
+    {% if latest.status == 'paid' or latest.status == 'no_balance' %}
+    <span class="stat-chip success">Last statement {{ latest.status_label|lower }}</span>
+    {% else %}
+    <span class="stat-chip {{ 'danger' if latest.status == 'past_due' else '' }}">{{ latest.status_label }}: ${{ latest.remaining|currency }} due {{ latest.due_date }}</span>
+    {% endif %}
+    {% if mismatched %}
+    <span class="stat-chip danger">{{ mismatched }} statement{{ '' if mismatched == 1 else 's' }} off from the issuer</span>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
+
+{% if not cards %}
+<section class="panel">
+  <p class="empty-state">No credit cards yet. <a href="/accounts">Add one on the Accounts page</a> with its statement and due days.</p>
+</section>
+{% else %}
+
+{% if cards|length > 1 %}
+<nav class="import-filter-tabs" aria-label="Choose a card">
+  {% for other in cards %}
+  <a href="/statements/{{ other.id }}" class="{{ 'active' if other.id == card.id else '' }}">{{ other.name }}</a>
+  {% endfor %}
+</nav>
+{% endif %}
+
+{% if not configured %}
+<section class="panel warning">
+  <strong>{{ card.name }} has no billing cycle yet.</strong>
+  <a href="/accounts/{{ card.id }}/edit">Set its statement and due days</a> to see its statements.
+</section>
+{% else %}
+
+<section class="summary-grid compact-grid">
+  <article class="card compact-card">
+    <h3>Last Statement</h3>
+    {% if latest %}
+    <p class="amount-value">${{ latest.balance|currency }}</p>
+    <p class="card-note">closed {{ latest.close_date }}</p>
+    {% else %}<p class="card-note">None closed yet</p>{% endif %}
+  </article>
+  <article class="card compact-card">
+    <h3>Left To Pay</h3>
+    {% if latest %}
+    <p class="amount-value {{ 'negative' if latest.remaining > 0 else 'positive' }}">${{ latest.remaining|currency }}</p>
+    <p class="card-note">due {{ latest.due_date }}</p>
+    {% else %}<p class="card-note">—</p>{% endif %}
+  </article>
+  <article class="card compact-card">
+    <h3>Open Statement</h3>
+    {% if open_statement %}
+    <p class="amount-value">${{ open_statement.balance|currency }}</p>
+    <p class="card-note">estimated at close {{ open_statement.close_date }}</p>
+    {% else %}<p class="card-note">—</p>{% endif %}
+  </article>
+  <article class="card compact-card">
+    <h3>Imported Through</h3>
+    {% if latest and latest.imported_through %}
+    <p class="amount-value">{{ latest.imported_through }}</p>
+    {% elif open_statement and open_statement.imported_through %}
+    <p class="amount-value">{{ open_statement.imported_through }}</p>
+    {% else %}<p class="card-note">Nothing imported yet</p>{% endif %}
+    <p class="card-note"><a href="/import">Import more</a></p>
+  </article>
+</section>
+
+{% macro statement_rows(items) %}
+{% for statement in items %}
+<tr class="{{ 'forecast-row' if not statement.closed else '' }}">
+  <td><a href="{{ stmt.statement_url(statement) }}"><strong>{{ statement.close_date }}</strong></a></td>
+  <td class="card-note">{{ statement.period_start }} – {{ statement.close_date }}</td>
+  <td>{{ statement.due_date }}</td>
+  <td>{{ stmt.money(statement.previous_balance) }}</td>
+  <td>{{ stmt.money(statement.charges - statement.credits) }}</td>
+  <td>{{ stmt.money(statement.payments) }}</td>
+  <td>
+    <strong>{{ stmt.money(statement.balance) }}</strong>
+    {% if statement.issuer_balance is not none %}
+      {% if statement.difference and (statement.difference > 0.005 or statement.difference < -0.005) %}
+      <span class="table-pill statement-mismatch" title="Your imports add up to ${{ statement.computed_balance|currency }}">off by ${{ (statement.difference if statement.difference > 0 else -statement.difference)|currency }}</span>
+      {% else %}
+      <span class="table-pill success" title="Matches the balance your issuer printed">matches issuer</span>
+      {% endif %}
+    {% endif %}
+  </td>
+  <td>{% if statement.closed %}{{ stmt.money(statement.paid_since_close) }}{% else %}—{% endif %}</td>
+  <td>{{ stmt.status_pill(statement) }}</td>
+</tr>
+{% endfor %}
+{% endmacro %}
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>{{ card.name }}</h2>
+    <p>Closes on day {{ 'last' if card.statement_day == 0 else card.statement_day }}, due on day {{ 'last' if card.due_day == 0 else card.due_day }}. Charges are net of credits and refunds; open a statement to see every line.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Closes</th>
+          <th>Period</th>
+          <th>Due</th>
+          <th>Previous</th>
+          <th>Charges</th>
+          <th>Payments</th>
+          <th>Balance</th>
+          <th>Paid Since</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if upcoming %}
+        <tr class="forecast-divider-row"><td colspan="9"><span class="forecast-divider-label">Open &amp; estimated</span></td></tr>
+        {{ statement_rows(upcoming|reverse) }}
+        {% endif %}
+        {% if closed %}
+        <tr class="forecast-divider-row"><td colspan="9"><span class="forecast-divider-label">Closed</span></td></tr>
+        {{ statement_rows(closed) }}
+        {% else %}
+        <tr><td colspan="9" class="empty-state">No closed statements yet — import this card's transactions to build them.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}

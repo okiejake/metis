@@ -6,10 +6,12 @@ from services import (
     apply_category_rules,
     apply_match_rules,
     card_payment_patterns,
+    delete_import_account_link,
     delete_import_template,
     get_current_user,
     load_accounts,
     load_categories,
+    load_import_account_links_detailed,
     load_import_template,
     load_import_templates,
     load_imported_accounts,
@@ -43,6 +45,7 @@ def import_page(request: Request, user: CurrentUser, account: str = "", msg: str
         unmapped_labels=load_unmapped_import_labels(user["id"]),
         user_accounts=load_accounts(user["id"]),
         import_templates=load_import_templates(user["id"]),
+        account_links=load_import_account_links_detailed(user["id"]),
     )
 
 
@@ -57,7 +60,17 @@ def map_account(
     except ValueError as exc:
         return redirect_with_message("/import", str(exc), is_error=True)
     return redirect_with_message(
-        "/import", f"Linked {updated} “{label}” transaction(s) to the selected account."
+        "/import",
+        f"Linked {updated} “{label}” transaction(s) to the selected account. "
+        f"Future imports of “{label}” will go there automatically.",
+    )
+
+
+@router.post("/import/links/delete")
+def unmap_account(request: Request, user: CurrentUser, label: str = Form(...)):
+    delete_import_account_link(user["id"], label)
+    return redirect_with_message(
+        "/import", f"Stopped auto-linking “{label}” to an account."
     )
 
 

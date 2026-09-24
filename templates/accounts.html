@@ -98,8 +98,8 @@
           </td>
           <td>
             {% if account.balance %}
-              {% if account.balance.paid %}
-              <span class="table-pill success">Paid</span>
+              {% if account.balance.paid or account.balance.status == 'no_balance' %}
+              <span class="table-pill success">{{ 'Paid' if account.balance.paid else 'No balance' }}</span>
               <span class="card-note">stmt {{ account.balance.statement_close }}</span>
               {% else %}
               <span class="amount-value negative">${{ account.balance.amount_due|currency }}</span>
@@ -116,6 +116,11 @@
           <td>{{ account.assigned_count }} item{{ '' if account.assigned_count == 1 else 's' }}</td>
           <td>
             <div class="actions">
+              {% if account.account_type == 'credit_card' %}
+              <form method="get" action="/statements/{{ account.id }}">
+                <button type="submit">Statements</button>
+              </form>
+              {% endif %}
               <form method="get" action="/accounts/{{ account.id }}/edit">
                 <button type="submit">Edit</button>
               </form>
