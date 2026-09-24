@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% import "_statement_macros.html" as stmt %}
+{% block content %}
+<section class="page-intro">
+  <div>
+    <p class="page-kicker"><a href="/statements/{{ card.id }}">{{ card.name }} statements</a></p>
+    <h2>{{ 'Statement closed' if statement.closed else 'Estimated statement closing' }} {{ statement.close_date }}</h2>
+    <p>Covers {{ statement.period_start }} – {{ statement.close_date }}, due {{ statement.due_date }}.</p>
+  </div>
+  <div class="intro-badge-stack">
+    {{ stmt.status_pill(statement) }}
+    {% if statement.closed and statement.awaiting_import %}
+    <span class="stat-chip" title="Transactions after this date have not been imported, so this statement may be incomplete.">imported through {{ statement.imported_through or 'nothing yet' }}</span>
+    {% endif %}
+  </div>
+</section>
+
+<nav class="import-filter-tabs statement-steps" aria-label="Other statements">
+  {% if previous %}<a href="{{ stmt.statement_url(previous) }}">← {{ previous.close_date }}</a>{% endif %}
+  <a href="/statements/{{ card.id }}">All statements</a>
+  {% if following %}<a href="{{ stmt.statement_url(following) }}">{{ following.close_date }} →</a>{% endif %}
+</nav>
+
+<div class="statement-layout">
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Summary</h2>
+      {% if not statement.closed %}
+      <p>An estimate: imported charges so far, plus expected charges assigned to this card that have not been imported yet.</p>
+      {% endif %}
+    </div>
+    {{ stmt.summary(statement) }}
+  </section>
+
+  {% if statement.id %}
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Check Against Your Issuer</h2>
+      <p>Enter the statement balance from your {{ card.name }} statement. It becomes the balance the next statement carries in, and any gap with your imports shows here.</p>
+    </div>
+    <form method="post" action="{{ stmt.statement_url(statement) }}" class="grid-form compact">
+      <label>
+        Statement balance
+        <input type="text" inputmode="decimal" name="issuer_balance"
+               value="{{ '%.2f'|format(statement.issuer_balance) if statement.issuer_balance is not none else '' }}"
+               placeholder="{{ '%.2f'|format(statement.computed_balance) }}" />
+      </label>
+      <label>
+        Closed on
+        <input type="date" name="close_date" value="{{ statement.close_date }}" required />
+      </label>
+      <label>
+        Due on
+        <input type="date" name="due_date" value="{{ statement.due_date }}" required />
+      </label>
+      <div class="full-row">
+        <button type="submit" class="button-link">Save</button>
+        <span class="card-note">Leave the balance blank to use what your imports add up to. Correct the dates if your issuer moved them.</span>
+      </div>
+    </form>
+  </section>
+  {% endif %}
+</div>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Transactions</h2>
+    <p>{{ statement.activity|length }} imported{% if statement.expected_items %}, {{ statement.expected_items|length }} expected{% endif %} between {{ statement.period_start }} and {{ statement.close_date }}.</p>
+  </div>
+  {% if lines %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Date</th><th>Description</th><th>Category</th><th>Type</th><th>Amount</th></tr>
+      </thead>
+      <tbody>
+        {% for line in lines %}
+        <tr class="{{ 'forecast-row' if line.expected else '' }}">
+          <td>{{ line.date }}</td>
+          <td>{{ line.description or '—' }}</td>
+          <td>
+            {% if line.category_name %}
+            <span class="category-pill">
+              <span class="category-dot" style="background: {{ line.category_color if line.category_color else 'var(--muted)' }};"></span>
+              {{ line.category_name }}
+            </span>
+            {% else %}-{% endif %}
+          </td>
+          <td>
+            <span class="table-pill">
+              {% if line.expected %}Expected{% elif line.kind == 'payment' %}Payment{% elif line.kind == 'credit' %}Credit{% else %}Charge{% endif %}
+            </span>
+          </td>
+          <td class="{{ 'positive' if line.delta > 0 else 'negative' }}">{{ '+' if line.delta > 0 else '' }}{{ stmt.money(line.delta) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-state">Nothing on this statement yet.</p>
+  {% endif %}
+</section>
+
+{% if statement.paid_after %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>Paid Since It Closed</h2>
+    <p>Payments before the next statement closed{% if following %} on {{ following.close_date }}{% endif %}. They also appear on that statement, which starts from this one's balance.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Date</th><th>Description</th><th>Amount</th></tr></thead>
+      <tbody>
+        {% for line in statement.paid_after %}
+        <tr>
+          <td>{{ line.date }}</td>
+          <td>{{ line.description or '—' }}</td>
+          <td class="{{ 'positive' if line.delta > 0 else 'negative' }}">{{ '+' if line.delta > 0 else '' }}{{ stmt.money(line.delta) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

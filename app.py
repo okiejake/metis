@@ -14,6 +14,7 @@ from routes.overview import router as overview_router
 from routes.auth import router as auth_router
 from routes.recurring import router as recurring_router
 from routes.splits import router as splits_router
+from routes.statements import router as statements_router
 from services import (
     SESSION_COOKIE,
     any_user_has_password,
@@ -78,6 +79,7 @@ app.include_router(imports_router)
 app.include_router(expected_router)
 app.include_router(accounts_router)
 app.include_router(splits_router)
+app.include_router(statements_router)
 
 
 if __name__ == "__main__":

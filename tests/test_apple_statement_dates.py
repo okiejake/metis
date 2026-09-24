@@ -63,12 +63,18 @@ def test_one_mis_signed_payment_row_cannot_cancel_out_a_real_one(db, user_id, ac
     single row signed the wrong way eat into the payments beside it and report a
     settled statement as short."""
     card_id = accounts["Example Card"]
+    # A statement closing Aug 5 owing 500, then paid after it closed.
+    add_imported(db, user_id, card_id, "Example Card", date(2026, 7, 20), "Acme Store", -500.00)
     add_imported(db, user_id, card_id, "Example Card", date(2026, 8, 10),
                  "Payment", 500.00, flow="transfer", is_transfer=True)
     add_imported(db, user_id, card_id, "Example Card", date(2026, 8, 12),
                  "Mis-signed payment", -25.00, flow="transfer", is_transfer=True)
 
     card = db.load_account_by_id(user_id, card_id)
-    paid = db._card_payments_between(user_id, card, date(2026, 7, 31), date(2026, 8, 31))
+    statement = [
+        s for s in db.build_card_statements(user_id, card, date(2026, 9, 30), None, today=date(2026, 9, 1))
+        if s["close_date"] == date(2026, 8, 5)
+    ][0]
 
-    assert paid == 500.00, "the real payment stands on its own"
+    assert statement["paid_since_close"] == 500.00, "the real payment stands on its own"
+    assert statement["status"] == "paid"

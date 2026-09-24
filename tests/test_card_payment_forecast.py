@@ -10,7 +10,8 @@ surplus belongs to the next statement, and billing each cycle on its own charges
 alone would re-bill spend the surplus already settled.
 
 All data here is synthetic. Dates are fixed rather than relative to today: this path
-takes its window and cutover as arguments and never consults the clock.
+takes its window, cutover and "today" as arguments, so the clock never decides which
+statements count as closed.
 """
 
 from datetime import date
@@ -73,8 +74,24 @@ def pay_the_card(db, user_id, accounts, amount, when=date(2026, 7, 6)):
     )
 
 
-def forecast(db, user_id, window_start=WINDOW_START):
-    return db.forecast_card_payments(user_id, window_start, WINDOW_END, CUTOVER)
+# The statement closing on CLOSE has closed by now, but the one after it has not.
+TODAY = date(2026, 7, 10)
+
+
+def forecast(db, user_id, window_start=WINDOW_START, today=TODAY):
+    return db.forecast_card_payments(user_id, window_start, WINDOW_END, CUTOVER, today=today)
+
+
+def reconciles(statement):
+    """A statement's summary adds up, the way a printed one does."""
+    built = (
+        statement["previous_balance"] + statement["charges"] - statement["credits"]
+        - statement["payments"] + statement["expected_charges"] - statement["assumed_payments"]
+    )
+    return (
+        round(built, 2) == statement["computed_balance"]
+        and round(statement["balance"] - statement["paid_since_close"], 2) == statement["remaining"]
+    )
 
 
 def test_partial_payment_leaves_the_remainder_projected(db, user_id, accounts):
@@ -123,25 +140,35 @@ def test_several_partial_payments_are_summed(db, user_id, accounts):
     assert projected[0]["delta"] == -250.00
 
 
-def test_the_row_is_named_for_the_statement_it_estimates(db, user_id, accounts):
+def test_a_closed_statement_is_named_as_one(db, user_id, accounts):
     charge_the_statement(db, user_id, accounts)
 
     projected = rows_on(forecast(db, user_id), DUE)[0]
 
+    assert projected["description"] == "Example Card statement"
+    assert projected["statement"]["closed"] is True
+
+
+def test_a_statement_not_closed_yet_is_named_as_an_estimate(db, user_id, accounts):
+    charge_the_statement(db, user_id, accounts)
+
+    projected = rows_on(forecast(db, user_id, today=date(2026, 7, 1)), DUE)[0]
+
     assert projected["description"] == "Example Card estimated statement"
+    assert projected["statement"]["closed"] is False
 
 
-def test_payments_applied_appear_in_the_charge_breakdown(db, user_id, accounts):
+def test_payments_applied_are_part_of_the_statement_behind_the_row(db, user_id, accounts):
     charge_the_statement(db, user_id, accounts)
     pay_the_card(db, user_id, accounts, 100.00)
 
     projected = rows_on(forecast(db, user_id), DUE)[0]
+    statement = projected["statement"]
 
-    applied = [item for item in projected["card_charges"] if item["kind"] == "payment"]
-    assert len(applied) == 1, "the breakdown must account for the payment already made"
-    assert applied[0]["delta"] == 100.00
-    total = sum(item["delta"] for item in projected["card_charges"])
-    assert round(total, 2) == projected["delta"], "breakdown must reconcile to the total"
+    assert statement["paid_since_close"] == 100.00, "it must account for the payment already made"
+    assert [item["delta"] for item in statement["paid_after"]] == [100.00]
+    assert reconciles(statement)
+    assert -statement["remaining"] == projected["delta"], "the row is what is left to pay"
 
 
 def test_an_unpaid_previous_statement_carries_into_this_one(db, user_id, accounts):
@@ -151,9 +178,9 @@ def test_an_unpaid_previous_statement_carries_into_this_one(db, user_id, account
     projected = rows_on(forecast(db, user_id), DUE)[0]
 
     assert projected["delta"] == -(STATEMENT_TOTAL + CARRIED)
-    carried = [item for item in projected["card_charges"] if item["kind"] == "carried"]
-    assert len(carried) == 1, "the breakdown must show where the extra balance came from"
-    assert carried[0]["delta"] == -CARRIED
+    statement = projected["statement"]
+    assert statement["previous_balance"] == CARRIED, "it must show where the extra balance came from"
+    assert reconciles(statement)
 
 
 def test_a_payment_inside_the_cycle_settles_the_previous_statement_first(db, user_id, accounts):
@@ -188,10 +215,11 @@ def test_in_cycle_payments_are_itemized_in_the_breakdown(db, user_id, accounts):
 
     projected = rows_on(forecast(db, user_id), DUE)[0]
 
-    paid = [item for item in projected["card_charges"] if item["kind"] == "payment"]
+    statement = projected["statement"]
+    paid = [item for item in statement["activity"] if item["kind"] == "payment"]
     assert [item["delta"] for item in paid] == [60.00, 40.00]
-    total = sum(item["delta"] for item in projected["card_charges"])
-    assert round(total, 2) == projected["delta"], "breakdown must reconcile to the total"
+    assert statement["payments"] == 100.00
+    assert reconciles(statement)
 
 
 def test_a_later_window_bills_the_same_statement_as_a_wide_one(db, user_id, accounts):

@@ -298,6 +298,7 @@ def delete_user_and_data(user_id: int) -> None:
         conn.execute("DELETE FROM category_rules WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM transaction_splits WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM sessions WHERE user_id = ?", [user_id])
+        conn.execute("DELETE FROM card_statements WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM accounts WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM categories WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM settings WHERE key LIKE ?", [f"user:{user_id}:%"])
@@ -319,6 +320,7 @@ def init_db() -> None:
         conn.execute("CREATE SEQUENCE IF NOT EXISTS category_rules_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS transaction_splits_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS sessions_id_seq START 1")
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS card_statements_id_seq START 1")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -524,6 +526,23 @@ def init_db() -> None:
                 merchant_field TEXT,
                 signature TEXT NOT NULL DEFAULT '[]',
                 created_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        # One row per statement a card has closed (see sync_card_statements). Only
+        # the dates and the issuer's printed balance live here; every other
+        # figure is summed from imported rows so a re-import is never stale.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS card_statements (
+                id BIGINT PRIMARY KEY DEFAULT nextval('card_statements_id_seq'),
+                user_id BIGINT NOT NULL,
+                account_id BIGINT NOT NULL,
+                close_date DATE NOT NULL,
+                due_date DATE NOT NULL,
+                issuer_balance DOUBLE,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                UNIQUE (user_id, account_id, close_date)
             )
             """
         )
@@ -1035,6 +1054,18 @@ def parse_optional_float(value: str) -> Optional[float]:
     if amount < 0:
         raise ValueError("Amount cannot be negative")
     return amount
+
+
+def parse_optional_balance(value: str) -> Optional[float]:
+    """Like parse_optional_float, but a card can carry a credit, so a balance may
+    be negative ("-$12.00")."""
+    cleaned = (value or "").strip().replace(",", "").replace("$", "").strip()
+    if not cleaned:
+        return None
+    try:
+        return round(float(cleaned), 2)
+    except ValueError:
+        raise ValueError("Enter a valid balance")
 
 
 def parse_day(value: str, fallback: int) -> int:
@@ -1568,15 +1599,14 @@ def summarize_frequency(item: Dict[str, Any]) -> str:
     return f"Every {interval} month(s) (day {day})"
 
 
-# Enough lookback that a charge whose deferred card due-date lands inside the
-# window is still generated (one statement cycle + due offset ≈ up to ~62 days).
-CYCLE_LOOKBACK_DAYS = 75
-
 # How close (in days) a checking payment and a card's own payment row must be to
-# be treated as the same payment, and how long after a statement's due date a
-# recorded card payment still counts as settling it.
+# be treated as the same payment.
 PAYMENT_MATCH_WINDOW_DAYS = 7
-CARD_PAYMENT_GRACE_DAYS = 7
+
+# A statement cycle runs about a month. A configured close landing within this
+# many days of a statement that was recorded with a corrected close date is that
+# same cycle (an issuer moving a close for a weekend), not a new one.
+MIN_STATEMENT_CYCLE_DAYS = 20
 
 
 LAST_DAY_SENTINEL = 0  # statement_day / due_day == 0 means "last day of month"
@@ -1602,18 +1632,22 @@ def card_cycle_for_charge(account: Dict[str, Any], charge_date: date) -> tuple[d
     Close = next statement_day on/after the charge; due = next due_day after close.
     Supports 'last day of month' (stored as 0)."""
     statement_day = account.get("statement_day")
-    due_day = account.get("due_day")
 
     close = resolve_cycle_day(statement_day, charge_date.year, charge_date.month)
     if close < charge_date:
         nm = _next_month_first(charge_date)
         close = resolve_cycle_day(statement_day, nm.year, nm.month)
+    return close, _due_after_close(account, close)
 
+
+def _due_after_close(account: Dict[str, Any], close: date) -> date:
+    """The first configured due day after a statement closes."""
+    due_day = account.get("due_day")
     due = resolve_cycle_day(due_day, close.year, close.month)
     if due <= close:
         nm = _next_month_first(close)
         due = resolve_cycle_day(due_day, nm.year, nm.month)
-    return close, due
+    return due
 
 
 def cash_effect_date(account: Optional[Dict[str, Any]], charge_date: date) -> date:
@@ -1848,59 +1882,6 @@ def card_actual_cutover(user_id: int, card: Dict[str, Any]) -> Optional[date]:
     return value
 
 
-def _card_actual_net_through(user_id: int, card: Dict[str, Any], through: date) -> float:
-    """Signed sum of every imported row on a card up to and including `through` —
-    charges and payments alike, so this is the card's real balance on that date
-    (negative = owed). Unlike a single cycle's charges it carries history: a cycle
-    that was overpaid hands its surplus to the next one instead of losing it."""
-    clause, params = _card_scope_sql(card)
-    row = fetch_one(f"""
-            SELECT COALESCE(SUM(amount), 0) FROM imported_transactions
-            WHERE user_id = ? AND {clause} AND tx_date <= ?
-            """, [user_id, *params, through])
-    return round(float(row[0] if row else 0.0), 2)
-
-
-def _list_actual_card_payments(
-    user_id: int, card: Dict[str, Any], after: date, through: date
-) -> List[Dict[str, Any]]:
-    """A card's recorded payments in (after, through] as itemized rows, keeping each
-    row's own sign. A payment should be a credit (positive) on the card, so a
-    negative one means that card's import has payments signed the wrong way — shown
-    as it is rather than absolute, so the breakdown still adds up and the bad sign
-    is visible instead of silently inflating what the statement looks paid down by."""
-    clause, params = _card_scope_sql(card)
-    rows = query_all(f"SELECT tx_date, description, merchant, amount FROM imported_transactions "
-                f"WHERE user_id = ? AND {clause} AND is_transfer "
-                f"AND tx_date > ? AND tx_date <= ? ORDER BY tx_date, id", [user_id, *params, after, through])
-    items: List[Dict[str, Any]] = []
-    for row in rows:
-        tx_date = row["tx_date"]
-        items.append(
-            {
-                "date": tx_date.date() if isinstance(tx_date, datetime) else tx_date,
-                "description": row.get("merchant") or row.get("description") or "",
-                "delta": float(row["amount"]),
-                "kind": "payment",
-                "category_name": "",
-                "category_color": safe_hex_color(None),
-            }
-        )
-    return items
-
-
-def _card_payments_between(user_id: int, card: Dict[str, Any], after: date, through: date) -> float:
-    """How much a card's recorded payments in (after, through] took off its balance,
-    never less than zero — payments signed as debits (see _list_actual_card_payments)
-    already weigh on the balance itself and must not also push this the wrong way.
-
-    Clamped per row, not on the total: one mis-signed row would otherwise cancel out
-    real payments beside it and silently understate what a statement was paid down
-    by, which reads as a shortfall on a statement that was in fact settled."""
-    items = _list_actual_card_payments(user_id, card, after, through)
-    return round(sum(max(item["delta"], 0.0) for item in items), 2)
-
-
 def _card_expected_charges(
     user_id: int, card_id: int, window_start: date, window_end: date
 ) -> List[Dict[str, Any]]:
@@ -1940,215 +1921,385 @@ def _card_expected_charges(
     return charges
 
 
-def _list_actual_card_charges(
-    user_id: int, card: Dict[str, Any], after: date, close: date
-) -> List[Dict[str, Any]]:
-    """A card's real (non-transfer) charges in (after, close] as itemized rows
-    {date, description, delta, kind:'actual'} — the imported half of a payment."""
+# ---------------------------------------------------------------------------
+# Credit card statements
+#
+# A statement is a record of its own, not a view over whatever dates a card is
+# configured with today. Every cycle a card closes is written to card_statements
+# with the close and due dates it actually had, so changing a card's cycle days
+# later leaves its history alone and one statement's dates can be corrected by
+# themselves.
+#
+# The figures are not stored. They are summed from imported rows every time, so
+# an import that arrives late — or is re-run to fill a gap — lands in the
+# statement it belongs to without anything to rebuild. The one figure a person
+# can supply is the balance the issuer printed. That is ground truth: the next
+# statement carries it in, and a statement whose imported rows do not add up to
+# it says by how much, which is how a missing transaction shows itself.
+# ---------------------------------------------------------------------------
+
+STATEMENT_CENT = 0.005
+STATEMENT_STATUS_LABELS = {
+    "open": "Open",
+    "estimated": "Estimated",
+    "paid": "Paid",
+    "partial": "Partly paid",
+    "unpaid": "Unpaid",
+    "past_due": "Past due",
+    "no_balance": "No balance",
+}
+
+
+def card_cycle_configured(card: Dict[str, Any]) -> bool:
+    return (
+        card.get("account_type") == "credit_card"
+        and card.get("statement_day") is not None
+        and card.get("due_day") is not None
+    )
+
+
+def _close_before(card: Dict[str, Any], close: date) -> date:
+    """The configured close in the month before `close`: where a statement with
+    no recorded predecessor is taken to have opened."""
+    prior = add_months(date(close.year, close.month, 1), -1)
+    return resolve_cycle_day(card.get("statement_day"), prior.year, prior.month)
+
+
+def _next_cycle(card: Dict[str, Any], after: date) -> tuple[date, date]:
+    """(close, due) of the statement following one that closed on `after`. A
+    configured close only days away is the cycle `after` already closed — one
+    recorded with a corrected date — so the one after that is taken instead."""
+    close, due = card_cycle_for_charge(card, after + timedelta(days=1))
+    if (close - after).days < MIN_STATEMENT_CYCLE_DAYS:
+        close, due = card_cycle_for_charge(card, close + timedelta(days=1))
+    return close, due
+
+
+def _as_date(value: Any) -> date:
+    return value.date() if isinstance(value, datetime) else value
+
+
+def _card_rows(user_id: int, card: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Every imported row on a card, oldest first, with its category."""
     clause, params = _card_scope_sql(card, "i.")
-    rows = query_all(f"SELECT i.tx_date, i.description, i.merchant, i.amount, "
-                f"c.name AS category_name, c.color AS category_color "
-                f"FROM imported_transactions i "
-                f"LEFT JOIN categories c ON c.id = i.category_id AND c.user_id = i.user_id "
-                f"WHERE i.user_id = ? AND {clause} AND NOT i.is_transfer "
-                f"AND i.tx_date > ? AND i.tx_date <= ? ORDER BY i.tx_date, i.id", [user_id, *params, after, close])
-    items: List[Dict[str, Any]] = []
+    rows = query_all(f"""
+            SELECT i.id, i.tx_date, i.description, i.merchant, i.amount, i.is_transfer,
+                   c.name AS category_name, c.color AS category_color
+            FROM imported_transactions i
+            LEFT JOIN categories c ON c.id = i.category_id AND c.user_id = i.user_id
+            WHERE i.user_id = ? AND {clause}
+            ORDER BY i.tx_date, i.id
+            """, [user_id, *params])
     for row in rows:
-        tx_date = row["tx_date"]
-        items.append(
+        row["tx_date"] = _as_date(row["tx_date"])
+        row["amount"] = float(row["amount"])
+        row["is_transfer"] = bool(row["is_transfer"])
+    return rows
+
+
+def load_recorded_statements(user_id: int, account_id: int) -> List[Dict[str, Any]]:
+    rows = query_all(
+        "SELECT id, close_date, due_date, issuer_balance FROM card_statements "
+        "WHERE user_id = ? AND account_id = ? ORDER BY close_date",
+        [user_id, account_id],
+    )
+    for row in rows:
+        row["close_date"] = _as_date(row["close_date"])
+        row["due_date"] = _as_date(row["due_date"])
+    return rows
+
+
+def sync_card_statements(user_id: int, card: Dict[str, Any], today: Optional[date] = None) -> None:
+    """Record every statement a card has closed — from the cycle holding its first
+    imported row through the last one to close before today.
+
+    History imported after the fact is backfilled in front of the first record.
+    A statement already recorded is never re-dated, so neither a later import nor
+    a change to the card's cycle days moves one."""
+    if not card_cycle_configured(card):
+        return
+    today = today or date.today()
+    clause, params = _card_scope_sql(card)
+    row = fetch_one(
+        f"SELECT MIN(tx_date) FROM imported_transactions WHERE user_id = ? AND {clause}",
+        [user_id, *params],
+    )
+    first = _as_date(row[0]) if row and row[0] else None
+    if first is None:
+        return
+
+    recorded = load_recorded_statements(user_id, int(card["id"]))
+    new: List[tuple[date, date]] = []
+    if recorded:
+        earliest = recorded[0]["close_date"]
+        while first <= _close_before(card, earliest):
+            earliest = _close_before(card, earliest)
+            new.append((earliest, _due_after_close(card, earliest)))
+        close, due = _next_cycle(card, recorded[-1]["close_date"])
+    else:
+        close, due = card_cycle_for_charge(card, first)
+    while close < today:
+        new.append((close, due))
+        close, due = _next_cycle(card, close)
+
+    if new:
+        # Pages sync as they load, so two can race to record the same statement.
+        with get_connection() as conn:
+            conn.executemany(
+                "INSERT INTO card_statements (user_id, account_id, close_date, due_date) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
+                [[user_id, int(card["id"]), close, due] for close, due in new],
+            )
+
+
+def _statement_item(row: Dict[str, Any]) -> Dict[str, Any]:
+    """An imported row as a line on a statement."""
+    amount = row["amount"]
+    if row["is_transfer"]:
+        kind = "payment"
+    elif amount > 0:
+        kind = "credit"
+    else:
+        kind = "charge"
+    return {
+        "id": row["id"],
+        "date": row["tx_date"],
+        "description": row.get("merchant") or row.get("description") or "",
+        "delta": amount,
+        "kind": kind,
+        "category_name": row.get("category_name") or "",
+        "category_color": safe_hex_color(row.get("category_color")),
+    }
+
+
+def build_card_statements(
+    user_id: int,
+    card: Dict[str, Any],
+    until: date,
+    cutover: Optional[date],
+    today: Optional[date] = None,
+) -> List[Dict[str, Any]]:
+    """Every statement on a card, oldest first: each one it has closed, the one
+    open now, and estimates for those after it through the first due on or after
+    `until`.
+
+    A statement's balance is what it carried in, plus its charges, less its
+    credits and payments — the running balance of the card, not the cycle's
+    charges alone. A card paid down during the month overpays its open statement,
+    and that surplus belongs to the next one. Where an issuer's printed balance
+    has been entered, it replaces the computed one and is what carries forward.
+
+    Charges expected on the card but not imported yet count only after the card's
+    last imported row, so nothing is counted both ways. Every statement with
+    something left to pay whose due date falls after the checking `cutover` is
+    assumed paid in full that day; that assumed payment is what the ledger shows,
+    and it is carried into the statement it lands in so the next balance is
+    right."""
+    if not card_cycle_configured(card):
+        return []
+    today = today or date.today()
+    sync_card_statements(user_id, card, today)
+    rows = _card_rows(user_id, card)
+    card_cutover = rows[-1]["tx_date"] if rows else None
+
+    periods = load_recorded_statements(user_id, int(card["id"]))
+    if periods:
+        close, due = _next_cycle(card, periods[-1]["close_date"])
+    else:
+        anchor = rows[0]["tx_date"] if rows else today
+        if cutover is not None:
+            anchor = min(anchor, cutover + timedelta(days=1))
+        close, due = card_cycle_for_charge(card, min(anchor, today))
+    while not periods or periods[-1]["close_date"] < today or periods[-1]["due_date"] < until:
+        periods.append({"id": None, "close_date": close, "due_date": due, "issuer_balance": None})
+        close, due = _next_cycle(card, close)
+
+    first_start = _close_before(card, periods[0]["close_date"]) + timedelta(days=1)
+    expected_from = first_start if card_cutover is None else card_cutover + timedelta(days=1)
+    expected = [
+        charge
+        for charge in _card_expected_charges(
+            user_id, int(card["id"]), expected_from, periods[-1]["close_date"]
+        )
+        if card_cutover is None or charge["date"] > card_cutover
+    ]
+
+    statements: List[Dict[str, Any]] = []
+    carried = round(-sum(row["amount"] for row in rows if row["tx_date"] < first_start), 2)
+    assumed_payments: List[tuple[date, float]] = []
+    for index, period in enumerate(periods):
+        start = statements[-1]["close_date"] + timedelta(days=1) if statements else first_start
+        close, due = period["close_date"], period["due_date"]
+        next_close = periods[index + 1]["close_date"] if index + 1 < len(periods) else None
+
+        activity = [_statement_item(row) for row in rows if start <= row["tx_date"] <= close]
+        charges = -sum(item["delta"] for item in activity if item["kind"] == "charge")
+        credits = sum(item["delta"] for item in activity if item["kind"] == "credit")
+        payments = sum(item["delta"] for item in activity if item["kind"] == "payment")
+        expected_items = [charge for charge in expected if start <= charge["date"] <= close]
+        expected_net = -sum(charge["delta"] for charge in expected_items)
+        assumed_in = sum(amount for when, amount in assumed_payments if start <= when <= close)
+        computed = round(carried + charges - credits - payments + expected_net - assumed_in, 2)
+
+        issuer = period["issuer_balance"]
+        balance = round(float(issuer), 2) if issuer is not None else computed
+        # Payments after the close pay this statement off, up to the next close;
+        # past that they belong to the next statement, which counts them itself.
+        # Taken per row and never below zero: a reversal adds to what is owed and
+        # already weighs on the balance, so it must not also cancel a real payment.
+        paid_after = [
+            _statement_item(row)
+            for row in rows
+            if row["is_transfer"] and row["tx_date"] > close
+            and (next_close is None or row["tx_date"] <= next_close)
+        ]
+        paid_since_close = round(sum((max(item["delta"], 0.0) for item in paid_after), 0.0), 2)
+        remaining = round(max(balance - paid_since_close, 0.0), 2)
+        billed = remaining > STATEMENT_CENT and (cutover is None or due > cutover)
+        if billed:
+            assumed_payments.append((due, remaining))
+
+        closed = close < today
+        awaiting_import = card_cutover is None or card_cutover < close
+        if not closed:
+            status = "open" if start <= today else "estimated"
+        elif balance <= STATEMENT_CENT:
+            status = "no_balance"
+        elif remaining <= STATEMENT_CENT:
+            status = "paid"
+        elif paid_since_close > STATEMENT_CENT:
+            status = "partial"
+        elif due < today and card_cutover is not None and card_cutover >= due:
+            status = "past_due"
+        else:
+            status = "unpaid"
+
+        statements.append(
             {
-                "date": tx_date.date() if isinstance(tx_date, datetime) else tx_date,
-                "description": row.get("merchant") or row.get("description") or "",
-                "delta": float(row["amount"]),
-                "kind": "actual",
-                "category_name": row.get("category_name") or "",
-                "category_color": safe_hex_color(row.get("category_color")),
+                "id": period["id"],
+                "account_id": int(card["id"]),
+                "card_name": card["name"],
+                "label": f"{card['name']} {'statement' if closed else 'estimated statement'}",
+                "period_start": start,
+                "close_date": close,
+                "due_date": due,
+                "closed": closed,
+                "status": status,
+                "status_label": STATEMENT_STATUS_LABELS[status],
+                "awaiting_import": awaiting_import,
+                "imported_through": card_cutover,
+                "previous_balance": carried,
+                "charges": round(charges, 2),
+                "credits": round(credits, 2),
+                "payments": round(payments, 2),
+                "expected_charges": round(expected_net, 2),
+                "assumed_payments": round(assumed_in, 2),
+                "computed_balance": computed,
+                "issuer_balance": round(float(issuer), 2) if issuer is not None else None,
+                "difference": round(float(issuer) - computed, 2) if issuer is not None else None,
+                "balance": balance,
+                "paid_since_close": paid_since_close,
+                "remaining": remaining,
+                "billed": billed,
+                "activity": activity,
+                "expected_items": expected_items,
+                "paid_after": paid_after,
             }
         )
-    return items
+        carried = balance
+    return statements
 
 
-def _iter_card_cycles(card: Dict[str, Any], window_start: date, window_end: date):
-    """Yield (prev_close, close, due) per monthly cycle whose due could fall in
-    [window_start, window_end]. Handles 'last day of month' via resolve_cycle_day."""
-    statement_day = card.get("statement_day")
-    due_day = card.get("due_day")
-    month = add_months(date(window_start.year, window_start.month, 1), -2)
-    stop = add_months(date(window_end.year, window_end.month, 1), 2)
-    while month <= stop:
-        close = resolve_cycle_day(statement_day, month.year, month.month)
-        prev_m = add_months(month, -1)
-        prev_close = resolve_cycle_day(statement_day, prev_m.year, prev_m.month)
-        due = resolve_cycle_day(due_day, close.year, close.month)
-        if due <= close:
-            nm = _next_month_first(close)
-            due = resolve_cycle_day(due_day, nm.year, nm.month)
-        yield prev_close, close, due
-        month = add_months(month, 1)
+def load_card_statement(
+    user_id: int, card: Dict[str, Any], close_date: date, cutover: Optional[date],
+    today: Optional[date] = None,
+) -> tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+    """One statement on a card by its close date, with the full list beside it
+    so a page can step to its neighbours."""
+    today = today or date.today()
+    until = max(today, _due_after_close(card, close_date)) if card_cycle_configured(card) else today
+    statements = build_card_statements(user_id, card, until, cutover, today=today)
+    for statement in statements:
+        if statement["close_date"] == close_date:
+            return statement, statements
+    return None, statements
+
+
+def update_card_statement(
+    user_id: int,
+    statement_id: int,
+    close_date: date,
+    due_date: date,
+    issuer_balance: Optional[float],
+    today: Optional[date] = None,
+) -> None:
+    """Correct a recorded statement's dates or enter the balance its issuer
+    printed. The close has to stay between its neighbours' — moving it past one
+    would hand that statement's rows to this one — and must already be past."""
+    today = today or date.today()
+    row = fetch_one(
+        "SELECT account_id, close_date FROM card_statements WHERE id = ? AND user_id = ?",
+        [statement_id, user_id],
+    )
+    if not row:
+        raise ValueError("Statement not found")
+    account_id, current = int(row[0]), _as_date(row[1])
+    neighbours = [
+        statement["close_date"]
+        for statement in load_recorded_statements(user_id, account_id)
+        if statement["close_date"] != current
+    ]
+    before = [close for close in neighbours if close < current]
+    after = [close for close in neighbours if close > current]
+    if before and close_date <= max(before):
+        raise ValueError(f"Close date must be after the previous statement's ({max(before)})")
+    if after and close_date >= min(after):
+        raise ValueError(f"Close date must be before the next statement's ({min(after)})")
+    if close_date >= today:
+        raise ValueError("A statement can only close on a date that has passed")
+    if due_date <= close_date:
+        raise ValueError("Due date must be after the close date")
+    execute(
+        "UPDATE card_statements SET close_date = ?, due_date = ?, issuer_balance = ? "
+        "WHERE id = ? AND user_id = ?",
+        [close_date, due_date, issuer_balance, statement_id, user_id],
+    )
 
 
 def forecast_card_payments(
-    user_id: int, window_start: date, window_end: date, cutover: Optional[date]
+    user_id: int,
+    window_start: date,
+    window_end: date,
+    cutover: Optional[date],
+    today: Optional[date] = None,
 ) -> List[Dict[str, Any]]:
-    """One projected '{card} estimated statement' per cycle whose due date is in the
-    window and after the checking cutover.
+    """One ledger row per card statement still to be paid, on its due date: what
+    the statement closed at, less what has been paid toward it since.
 
-    The amount is the card's *balance when the statement closes* — what it carried
-    in, plus the cycle's charges, less the payments made inside the cycle — not
-    merely the cycle's own charges. Billing each cycle in isolation is only right
-    for a card paid once, in full, on its due date. A card paid down continuously
-    overpays its open statement for most of the month, and that surplus has to
-    carry forward; dropping it re-bills spend that is already settled.
-
-    Expected (not yet imported) charges count only after that card's own import
-    cutover, so a charge that is both imported and expected is not double-counted.
-
-    Cycles falling before the window are simulated but not returned: their
-    projected payment is what makes a later cycle's carried-in balance correct."""
-    accounts = load_accounts_map(user_id)
+    Only statements due after the checking `cutover` appear — the checking
+    actuals already show anything paid before then. Statements before the window
+    are still worked out, because what they leave behind is carried into the
+    ones inside it."""
     payments: List[Dict[str, Any]] = []
-
-    for card in accounts.values():
-        if card.get("account_type") != "credit_card":
-            continue
-        if card.get("statement_day") is None or card.get("due_day") is None:
-            continue  # cycle not configured
-
-        card_cutover = card_actual_cutover(user_id, card)
-        # Simulate from the checking cutover, not the window start: every unpaid
-        # cycle between the two still owes a projected payment, and without those a
-        # window opening months out would bill one statement for the whole lot.
-        sim_start = window_start
-        if cutover is not None:
-            sim_start = min(sim_start, cutover + timedelta(days=1))
-        expected_start = sim_start - timedelta(days=CYCLE_LOOKBACK_DAYS)
-        if card_cutover is not None:
-            # A card whose import lags badly still needs every unbilled expected
-            # charge since its cutover, however far back that reaches.
-            expected_start = min(expected_start, card_cutover)
-        expected = _card_expected_charges(user_id, int(card["id"]), expected_start, window_end)
-
-        # Payments this forecast has itself committed to, as (date, magnitude).
-        projected_payments: List[tuple[date, float]] = []
-
-        def balance_on(when: date, card=card, card_cutover=card_cutover, expected=expected,
-                       projected_payments=projected_payments) -> float:
-            """Signed card balance on `when` (negative = owed): imported reality,
-            plus charges expected but not yet imported, less what earlier cycles of
-            this same forecast already committed to paying."""
-            unbilled = sum(
-                charge["delta"]
-                for charge in expected
-                if charge["date"] <= when
-                and (card_cutover is None or charge["date"] > card_cutover)
-            )
-            committed = sum(amount for paid_on, amount in projected_payments if paid_on <= when)
-            return round(_card_actual_net_through(user_id, card, when) + unbilled + committed, 2)
-
-        cycles = list(_iter_card_cycles(card, sim_start, window_end))
-        for index, (prev_close, close, due) in enumerate(cycles):
-            if due > window_end:
+    for card in load_accounts(user_id):
+        for statement in build_card_statements(user_id, card, window_end, cutover, today=today):
+            if not statement["billed"]:
                 continue
-            if cutover is not None and due <= cutover:
-                continue  # already paid within the checking actuals
-
-            opening = balance_on(prev_close)
-            owed = -balance_on(close)
-            if owed <= 0.005:
-                continue  # nothing owed when it closed — no payment to project
-
-            # Payments recorded after the statement closed settle it too, but only
-            # up to the next close: past that they are paying the *next* statement,
-            # which already counts them in its own closing balance.
-            next_close = cycles[index + 1][1] if index + 1 < len(cycles) else None
-            settle_end = due + timedelta(days=CARD_PAYMENT_GRACE_DAYS)
-            if next_close is not None:
-                settle_end = min(settle_end, next_close)
-            # Never credit back more than was owed: an overpayment settles this
-            # statement, it does not turn the projection into income.
-            applied = min(_card_payments_between(user_id, card, close, settle_end), owed)
-
-            delta = round(applied - owed, 2)
-            if delta > -0.005:
-                continue  # already settled in full by payments the card recorded
-
-            projected_payments.append((due, -delta))
-            if due < window_start:
-                continue  # simulated only, so later cycles carry in the right balance
-
-            expected_items = [
-                {
-                    "date": charge["date"],
-                    "description": charge.get("description") or "",
-                    "delta": charge["delta"],
-                    "kind": charge.get("kind") or "recurring",
-                    "category_name": charge.get("category_name") or "",
-                    "category_color": safe_hex_color(charge.get("category_color")),
-                }
-                for charge in expected
-                if prev_close < charge["date"] <= close
-                and (card_cutover is None or charge["date"] > card_cutover)
-            ]
-            committed_items = [
-                {
-                    "date": paid_on,
-                    "description": "Projected payment on the previous statement",
-                    "delta": amount,
-                    "kind": "projected",
-                    "category_name": "",
-                    "category_color": safe_hex_color(None),
-                }
-                for paid_on, amount in projected_payments
-                if prev_close < paid_on <= close
-            ]
-
-            card_charges: List[Dict[str, Any]] = []
-            if abs(opening) > 0.005:
-                card_charges.append(
-                    {
-                        "date": prev_close,
-                        "description": "Balance carried in",
-                        "delta": opening,
-                        "kind": "carried",
-                        "category_name": "",
-                        "category_color": safe_hex_color(None),
-                    }
-                )
-            card_charges.extend(
-                sorted(
-                    _list_actual_card_charges(user_id, card, prev_close, close)
-                    + expected_items
-                    + _list_actual_card_payments(user_id, card, prev_close, close)
-                    + committed_items,
-                    key=lambda item: item["date"],
-                )
-            )
-            if applied > 0.005:
-                # Appended rather than sorted in: it is an aggregate of everything
-                # paid after the statement closed, so it belongs at the end.
-                card_charges.append(
-                    {
-                        "date": close,
-                        "description": "Payments applied since this statement closed",
-                        "delta": round(applied, 2),
-                        "kind": "payment",
-                        "category_name": "",
-                        "category_color": safe_hex_color(None),
-                    }
-                )
+            if not (window_start <= statement["due_date"] <= window_end):
+                continue
             payments.append(
                 {
-                    "date": due,
-                    "description": f"{card['name']} estimated statement",
+                    "date": statement["due_date"],
+                    "description": statement["label"],
                     "source": "card",
                     "income": 0.0,
-                    "expense": -delta,
-                    "delta": delta,
+                    "expense": statement["remaining"],
+                    "delta": -statement["remaining"],
                     "kind": "expense",
                     "category_name": "",
                     "category_color": "",
                     "account_id": int(card["id"]),
-                    "card_charges": card_charges,
+                    "statement": statement,
                 }
             )
     return payments
@@ -2205,33 +2356,27 @@ def match_card_payments(user_id: int) -> List[Dict[str, Any]]:
     return pairs
 
 
-def card_balance_summary(user_id: int, card: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Amount due on a card's most recently closed statement: the balance the card
-    actually carried when it closed, minus payments recorded since. Taking the
-    cycle's own charges instead would ignore anything rolled over from the last
-    statement, and would spend a mid-cycle overpayment twice."""
-    if card.get("statement_day") is None or card.get("due_day") is None:
+def card_balance_summary(
+    user_id: int, card: Dict[str, Any], today: Optional[date] = None
+) -> Optional[Dict[str, Any]]:
+    """Where a card's most recently closed statement stands: what it closed at,
+    what has been paid toward it since, and what is left."""
+    today = today or date.today()
+    statements = build_card_statements(
+        user_id, card, today, latest_checking_actual_date(user_id), today=today
+    )
+    closed = [statement for statement in statements if statement["closed"]]
+    if not closed:
         return None
-    today = date.today()
-    last_cycle = None
-    for prev_close, close, due in _iter_card_cycles(card, add_months(today, -3), today):
-        if close <= today and (last_cycle is None or close > last_cycle[1]):
-            last_cycle = (prev_close, close, due)
-    if last_cycle is None:
-        return None
-    prev_close, close, due = last_cycle
-
-    # Purchases are negative, so owed = -(balance); refunds and payments reduce it.
-    statement_owed = round(-_card_actual_net_through(user_id, card, close), 2)
-    payments_applied = _card_payments_between(user_id, card, close, today)
-    amount_due = round(statement_owed - payments_applied, 2)
+    last = closed[-1]
     return {
-        "statement_close": close,
-        "due_date": due,
-        "statement_owed": statement_owed,
-        "payments_applied": payments_applied,
-        "amount_due": max(amount_due, 0.0),
-        "paid": statement_owed > 0.005 and amount_due <= 0.005,
+        "statement_close": last["close_date"],
+        "due_date": last["due_date"],
+        "statement_owed": last["balance"],
+        "payments_applied": last["paid_since_close"],
+        "amount_due": last["remaining"],
+        "paid": last["status"] == "paid",
+        "status": last["status"],
     }
 
 

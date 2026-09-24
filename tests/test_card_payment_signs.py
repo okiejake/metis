@@ -83,16 +83,20 @@ def test_template_purchase_on_a_card_stays_negative(db, accounts):
 def test_a_run_of_payments_reduces_the_balance(db, user_id, accounts):
     """The property that actually matters: paying a card must make it owe less."""
     card = [a for a in db.load_accounts(user_id) if a["name"] == "Example Card"][0]
+    # Charged in the cycle closing Jul 5, paid in the one closing Aug 5.
     add_imported(db, user_id, card["id"], "Example Card", date(2026, 7, 1), "Acme Hardware", -300.00)
-    before = db._card_actual_net_through(user_id, card, date(2026, 7, 31))
-
     payment = db._parse_visa_row(visa_row("PAYMENT - THANK YOU", "Credit", "100.00"))
     add_imported(db, user_id, card["id"], "Example Card", date(2026, 7, 15),
                  payment["description"], payment["amount"], flow=payment["flow"], is_transfer=True)
 
-    after = db._card_actual_net_through(user_id, card, date(2026, 7, 31))
-    assert after > before, "a payment must move the balance toward zero, not away"
-    assert after == -200.00
+    # Checking actuals run past the Jul 25 due date, so no payment is assumed there.
+    statements = db.build_card_statements(
+        user_id, card, date(2026, 8, 31), date(2026, 8, 10), today=date(2026, 8, 10)
+    )
+    before, after = [s["balance"] for s in statements if s["close_date"] in
+                     (date(2026, 7, 5), date(2026, 8, 5))]
+    assert after < before, "a payment must move the balance toward zero, not away"
+    assert after == 200.00
 
 
 def repair(db):
