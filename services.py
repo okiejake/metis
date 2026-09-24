@@ -62,6 +62,42 @@ def categories_has_global_name_unique(conn: duckdb.DuckDBPyConnection) -> bool:
     return any(list(row[0]) == ["name"] for row in rows)
 
 
+def migrate_card_payment_signs(conn: duckdb.DuckDBPyConnection) -> int:
+    """Repair card payments that were imported as debits, returning how many.
+
+    A payment is money *in* to a card and must be positive, exactly like a refund;
+    that is what pays the balance down. Two importers used to store it negative,
+    which reads as "owe more", so a card's balance climbed with every payment made
+    against it. Consumers all took ABS() and so never noticed, but any balance the
+    forecast derives from these rows is wrong until they are fixed.
+
+    Only rows the issuer itself called a credit are touched, so a legitimately
+    negative transfer — a payment reversal, a cash-advance adjustment — keeps its
+    sign. Flipping only negatives makes this idempotent: once repaired, nothing
+    matches. Credit tokens are pooled across templates, which is safe because the
+    token still has to be the one the row was actually imported with."""
+    credit_values = [
+        row[0]
+        for row in conn.execute(
+            "SELECT DISTINCT credit_value FROM import_templates "
+            "WHERE credit_value IS NOT NULL AND TRIM(credit_value) <> ''"
+        ).fetchall()
+    ]
+    # 'Credit' is what the built-in Visa parser records; templates name their own.
+    tokens = sorted({"Credit", *credit_values})
+    where = f"""
+            is_transfer AND amount < 0
+              AND raw_type IN ({', '.join('?' for _ in tokens)})
+              AND account_id IN (SELECT id FROM accounts WHERE account_type = 'credit_card')
+            """
+    affected = conn.execute(
+        f"SELECT COUNT(*) FROM imported_transactions WHERE {where}", tokens
+    ).fetchone()[0]
+    if affected:
+        conn.execute(f"UPDATE imported_transactions SET amount = -amount WHERE {where}", tokens)
+    return int(affected)
+
+
 def migrate_categories_to_user_scoped_uniqueness(
     conn: duckdb.DuckDBPyConnection, default_user_id: int
 ) -> None:
@@ -410,6 +446,18 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS import_account_links (
+                user_id BIGINT NOT NULL,
+                label TEXT NOT NULL,
+                display_label TEXT,
+                account_id BIGINT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (user_id, label)
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS dismissed_suggestions (
                 user_id BIGINT NOT NULL,
                 suggestion_key TEXT NOT NULL,
@@ -464,6 +512,9 @@ def init_db() -> None:
             conn.execute("ALTER TABLE imported_transactions ADD COLUMN category_via TEXT")
         if not table_has_column(conn, "users", "email"):
             conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
+        # Import labels are matched case-insensitively but shown back as written.
+        if not table_has_column(conn, "import_account_links", "display_label"):
+            conn.execute("ALTER TABLE import_account_links ADD COLUMN display_label TEXT")
         # Credentials. NULL password_hash means "not set yet", which puts the app
         # into first-run setup rather than letting anyone in.
         if not table_has_column(conn, "users", "password_hash"):
@@ -473,6 +524,7 @@ def init_db() -> None:
         if not table_has_column(conn, "users", "locked_until"):
             conn.execute("ALTER TABLE users ADD COLUMN locked_until TIMESTAMP")
         migrate_categories_to_user_scoped_uniqueness(conn, default_user_id)
+        migrate_card_payment_signs(conn)
         conn.execute(
             "UPDATE categories SET color = ? WHERE color IS NULL OR TRIM(color) = ''",
             [DEFAULT_CATEGORY_COLOR],
@@ -1712,23 +1764,57 @@ def card_actual_cutover(user_id: int, card: Dict[str, Any]) -> Optional[date]:
     return value
 
 
-def _sum_actual_card_charges(user_id: int, card: Dict[str, Any], after: date, close: date) -> float:
-    """Net signed sum of a card's real (non-transfer) charges in (after, close]."""
+def _card_actual_net_through(user_id: int, card: Dict[str, Any], through: date) -> float:
+    """Signed sum of every imported row on a card up to and including `through` —
+    charges and payments alike, so this is the card's real balance on that date
+    (negative = owed). Unlike a single cycle's charges it carries history: a cycle
+    that was overpaid hands its surplus to the next one instead of losing it."""
     clause, params = _card_scope_sql(card)
     row = fetch_one(f"""
             SELECT COALESCE(SUM(amount), 0) FROM imported_transactions
-            WHERE user_id = ? AND {clause} AND NOT is_transfer
-              AND tx_date > ? AND tx_date <= ?
-            """, [user_id, *params, after, close])
-    return float(row[0] if row else 0.0)
+            WHERE user_id = ? AND {clause} AND tx_date <= ?
+            """, [user_id, *params, through])
+    return round(float(row[0] if row else 0.0), 2)
+
+
+def _list_actual_card_payments(
+    user_id: int, card: Dict[str, Any], after: date, through: date
+) -> List[Dict[str, Any]]:
+    """A card's recorded payments in (after, through] as itemized rows, keeping each
+    row's own sign. A payment should be a credit (positive) on the card, so a
+    negative one means that card's import has payments signed the wrong way — shown
+    as it is rather than absolute, so the breakdown still adds up and the bad sign
+    is visible instead of silently inflating what the statement looks paid down by."""
+    clause, params = _card_scope_sql(card)
+    rows = query_all(f"SELECT tx_date, description, merchant, amount FROM imported_transactions "
+                f"WHERE user_id = ? AND {clause} AND is_transfer "
+                f"AND tx_date > ? AND tx_date <= ? ORDER BY tx_date, id", [user_id, *params, after, through])
+    items: List[Dict[str, Any]] = []
+    for row in rows:
+        tx_date = row["tx_date"]
+        items.append(
+            {
+                "date": tx_date.date() if isinstance(tx_date, datetime) else tx_date,
+                "description": row.get("merchant") or row.get("description") or "",
+                "delta": float(row["amount"]),
+                "kind": "payment",
+                "category_name": "",
+                "category_color": safe_hex_color(None),
+            }
+        )
+    return items
 
 
 def _card_payments_between(user_id: int, card: Dict[str, Any], after: date, through: date) -> float:
-    """Total magnitude of a card's recorded payments in (after, through]."""
-    clause, params = _card_scope_sql(card)
-    row = fetch_one(f"SELECT COALESCE(SUM(ABS(amount)), 0) FROM imported_transactions "
-            f"WHERE user_id = ? AND {clause} AND is_transfer AND tx_date > ? AND tx_date <= ?", [user_id, *params, after, through])
-    return round(float(row[0] if row else 0.0), 2)
+    """How much a card's recorded payments in (after, through] took off its balance,
+    never less than zero — payments signed as debits (see _list_actual_card_payments)
+    already weigh on the balance itself and must not also push this the wrong way.
+
+    Clamped per row, not on the total: one mis-signed row would otherwise cancel out
+    real payments beside it and silently understate what a statement was paid down
+    by, which reads as a shortfall on a statement that was in fact settled."""
+    items = _list_actual_card_payments(user_id, card, after, through)
+    return round(sum(max(item["delta"], 0.0) for item in items), 2)
 
 
 def _card_expected_charges(
@@ -1820,10 +1906,21 @@ def _iter_card_cycles(card: Dict[str, Any], window_start: date, window_end: date
 def forecast_card_payments(
     user_id: int, window_start: date, window_end: date, cutover: Optional[date]
 ) -> List[Dict[str, Any]]:
-    """One projected '{card} payment' per cycle whose due date is in the window and
-    after the checking cutover. Amount = the card's actual charges in the cycle +
-    expected card charges — the latter counted only after that card's own import
-    cutover, so a charge that is both imported and expected is not double-counted."""
+    """One projected '{card} estimated statement' per cycle whose due date is in the
+    window and after the checking cutover.
+
+    The amount is the card's *balance when the statement closes* — what it carried
+    in, plus the cycle's charges, less the payments made inside the cycle — not
+    merely the cycle's own charges. Billing each cycle in isolation is only right
+    for a card paid once, in full, on its due date. A card paid down continuously
+    overpays its open statement for most of the month, and that surplus has to
+    carry forward; dropping it re-bills spend that is already settled.
+
+    Expected (not yet imported) charges count only after that card's own import
+    cutover, so a charge that is both imported and expected is not double-counted.
+
+    Cycles falling before the window are simulated but not returned: their
+    projected payment is what makes a later cycle's carried-in balance correct."""
     accounts = load_accounts_map(user_id)
     payments: List[Dict[str, Any]] = []
 
@@ -1834,21 +1931,67 @@ def forecast_card_payments(
             continue  # cycle not configured
 
         card_cutover = card_actual_cutover(user_id, card)
-        expected = _card_expected_charges(
-            user_id,
-            int(card["id"]),
-            window_start - timedelta(days=CYCLE_LOOKBACK_DAYS),
-            window_end,
-        )
+        # Simulate from the checking cutover, not the window start: every unpaid
+        # cycle between the two still owes a projected payment, and without those a
+        # window opening months out would bill one statement for the whole lot.
+        sim_start = window_start
+        if cutover is not None:
+            sim_start = min(sim_start, cutover + timedelta(days=1))
+        expected_start = sim_start - timedelta(days=CYCLE_LOOKBACK_DAYS)
+        if card_cutover is not None:
+            # A card whose import lags badly still needs every unbilled expected
+            # charge since its cutover, however far back that reaches.
+            expected_start = min(expected_start, card_cutover)
+        expected = _card_expected_charges(user_id, int(card["id"]), expected_start, window_end)
 
-        for prev_close, close, due in _iter_card_cycles(card, window_start, window_end):
-            if not (window_start <= due <= window_end):
+        # Payments this forecast has itself committed to, as (date, magnitude).
+        projected_payments: List[tuple[date, float]] = []
+
+        def balance_on(when: date, card=card, card_cutover=card_cutover, expected=expected,
+                       projected_payments=projected_payments) -> float:
+            """Signed card balance on `when` (negative = owed): imported reality,
+            plus charges expected but not yet imported, less what earlier cycles of
+            this same forecast already committed to paying."""
+            unbilled = sum(
+                charge["delta"]
+                for charge in expected
+                if charge["date"] <= when
+                and (card_cutover is None or charge["date"] > card_cutover)
+            )
+            committed = sum(amount for paid_on, amount in projected_payments if paid_on <= when)
+            return round(_card_actual_net_through(user_id, card, when) + unbilled + committed, 2)
+
+        cycles = list(_iter_card_cycles(card, sim_start, window_end))
+        for index, (prev_close, close, due) in enumerate(cycles):
+            if due > window_end:
                 continue
             if cutover is not None and due <= cutover:
                 continue  # already paid within the checking actuals
 
-            actual_items = _list_actual_card_charges(user_id, card, prev_close, close)
-            actual = sum(item["delta"] for item in actual_items)
+            opening = balance_on(prev_close)
+            owed = -balance_on(close)
+            if owed <= 0.005:
+                continue  # nothing owed when it closed — no payment to project
+
+            # Payments recorded after the statement closed settle it too, but only
+            # up to the next close: past that they are paying the *next* statement,
+            # which already counts them in its own closing balance.
+            next_close = cycles[index + 1][1] if index + 1 < len(cycles) else None
+            settle_end = due + timedelta(days=CARD_PAYMENT_GRACE_DAYS)
+            if next_close is not None:
+                settle_end = min(settle_end, next_close)
+            # Never credit back more than was owed: an overpayment settles this
+            # statement, it does not turn the projection into income.
+            applied = min(_card_payments_between(user_id, card, close, settle_end), owed)
+
+            delta = round(applied - owed, 2)
+            if delta > -0.005:
+                continue  # already settled in full by payments the card recorded
+
+            projected_payments.append((due, -delta))
+            if due < window_start:
+                continue  # simulated only, so later cycles carry in the right balance
+
             expected_items = [
                 {
                     "date": charge["date"],
@@ -1862,53 +2005,62 @@ def forecast_card_payments(
                 if prev_close < charge["date"] <= close
                 and (card_cutover is None or charge["date"] > card_cutover)
             ]
-            expected_sum = sum(item["delta"] for item in expected_items)
-            delta = round(actual + expected_sum, 2)
+            committed_items = [
+                {
+                    "date": paid_on,
+                    "description": "Projected payment on the previous statement",
+                    "delta": amount,
+                    "kind": "projected",
+                    "category_name": "",
+                    "category_color": safe_hex_color(None),
+                }
+                for paid_on, amount in projected_payments
+                if prev_close < paid_on <= close
+            ]
 
-            # Payments the card itself recorded against this closed statement — an
-            # early or late payment the checking cutover would not catch — reduce
-            # what is left to pay. Their mere presence settles nothing: a card paid
-            # in instalments is partly paid for most of its cycle, and treating the
-            # first instalment as settlement would hide the rest of the balance.
-            applied_items: List[Dict[str, Any]] = []
-            if delta < 0:
-                applied = _card_payments_between(
-                    user_id, card, close, due + timedelta(days=CARD_PAYMENT_GRACE_DAYS)
+            card_charges: List[Dict[str, Any]] = []
+            if abs(opening) > 0.005:
+                card_charges.append(
+                    {
+                        "date": prev_close,
+                        "description": "Balance carried in",
+                        "delta": opening,
+                        "kind": "carried",
+                        "category_name": "",
+                        "category_color": safe_hex_color(None),
+                    }
                 )
-                # Never credit back more than was owed: an overpayment settles this
-                # statement, it does not turn the projection into income.
-                applied = min(applied, -delta)
-                if applied > 0.005:
-                    applied_items.append(
-                        {
-                            "date": close,
-                            "description": "Payments already applied",
-                            "delta": round(applied, 2),
-                            "kind": "payment",
-                            "category_name": "",
-                            "category_color": safe_hex_color(None),
-                        }
-                    )
-                    delta = round(delta + applied, 2)
-
-            if abs(delta) < 0.005:
-                continue
-
-            card_charges = sorted(
-                actual_items + expected_items, key=lambda item: item["date"]
+            card_charges.extend(
+                sorted(
+                    _list_actual_card_charges(user_id, card, prev_close, close)
+                    + expected_items
+                    + _list_actual_card_payments(user_id, card, prev_close, close)
+                    + committed_items,
+                    key=lambda item: item["date"],
+                )
             )
-            # Appended rather than sorted in: it is an aggregate of everything paid
-            # after the statement closed, so it belongs at the end of the breakdown.
-            card_charges.extend(applied_items)
+            if applied > 0.005:
+                # Appended rather than sorted in: it is an aggregate of everything
+                # paid after the statement closed, so it belongs at the end.
+                card_charges.append(
+                    {
+                        "date": close,
+                        "description": "Payments applied since this statement closed",
+                        "delta": round(applied, 2),
+                        "kind": "payment",
+                        "category_name": "",
+                        "category_color": safe_hex_color(None),
+                    }
+                )
             payments.append(
                 {
                     "date": due,
-                    "description": f"{card['name']} payment",
+                    "description": f"{card['name']} estimated statement",
                     "source": "card",
-                    "income": delta if delta > 0 else 0.0,
-                    "expense": -delta if delta < 0 else 0.0,
+                    "income": 0.0,
+                    "expense": -delta,
                     "delta": delta,
-                    "kind": "income" if delta > 0 else "expense",
+                    "kind": "expense",
                     "category_name": "",
                     "category_color": "",
                     "account_id": int(card["id"]),
@@ -1970,8 +2122,10 @@ def match_card_payments(user_id: int) -> List[Dict[str, Any]]:
 
 
 def card_balance_summary(user_id: int, card: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Amount due on a card's most recently closed statement: the statement's net
-    charges (account_id-anchored) minus payments recorded since it closed."""
+    """Amount due on a card's most recently closed statement: the balance the card
+    actually carried when it closed, minus payments recorded since. Taking the
+    cycle's own charges instead would ignore anything rolled over from the last
+    statement, and would spend a mid-cycle overpayment twice."""
     if card.get("statement_day") is None or card.get("due_day") is None:
         return None
     today = date.today()
@@ -1983,8 +2137,8 @@ def card_balance_summary(user_id: int, card: Dict[str, Any]) -> Optional[Dict[st
         return None
     prev_close, close, due = last_cycle
 
-    # Purchases are negative, so owed = -(net charges); refunds reduce it.
-    statement_owed = round(-_sum_actual_card_charges(user_id, card, prev_close, close), 2)
+    # Purchases are negative, so owed = -(balance); refunds and payments reduce it.
+    statement_owed = round(-_card_actual_net_through(user_id, card, close), 2)
     payments_applied = _card_payments_between(user_id, card, close, today)
     amount_due = round(statement_owed - payments_applied, 2)
     return {
@@ -2706,9 +2860,12 @@ def _parse_template_row(
 
     target_is_card = template.get("account_type") == "credit_card"
     if is_credit:
+        # Money in, so positive whatever it is called. A payment is only singled
+        # out to flag it as a transfer; it pays the balance down exactly as a
+        # refund does and must not be stored negative, which would read as debt.
         is_payment = target_is_card and bool(_CARD_PAYMENT_RE.search(description))
         if is_payment:
-            amount, flow, is_transfer = -magnitude, "transfer", True
+            amount, flow, is_transfer = magnitude, "transfer", True
         else:
             amount, flow, is_transfer = magnitude, ("refund" if target_is_card else "income"), False
     else:
@@ -2762,9 +2919,11 @@ def _parse_visa_row(row: Dict[str, str], transfer_patterns: Sequence[str] = ()) 
     is_payment = is_credit and bool(_CARD_PAYMENT_RE.search(description))
     is_refund = is_credit and not is_payment
     magnitude = abs(_parse_import_amount(row.get("Amount", "0")))
-    # Debit on a card = purchase (money out, -). Refund = money back (+).
-    # Payment = transfer; store negative (debt paid down) but flag it.
-    amount = magnitude if is_refund else -magnitude
+    # Debit on a card = purchase (money out, -). Every credit — refund or payment
+    # alike — is money *in* to the card and so positive: that is what pays the
+    # balance down. Storing a payment negative reads as "owe more", which made a
+    # card's balance climb with every payment made against it.
+    amount = magnitude if is_credit else -magnitude
     if is_payment:
         flow = "transfer"
     elif is_refund:
@@ -2798,14 +2957,23 @@ def _parse_apple_row(row: Dict[str, str], transfer_patterns: Sequence[str] = ())
         flow = "refund"
     else:
         flow = "expense"
-    # "Other"/"Debit" rows are tiny adjustments; treat as transfer so they drop
-    # out of spending totals.
+    # "Other"/"Debit" rows are tiny adjustments (e.g. Daily Cash corrections).
+    # Only the ones that *reduce* the balance behave like a payment; one that
+    # adds to the balance is a charge, and flagging it as a transfer would let it
+    # count against a statement as a negative payment.
     if raw_type in ("Other", "Debit"):
-        is_transfer = True
-        flow = "transfer"
+        is_transfer = amount > 0
+        flow = "transfer" if is_transfer else "fee"
+    # Apple bills a statement by when a charge *clears*, not when it was made, and
+    # the two straddle the month end often enough to file charges under the wrong
+    # statement. Pending rows have no clearing date yet, so fall back to the
+    # transaction date until a later export fills it in.
+    tx_date = _parse_import_date(
+        str(row.get("Clearing Date", "")).strip() or row.get("Transaction Date", "")
+    )
     return {
         "account": "Apple Card",
-        "tx_date": _parse_import_date(row.get("Transaction Date", "")),
+        "tx_date": tx_date,
         "description": description,
         "merchant": merchant,
         "amount": amount,
@@ -2940,10 +3108,13 @@ def upsert_imported_transactions(
     fingerprints = [row["fingerprint"] for row in rows]
 
     # Anchor each row to an account by id at insert time. Prefer an account_id the
-    # parser already resolved (custom templates); otherwise match on account name.
-    name_to_id = {
-        str(a["name"]).lower(): int(a["id"]) for a in load_accounts(user_id)
-    }
+    # parser already resolved (custom templates); otherwise resolve the export's
+    # label — a saved binding, the account's name, or an unambiguous partial match.
+    # Resolved once per label, since a file carries only one or two of them.
+    accounts = load_accounts(user_id)
+    links = load_import_account_links(user_id)
+    id_to_name = {int(account["id"]): str(account["name"]) for account in accounts}
+    resolved_labels: Dict[str, Optional[int]] = {}
 
     inserted = 0
     transfers = 0
@@ -2964,7 +3135,15 @@ def upsert_imported_transactions(
             seen_in_batch.add(fingerprint)
             account_id = row.get("account_id")
             if account_id is None:
-                account_id = name_to_id.get(str(row["account"]).lower())
+                label = str(row["account"])
+                if label not in resolved_labels:
+                    resolved_labels[label] = resolve_import_account_id(
+                        user_id, label, accounts=accounts, links=links
+                    )
+                account_id = resolved_labels[label]
+            # Store the account's own name rather than the export's label, so the
+            # ledger reads in the user's terms and a later rename stays coherent.
+            account_label = id_to_name.get(account_id, row["account"])
             conn.execute(
                 """
                 INSERT INTO imported_transactions (
@@ -2975,7 +3154,7 @@ def upsert_imported_transactions(
                 """,
                 [
                     user_id,
-                    row["account"],
+                    account_label,
                     account_id,
                     row["tx_date"],
                     row["description"],
@@ -3042,9 +3221,110 @@ def load_unmapped_import_labels(user_id: int) -> List[Dict[str, Any]]:
     return [{"label": row[0], "count": int(row[1])} for row in rows]
 
 
+# Words that say what kind of account something is rather than which one it is.
+# Dropping them lets an export's label ("Acme Card") meet the account the user
+# actually named ("Acme Credit Card") without matching every card to every other.
+IMPORT_LABEL_NOISE = {
+    "account", "acct", "bank", "card", "cards", "checking", "classic",
+    "contactless", "credit", "debit", "standard", "transactions",
+}
+
+
+def _import_label_tokens(value: str) -> set:
+    """Identifying words in an account label, lowercased and stripped of the
+    generic account-type noise that every card name shares."""
+    tokens = {part for part in re.split(r"[^a-z0-9]+", str(value).lower()) if part}
+    return tokens - IMPORT_LABEL_NOISE
+
+
+def load_import_account_links(user_id: int) -> Dict[str, int]:
+    """Saved 'this export label is this account' bindings, keyed by lowercased
+    label. Written whenever the user maps a label by hand, so the mapping is a
+    one-time step instead of a chore on every import."""
+    rows = fetch_all(
+        "SELECT label, account_id FROM import_account_links WHERE user_id = ?", [user_id]
+    )
+    return {str(row[0]).lower(): int(row[1]) for row in rows}
+
+
+def load_import_account_links_detailed(user_id: int) -> List[Dict[str, Any]]:
+    """Saved label bindings with the account each one points at, for display."""
+    rows = fetch_all("""
+            SELECT COALESCE(NULLIF(l.display_label, ''), l.label), l.account_id, a.name
+            FROM import_account_links l
+            JOIN accounts a ON a.id = l.account_id AND a.user_id = l.user_id
+            WHERE l.user_id = ?
+            ORDER BY l.label
+            """, [user_id])
+    return [
+        {"label": row[0], "account_id": int(row[1]), "account_name": row[2]}
+        for row in rows
+    ]
+
+
+def save_import_account_link(user_id: int, label: str, account_id: int) -> None:
+    cleaned = label.strip()
+    if not cleaned:
+        return
+    execute(
+        "INSERT INTO import_account_links (user_id, label, display_label, account_id) "
+        "VALUES (?, ?, ?, ?) ON CONFLICT (user_id, label) DO UPDATE SET "
+        "display_label = excluded.display_label, account_id = excluded.account_id",
+        [user_id, cleaned.lower(), cleaned, int(account_id)],
+    )
+
+
+def delete_import_account_link(user_id: int, label: str) -> None:
+    execute(
+        "DELETE FROM import_account_links WHERE user_id = ? AND label = ?",
+        [user_id, label.strip().lower()],
+    )
+
+
+def resolve_import_account_id(
+    user_id: int,
+    label: str,
+    accounts: Optional[List[Dict[str, Any]]] = None,
+    links: Optional[Dict[str, int]] = None,
+) -> Optional[int]:
+    """Which account an imported label belongs to: a binding the user saved
+    earlier, else an exact name match, else an unambiguous partial one.
+
+    A saved binding outranks an exact name match because it is the user's own
+    decision about a label whose name never matched in the first place. The
+    partial match is deliberately timid — it gives up when two accounts fit, so a
+    second card is never silently handed another card's history."""
+    if accounts is None:
+        accounts = load_accounts(user_id)
+    if links is None:
+        links = load_import_account_links(user_id)
+    key = str(label).strip().lower()
+    known = {int(account["id"]) for account in accounts}
+
+    linked = links.get(key)
+    if linked in known:
+        return linked
+
+    for account in accounts:
+        if str(account["name"]).strip().lower() == key:
+            return int(account["id"])
+
+    label_tokens = _import_label_tokens(key)
+    if label_tokens:
+        hits = [
+            int(account["id"])
+            for account in accounts
+            if label_tokens & _import_label_tokens(account["name"])
+        ]
+        if len(hits) == 1:
+            return hits[0]
+    return None
+
+
 def map_import_label_to_account(user_id: int, label: str, account_id: int) -> int:
     """Relink every unanchored imported row carrying `label` to `account_id`, and
-    align its display label to that account's current name. Returns rows updated."""
+    align its display label to that account's current name. Remembers the choice
+    so the next export carrying this label anchors itself. Returns rows updated."""
     with get_connection() as conn:
         account = conn.execute(
             "SELECT name FROM accounts WHERE user_id = ? AND id = ?",
@@ -3065,7 +3345,8 @@ def map_import_label_to_account(user_id: int, label: str, account_id: int) -> in
             """,
             [account_id, account[0], user_id, label],
         )
-        return int(matched)
+    save_import_account_link(user_id, label, account_id)
+    return int(matched)
 
 
 IMPORT_TEMPLATE_SIGN_MODES = {"standard", "inverted"}

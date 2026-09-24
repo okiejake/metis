@@ -96,7 +96,7 @@
         <tr class="ledger-row {{ 'actual-row' if row.source == 'actual' else 'forecast-row' }}{{ ' due-row' if row.due_not_posted else '' }}">
           <td>
             {% if row.source == 'card' and row.card_charges %}
-            <button type="button" class="card-expand-toggle js-card-toggle" data-target="card-detail-{{ loop.index }}" aria-expanded="false" aria-label="Show the charges behind this payment">›</button>
+            <button type="button" class="card-expand-toggle js-card-toggle" data-target="card-detail-{{ loop.index }}" aria-expanded="false" aria-label="Show what makes up this estimated statement">›</button>
             {% endif %}
             {{ row.date }}
           </td>
@@ -148,10 +148,10 @@
         <tr class="card-detail-row hidden" id="card-detail-{{ loop.index }}">
           <td colspan="8">
             <div class="card-detail-wrap">
-              <p class="card-detail-caption">Charges making up this {{ row.description }}</p>
+              <p class="card-detail-caption">What makes up this {{ row.description }}</p>
               <table class="card-detail-table">
                 <thead>
-                  <tr><th>Date</th><th>Charge</th><th>Category</th><th>Type</th><th>Amount</th></tr>
+                  <tr><th>Date</th><th>Item</th><th>Category</th><th>Type</th><th>Amount</th></tr>
                 </thead>
                 <tbody>
                   {% for charge in row.card_charges %}
@@ -170,7 +170,7 @@
                     </td>
                     <td>
                       <span class="table-pill">
-                        {% if charge.kind == 'actual' %}Imported{% elif charge.kind == 'recurring' %}Recurring{% elif charge.kind == 'payment' %}Paid{% else %}One-time{% endif %}
+                        {% if charge.kind == 'actual' %}Imported{% elif charge.kind == 'recurring' %}Recurring{% elif charge.kind == 'payment' %}Paid{% elif charge.kind == 'carried' %}Carried in{% elif charge.kind == 'projected' %}Projected{% else %}One-time{% endif %}
                       </span>
                     </td>
                     <td class="amount-value {{ 'positive' if charge.delta > 0 else 'negative' }}">
