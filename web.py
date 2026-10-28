@@ -13,4 +13,4 @@ CurrentUser = Annotated[Dict[str, Any], Depends(get_current_user)]
 
 def render(request: Request, template_name: str, message: str = "", err: int = 0, **context: Any):
     """Render a template with the shared base context (current user, users, message/error)."""
-    return templates.TemplateResponse(template_name, template_context(request, message, err, **context))
+    return templates.TemplateResponse(request, template_name, template_context(request, message, err, **context))
