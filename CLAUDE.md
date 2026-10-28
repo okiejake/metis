@@ -11,7 +11,7 @@ Its core objective is to give you a **single lens into your entire financial pic
 - Checking-account cash flow
 - Credit card statements — and **predicting future credit card statements** from budgets
   and predictive analysis
-- Pulling in **live data** (e.g. from your Robinhood account)
+- Pulling in **live data** (e.g. from a brokerage account)
 - **Auditing** your finances: finding stray transactions and helping you categorize, tag,
   and associate them
 - Surfacing **subscriptions you didn't know you had**, and calling out transactions that
