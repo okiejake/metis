@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="auth-shell">
+  <div class="auth-card">
+    <p class="brand-kicker">Financial Clarity OS</p>
+    <h1 class="auth-brand">metis</h1>
+    <p class="auth-lede">Sign in to reach your ledger.</p>
+
+    <form method="post" action="/login" class="auth-form">
+      <input type="hidden" name="next_path" value="{{ next_path }}" />
+      <label>
+        Name or email
+        <input type="text" name="identifier" value="{{ identifier if identifier else '' }}"
+               autocomplete="username" autofocus required />
+      </label>
+      <label>
+        Password
+        <input type="password" name="password" autocomplete="current-password" required />
+      </label>
+      <button type="submit" class="button-link auth-submit">Sign In</button>
+    </form>
+  </div>
+</section>
+{% endblock %}

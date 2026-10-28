@@ -2317,3 +2317,71 @@ body.amounts-hidden .amount-sensitive {
   justify-content: flex-end;
   margin-top: 0.85rem;
 }
+
+/* ---- sign in / first-run setup ----------------------------------------
+   These render without the app chrome, so they carry their own centering. */
+
+.auth-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 2rem 1.25rem;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 24rem;
+  padding: 2rem;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md);
+  display: grid;
+  gap: 0.4rem;
+}
+
+.auth-card-wide {
+  max-width: 30rem;
+}
+
+.auth-brand {
+  margin: 0;
+  font-size: 1.9rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  text-transform: lowercase;
+}
+
+.auth-lede {
+  margin: 0 0 0.6rem;
+  color: var(--muted);
+  font-size: 0.94rem;
+}
+
+.auth-form {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.auth-form label {
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.86rem;
+  color: var(--muted);
+}
+
+.auth-form input,
+.auth-form select {
+  width: 100%;
+}
+
+.auth-submit {
+  justify-content: center;
+  margin-top: 0.3rem;
+}
+
+.auth-note {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}

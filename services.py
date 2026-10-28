@@ -1,3 +1,4 @@
+import base64
 import calendar
 import csv
 import hashlib
@@ -5,6 +6,7 @@ import io
 import json
 import os
 import re
+import secrets
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Sequence
 from urllib.parse import quote_plus
@@ -117,8 +119,22 @@ def slugify_user_name(display_name: str) -> str:
     return normalize_user_slug(cleaned[:32])
 
 
+# Browsers drop these from a URL wherever they appear, so a check that reads the
+# raw string sees something the browser never resolves.
+_URL_IGNORED_CHARS = str.maketrans("", "", "\t\r\n")
+
+
 def resolve_safe_redirect_target(target: str) -> str:
-    cleaned = target.strip()
+    """Reduce an attacker-controllable `next` to a same-site absolute path, or the
+    dashboard. This is what stops a signed-in user being bounced off-site.
+
+    Normalize the way a browser will before testing the shape: tab, newline and
+    carriage return are removed wherever they sit, and a backslash reads as a
+    forward slash in the authority position. Skipping that leaves `/\\host` and
+    `/<tab>/host` passing a plain "starts with / but not //" test, only for the
+    browser to resolve both as the protocol-relative `//host`.
+    """
+    cleaned = target.strip().translate(_URL_IGNORED_CHARS).replace("\\", "/")
     if cleaned.startswith("/") and not cleaned.startswith("//"):
         return cleaned
     return "/dashboard"
@@ -162,6 +178,7 @@ def delete_user_and_data(user_id: int) -> None:
         conn.execute("DELETE FROM expected_match_rules WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM category_rules WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM transaction_splits WHERE user_id = ?", [user_id])
+        conn.execute("DELETE FROM sessions WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM accounts WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM categories WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM settings WHERE key LIKE ?", [f"user:{user_id}:%"])
@@ -182,6 +199,7 @@ def init_db() -> None:
         conn.execute("CREATE SEQUENCE IF NOT EXISTS import_templates_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS category_rules_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS transaction_splits_id_seq START 1")
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS sessions_id_seq START 1")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -321,6 +339,18 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS sessions (
+                id BIGINT PRIMARY KEY DEFAULT nextval('sessions_id_seq'),
+                user_id BIGINT NOT NULL,
+                token_hash TEXT NOT NULL UNIQUE,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                expires_at TIMESTAMP NOT NULL,
+                last_seen_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS transaction_splits (
                 id BIGINT PRIMARY KEY DEFAULT nextval('transaction_splits_id_seq'),
                 user_id BIGINT NOT NULL,
@@ -434,6 +464,14 @@ def init_db() -> None:
             conn.execute("ALTER TABLE imported_transactions ADD COLUMN category_via TEXT")
         if not table_has_column(conn, "users", "email"):
             conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
+        # Credentials. NULL password_hash means "not set yet", which puts the app
+        # into first-run setup rather than letting anyone in.
+        if not table_has_column(conn, "users", "password_hash"):
+            conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+        if not table_has_column(conn, "users", "failed_attempts"):
+            conn.execute("ALTER TABLE users ADD COLUMN failed_attempts INTEGER DEFAULT 0")
+        if not table_has_column(conn, "users", "locked_until"):
+            conn.execute("ALTER TABLE users ADD COLUMN locked_until TIMESTAMP")
         migrate_categories_to_user_scoped_uniqueness(conn, default_user_id)
         conn.execute(
             "UPDATE categories SET color = ? WHERE color IS NULL OR TRIM(color) = ''",
@@ -470,6 +508,8 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_category_rules_user ON category_rules(user_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_category_rules_category ON category_rules(user_id, category_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_transaction_splits_tx ON transaction_splits(user_id, imported_transaction_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token_hash)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_user_name_unique ON accounts(user_id, name)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_recurring_items_account ON recurring_items(user_id, account_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_manual_transactions_account ON manual_transactions(user_id, account_id)")
@@ -489,11 +529,17 @@ def init_db() -> None:
 
 
 def load_all_users() -> List[Dict[str, Any]]:
-    return query_all("""
-            SELECT id, slug, display_name, email
+    """All profiles, each flagged with whether it can actually sign in. A profile
+    without a password is inert — its data is there but nobody can reach it."""
+    rows = query_all("""
+            SELECT id, slug, display_name, email,
+                   (password_hash IS NOT NULL) AS has_password
             FROM users
             ORDER BY LOWER(display_name), id
             """)
+    for row in rows:
+        row["has_password"] = bool(row["has_password"])
+    return rows
 
 
 def load_user_by_slug(user_slug: str) -> Optional[Dict[str, Any]]:
@@ -531,43 +577,259 @@ def get_default_user() -> Dict[str, Any]:
 
 
 def get_current_user(request: Request) -> Dict[str, Any]:
+    """The signed-in user. The session gate in app.py resolves this before any
+    route runs, so reaching here without one means the gate was bypassed —
+    which is a bug, not a case to paper over with a default user."""
     cached = getattr(request.state, "current_user", None)
     if cached:
         return cached
-
-    query_slug = request.query_params.get("user", "")
-    cookie_slug = request.cookies.get(USER_SLUG_COOKIE, "")
-    requested_slug = query_slug or cookie_slug or DEFAULT_USER_SLUG
-    try:
-        normalized_slug = normalize_user_slug(requested_slug)
-    except ValueError:
-        normalized_slug = DEFAULT_USER_SLUG
-
-    user = load_user_by_slug(normalized_slug)
-    if not user:
-        user = get_default_user()
-
-    request.state.current_user = user
-    request.state.current_user_slug = user["slug"]
-    return user
+    raise RuntimeError("No authenticated user on the request; the session gate did not run")
 
 
-def attach_user_cookie(response: Response, user_slug: str) -> None:
-    response.set_cookie(
-        USER_SLUG_COOKIE,
-        user_slug,
-        max_age=USER_COOKIE_MAX_AGE_SECONDS,
-        samesite="lax",
+# ---------------------------------------------------------------------------
+# Authentication
+#
+# Passwords are scrypt-hashed with a per-user random salt, using stdlib hashlib
+# and secrets — no new dependency, in keeping with how CSV import stays on the
+# stdlib. Sessions are server-side rows keyed by the SHA-256 of a random token:
+# the cookie holds the token, the database holds only its digest, so a leaked
+# database file yields no usable session cookies.
+#
+# Identity comes from the session and nothing else. There is deliberately no
+# ?user= override and no default-user fallback — both were identity bypasses.
+# ---------------------------------------------------------------------------
+
+PASSWORD_MIN_LENGTH = 10
+SCRYPT_N = 2 ** 15
+SCRYPT_R = 8
+SCRYPT_P = 1
+SESSION_COOKIE = "metis_session"
+SESSION_TTL_DAYS = 30
+MAX_FAILED_ATTEMPTS = 8
+LOCKOUT_MINUTES = 15
+
+
+def _scrypt_maxmem(n: int, r: int) -> int:
+    """OpenSSL caps scrypt memory at 32 MB by default and raises rather than
+    degrading, while n=2**15, r=8 needs ~33 MB. Derive the ceiling from the
+    parameters (with headroom) so raising the work factor later still works."""
+    return 128 * n * r * 2
+
+
+def hash_password(password: str) -> str:
+    """scrypt with a fresh 16-byte salt. Stored as a self-describing string so
+    the work factors can be raised later without invalidating old hashes."""
+    salt = secrets.token_bytes(16)
+    derived = hashlib.scrypt(
+        password.encode("utf-8"), salt=salt, n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P, dklen=32,
+        maxmem=_scrypt_maxmem(SCRYPT_N, SCRYPT_R),
+    )
+    return "scrypt${}${}${}${}${}".format(
+        SCRYPT_N, SCRYPT_R, SCRYPT_P, base64.b64encode(salt).decode(), base64.b64encode(derived).decode()
     )
 
 
+def verify_password(password: str, stored: Optional[str]) -> bool:
+    """Constant-time check against a stored hash, honoring that hash's own work
+    factors rather than the current constants."""
+    if not stored:
+        return False
+    try:
+        scheme, n_raw, r_raw, p_raw, salt_b64, hash_b64 = stored.split("$")
+        if scheme != "scrypt":
+            return False
+        expected = base64.b64decode(hash_b64)
+        n, r, p_factor = int(n_raw), int(r_raw), int(p_raw)
+        derived = hashlib.scrypt(
+            password.encode("utf-8"),
+            salt=base64.b64decode(salt_b64),
+            n=n, r=r, p=p_factor,
+            dklen=len(expected),
+            maxmem=_scrypt_maxmem(n, r),
+        )
+    except (ValueError, TypeError):
+        return False
+    return secrets.compare_digest(derived, expected)
+
+
+def validate_password(password: str, confirm: Optional[str] = None) -> str:
+    """Length is the only rule worth enforcing — composition rules push people
+    toward predictable substitutions without adding real entropy."""
+    if confirm is not None and password != confirm:
+        raise ValueError("Those passwords don't match")
+    if len(password or "") < PASSWORD_MIN_LENGTH:
+        raise ValueError(f"Use at least {PASSWORD_MIN_LENGTH} characters")
+    return password
+
+
+def set_user_password(user_id: int, password: str, confirm: Optional[str] = None) -> None:
+    """Set a password and sign out everywhere. Any other live session could be
+    whoever you are changing the password because of."""
+    validate_password(password, confirm)
+    execute(
+        "UPDATE users SET password_hash = ?, failed_attempts = 0, locked_until = NULL WHERE id = ?",
+        [hash_password(password), user_id],
+    )
+    destroy_user_sessions(user_id)
+
+
+def any_user_has_password() -> bool:
+    """False on a database that predates auth, which routes everything to setup."""
+    row = fetch_one("SELECT COUNT(*) FROM users WHERE password_hash IS NOT NULL")
+    return bool(row and int(row[0]) > 0)
+
+
+def users_needing_password() -> List[Dict[str, Any]]:
+    return query_all(
+        "SELECT id, slug, display_name, email FROM users "
+        "WHERE password_hash IS NULL ORDER BY id"
+    )
+
+
+def _lockout_remaining(locked_until: Any) -> int:
+    if not locked_until:
+        return 0
+    if isinstance(locked_until, date) and not isinstance(locked_until, datetime):
+        locked_until = datetime.combine(locked_until, datetime.min.time())
+    remaining = (locked_until - datetime.now()).total_seconds()
+    return max(0, int(remaining // 60) + 1) if remaining > 0 else 0
+
+
+def authenticate(identifier: str, password: str) -> Dict[str, Any]:
+    """Verify a sign-in by slug, display name, or email.
+
+    Raises ValueError with a message safe to show. Failures are counted per user
+    and trigger a timed lockout, because a login form on a LAN with no rate limit
+    is brute-forceable. The wrong-credentials message is identical whether or not
+    the account exists, so the form can't be used to enumerate users."""
+    generic = "Those details don't match an account"
+    cleaned = (identifier or "").strip()
+    if not cleaned or not password:
+        raise ValueError(generic)
+
+    row = fetch_one(
+        "SELECT id, slug, display_name, email, password_hash, failed_attempts, locked_until "
+        "FROM users WHERE LOWER(slug) = LOWER(?) OR LOWER(display_name) = LOWER(?) "
+        "   OR (email <> '' AND LOWER(email) = LOWER(?)) LIMIT 1",
+        [cleaned, cleaned, cleaned],
+    )
+    if not row:
+        # Spend comparable time so a missing account isn't detectably faster.
+        verify_password(password, hash_password("timing-equalizer"))
+        raise ValueError(generic)
+
+    user_id, slug, display_name, email, password_hash, failed, locked_until = row
+    waiting = _lockout_remaining(locked_until)
+    if waiting:
+        raise ValueError(f"Too many attempts. Try again in {waiting} minute{'s' if waiting != 1 else ''}")
+
+    if not verify_password(password, password_hash):
+        attempts = int(failed or 0) + 1
+        if attempts >= MAX_FAILED_ATTEMPTS:
+            execute(
+                "UPDATE users SET failed_attempts = 0, locked_until = ? WHERE id = ?",
+                [datetime.now() + timedelta(minutes=LOCKOUT_MINUTES), int(user_id)],
+            )
+            raise ValueError(f"Too many attempts. Try again in {LOCKOUT_MINUTES} minutes")
+        execute("UPDATE users SET failed_attempts = ? WHERE id = ?", [attempts, int(user_id)])
+        raise ValueError(generic)
+
+    execute(
+        "UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = ?", [int(user_id)]
+    )
+    return {"id": int(user_id), "slug": slug, "display_name": display_name, "email": email or ""}
+
+
+def _token_digest(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_session(user_id: int) -> str:
+    """Issue a session and return the raw token, which is never stored."""
+    token = secrets.token_urlsafe(32)
+    execute(
+        "INSERT INTO sessions (user_id, token_hash, expires_at) VALUES (?, ?, ?)",
+        [user_id, _token_digest(token), datetime.now() + timedelta(days=SESSION_TTL_DAYS)],
+    )
+    return token
+
+
+def load_session_user(token: str) -> Optional[Dict[str, Any]]:
+    """Resolve a session cookie to its user, sliding the expiry forward so active
+    use doesn't get logged out on a fixed schedule. Expired rows are deleted on
+    sight rather than left to accumulate."""
+    if not token:
+        return None
+    digest = _token_digest(token)
+    row = fetch_one(
+        "SELECT s.user_id, s.expires_at, u.slug, u.display_name, u.email "
+        "FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? LIMIT 1",
+        [digest],
+    )
+    if not row:
+        return None
+
+    user_id, expires_at, slug, display_name, email = row
+    if isinstance(expires_at, date) and not isinstance(expires_at, datetime):
+        expires_at = datetime.combine(expires_at, datetime.min.time())
+    if expires_at <= datetime.now():
+        execute("DELETE FROM sessions WHERE token_hash = ?", [digest])
+        return None
+
+    execute(
+        "UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE token_hash = ?",
+        [datetime.now(), datetime.now() + timedelta(days=SESSION_TTL_DAYS), digest],
+    )
+    return {"id": int(user_id), "slug": slug, "display_name": display_name, "email": email or ""}
+
+
+def destroy_session(token: str) -> None:
+    if token:
+        execute("DELETE FROM sessions WHERE token_hash = ?", [_token_digest(token)])
+
+
+def destroy_user_sessions(user_id: int) -> None:
+    execute("DELETE FROM sessions WHERE user_id = ?", [user_id])
+
+
+def purge_expired_sessions() -> None:
+    execute("DELETE FROM sessions WHERE expires_at <= ?", [datetime.now()])
+
+
+def secure_cookies_enabled() -> bool:
+    """Set METIS_SECURE_COOKIES=1 once Metis is served over HTTPS. Left off by
+    default because a Secure cookie is simply never sent over plain HTTP, which
+    would lock out a LAN-only deployment with no visible reason."""
+    return os.getenv("METIS_SECURE_COOKIES", "").strip().lower() in {"1", "true", "yes"}
+
+
+def attach_session_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        max_age=SESSION_TTL_DAYS * 24 * 60 * 60,
+        httponly=True,
+        samesite="lax",
+        secure=secure_cookies_enabled(),
+        path="/",
+    )
+
+
+def clear_session_cookie(response: Response) -> None:
+    response.delete_cookie(SESSION_COOKIE, path="/")
+
+
 def template_context(request: Request, message: str, err: int, **kwargs: Any) -> Dict[str, Any]:
+    signed_in = getattr(request.state, "current_user", None)
     context = {
         "request": request,
         "message": message,
         "is_error": bool(err),
-        "current_user": get_current_user(request),
-        "users": load_all_users(),
+        # Sign-in and first-run setup render without a user — and deliberately
+        # without the user list, which would let the login page enumerate accounts.
+        "current_user": signed_in or {"display_name": "", "email": "", "slug": ""},
+        "users": load_all_users() if signed_in else [],
+        "chrome": signed_in is not None,
     }
     context.update(kwargs)
     return context
