@@ -137,7 +137,7 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Unlinked imported accounts</h2>
-    <p>These imported labels aren’t tied to an account — usually because the account was renamed after importing. Link each to its account so renames, the card forecast, and amount-due stay in sync.</p>
+    <p>These imported labels aren’t tied to an account — usually because the export names it differently than you do. Link each one once; Metis remembers it and anchors every future import of that label on its own.</p>
   </div>
   <div class="table-wrap">
     <table>
@@ -163,6 +163,40 @@
                 {% endfor %}
               </select>
               <button type="submit" class="button-link">Link</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+{% if account_links %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>Remembered import labels</h2>
+    <p>Where each export’s own account label lands when you import it. Forget one to be asked again on the next import.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Export label</th>
+          <th>Goes to</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for link in account_links %}
+        <tr>
+          <td><span class="table-pill">{{ link.label }}</span></td>
+          <td>{{ link.account_name }}</td>
+          <td>
+            <form method="post" action="/import/links/delete" class="inline-map-form">
+              <input type="hidden" name="label" value="{{ link.label }}" />
+              <button type="submit" class="button-link">Forget</button>
             </form>
           </td>
         </tr>

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_statement_macros.html" as stmt %}
 {% block content %}
 <section class="page-intro">
   <div>
@@ -95,14 +96,17 @@
         {% else %}
         <tr class="ledger-row {{ 'actual-row' if row.source == 'actual' else 'forecast-row' }}{{ ' due-row' if row.due_not_posted else '' }}">
           <td>
-            {% if row.source == 'card' and row.card_charges %}
-            <button type="button" class="card-expand-toggle js-card-toggle" data-target="card-detail-{{ loop.index }}" aria-expanded="false" aria-label="Show the charges behind this payment">›</button>
+            {% if row.source == 'card' and row.statement %}
+            <button type="button" class="card-expand-toggle js-card-toggle" data-target="card-detail-{{ loop.index }}" aria-expanded="false" aria-label="Show this statement's summary">›</button>
             {% endif %}
             {{ row.date }}
           </td>
           <td>
             {% if row.linked and row.raw_name and row.raw_name != row.description %}
             <span class="has-linked-actual" title="Actual: {{ row.raw_name }}">{{ row.description }}</span>
+            {% elif row.statement %}
+            <a href="{{ stmt.statement_url(row.statement) }}">{{ row.description }}</a>
+            <span class="card-note">closes {{ row.statement.close_date }}</span>
             {% else %}{{ row.description }}{% endif %}
           </td>
           <td>
@@ -144,42 +148,12 @@
         </tr>
         {% endif %}
 
-        {% if row.row_type != 'month_summary' and row.source == 'card' and row.card_charges %}
+        {% if row.row_type != 'month_summary' and row.source == 'card' and row.statement %}
         <tr class="card-detail-row hidden" id="card-detail-{{ loop.index }}">
           <td colspan="8">
             <div class="card-detail-wrap">
-              <p class="card-detail-caption">Charges making up this {{ row.description }}</p>
-              <table class="card-detail-table">
-                <thead>
-                  <tr><th>Date</th><th>Charge</th><th>Category</th><th>Type</th><th>Amount</th></tr>
-                </thead>
-                <tbody>
-                  {% for charge in row.card_charges %}
-                  <tr>
-                    <td>{{ charge.date }}</td>
-                    <td>{{ charge.description if charge.description else '—' }}</td>
-                    <td>
-                      {% if charge.category_name %}
-                      <span class="category-pill">
-                        <span class="category-dot" style="background: {{ charge.category_color if charge.category_color else 'var(--muted)' }};"></span>
-                        {{ charge.category_name }}
-                      </span>
-                      {% else %}
-                      -
-                      {% endif %}
-                    </td>
-                    <td>
-                      <span class="table-pill">
-                        {% if charge.kind == 'actual' %}Imported{% elif charge.kind == 'recurring' %}Recurring{% elif charge.kind == 'payment' %}Paid{% else %}One-time{% endif %}
-                      </span>
-                    </td>
-                    <td class="amount-value {{ 'positive' if charge.delta > 0 else 'negative' }}">
-                      {{ '+' if charge.delta > 0 else '-' }}${{ (charge.delta if charge.delta >= 0 else -charge.delta)|currency }}
-                    </td>
-                  </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
+              {{ stmt.summary(row.statement) }}
+              <p class="card-detail-link"><a href="{{ stmt.statement_url(row.statement) }}">Open the statement →</a></p>
             </div>
           </td>
         </tr>
@@ -342,7 +316,7 @@
     syncDateDisplay(parseIsoDate('{{ today_iso }}'));
   })();
 
-  // Expand/collapse the charges behind a card-payment row.
+  // Expand/collapse the statement behind a card-payment row.
   (() => {
     document.querySelectorAll('.js-card-toggle').forEach((button) => {
       button.addEventListener('click', () => {
@@ -363,19 +337,9 @@
   .card-detail-wrap {
     padding: 0.5rem 0.75rem 0.75rem 1.5rem;
   }
-  .card-detail-caption {
-    font-size: 0.8rem;
-    opacity: 0.7;
-    margin: 0 0 0.4rem;
-  }
-  .card-detail-table {
-    width: 100%;
+  .card-detail-link {
+    margin: 0.5rem 0 0;
     font-size: 0.9rem;
-  }
-  .card-detail-table th {
-    text-align: left;
-    font-weight: 600;
-    opacity: 0.65;
   }
 </style>
 {% endblock %}
