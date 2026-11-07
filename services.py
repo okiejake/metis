@@ -2380,52 +2380,6 @@ def card_balance_summary(
     }
 
 
-BUDGET_WINDOW_SETTINGS_KEY = "budget_window"
-
-
-def _month_bounds(anchor: date) -> tuple[date, date]:
-    start = date(anchor.year, anchor.month, 1)
-    end = add_months(start, 1) - timedelta(days=1)
-    return start, end
-
-
-def resolve_budget_window(user_id: int, start: str = "", end: str = "") -> tuple[date, date, bool]:
-    """Budget's own saved window (default = current month). Kept under a separate
-    settings key so it never clobbers the shared Dashboard/Ledger window."""
-    today = date.today()
-    saved_start = saved_end = None
-    stored = get_setting_value(user_id, BUDGET_WINDOW_SETTINGS_KEY)
-    if stored:
-        try:
-            parsed = json.loads(stored)
-        except json.JSONDecodeError:
-            parsed = None
-        if isinstance(parsed, dict):
-            saved_start = parse_optional_iso_date(parsed.get("start"))
-            saved_end = parse_optional_iso_date(parsed.get("end"))
-
-    month_start, month_end = _month_bounds(today)
-    default_start = saved_start or month_start
-    default_end = saved_end or month_end
-
-    invalid = False
-    try:
-        window_start = parse_iso_date(start) if start else default_start
-        window_end = parse_iso_date(end) if end else default_end
-    except ValueError:
-        window_start, window_end, invalid = default_start, default_end, True
-
-    if window_end < window_start:
-        window_start, window_end = window_end, window_start
-
-    set_setting_value(
-        user_id,
-        BUDGET_WINDOW_SETTINGS_KEY,
-        json.dumps({"start": window_start.isoformat(), "end": window_end.isoformat()}),
-    )
-    return window_start, window_end, invalid
-
-
 def _budget_actuals_by_category(
     user_id: int, window_start: date, window_end: date
 ) -> Dict[str, Dict[str, Any]]:
