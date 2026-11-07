@@ -20,7 +20,6 @@ from services import (
     get_connection,
     load_accounts,
     load_categories,
-    resolve_budget_window,
     load_expected_item,
     load_expected_items,
     load_match_rules_for_item,
@@ -34,6 +33,7 @@ from services import (
     recurring_occurrence_status,
     redirect_with_message,
     reset_dismissed_suggestions,
+    resolve_forecast_window,
     suggest_rule_pattern,
     unlink_reconciliation,
     update_match_rule,
@@ -57,7 +57,7 @@ def expected_page(request: Request):
 def budget_page(request: Request, user: CurrentUser, start: str = "", end: str = "", msg: str = "", err: int = 0):
     ensure_seed_accounts(user["id"])
 
-    window_start, window_end, invalid_filter = resolve_budget_window(user["id"], start, end)
+    window_start, window_end, invalid_filter = resolve_forecast_window(user["id"], start, end)
     if invalid_filter:
         msg = "Invalid date filter. Using saved/default range."
         err = 1
