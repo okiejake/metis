@@ -71,6 +71,23 @@ where possible, and raise it immediately if it is already public.
 - Releasing is a separate act from merging: `main` is always shippable, and a release
   marks a point worth naming.
 
+## Design principles
+
+- **One name per thing.** A thing has one short name, used the same way in navigation,
+  headings, buttons, URLs and code.
+- **Layout over explanation.** A screen should be usable from its layout and a few
+  words. If it needs a paragraph or a tooltip to be understood, simplify the screen
+  instead of adding the text.
+- **Shared parts, not copies.** An element used in more than one place is built once
+  and referenced. No one-off variant of a part that already exists.
+- **DRY code.** One definition for each figure or rule, read by every screen that
+  needs it.
+- **No sweeping changes on the side.** Existing screens change only where the work in
+  hand needs them to.
+- **Unclear in use is the owner's call.** When something is not intuitive, the owner
+  flags it and directs the change. Don't pre-empt that with extra text or special
+  cases.
+
 ## Long-term goals to build toward
 
 Mark these off as we complete them.
