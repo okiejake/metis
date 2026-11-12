@@ -87,16 +87,18 @@ def test_a_link_to_a_deleted_account_is_ignored(db, user_id):
     assert db.resolve_import_account_id(user_id, "Visa") is None
 
 
-def test_import_anchors_rows_without_a_second_step(db, user_id):
-    """End to end: the built-in Apple parser labels rows "Apple Card"; the user
-    named the account something longer. The rows still land anchored, and
-    labelled in the user's words."""
-    card_id = add_card(db, user_id, "Household Apple Card")
-    _label, _account_id, rows = db.parse_import_csv(
-        "export.csv",
-        "Transaction Date,Clearing Date,Description,Merchant,Category,Type,Amount (USD)\n"
-        "09/10/2026,09/11/2026,Acme Store,Acme Store,Shopping,Purchase,20.00\n",
-    )
+CARD_EXPORT = (
+    "Transaction Date,Clearing Date,Description,Merchant,Category,Type,Amount (USD)\n"
+    "09/10/2026,09/11/2026,Acme Store,Acme Store,Shopping,Purchase,20.00\n"
+)
+
+
+def test_bound_export_lands_anchored_and_in_the_user_s_words(db, user_id):
+    """An export that names no account carries only a generic label. Bound once
+    to the user's card, its rows land anchored and read in the user's words."""
+    card_id = add_card(db, user_id, "Household Rewards Card")
+    label, _account_id, rows = db.parse_import_csv("export.csv", CARD_EXPORT)
+    db.save_import_account_link(user_id, label, card_id)
 
     db.upsert_imported_transactions(user_id, rows, "export.csv")
 
@@ -105,22 +107,19 @@ def test_import_anchors_rows_without_a_second_step(db, user_id):
         [user_id],
     )
     assert len(stored) == 1
-    assert stored[0]["account_id"] == card_id, "anchored with no manual mapping step"
-    assert stored[0]["account"] == "Household Apple Card", "labelled in the user's words"
+    assert stored[0]["account_id"] == card_id
+    assert stored[0]["account"] == "Household Rewards Card", "labelled in the user's words"
     assert stored[0]["tx_date"] == date(2026, 9, 11)
 
 
 def test_reimporting_the_same_export_adds_nothing(db, user_id):
     """Anchoring must not change the dedup key, or every re-upload would double."""
-    add_card(db, user_id, "Household Apple Card")
-    csv_text = (
-        "Transaction Date,Clearing Date,Description,Merchant,Category,Type,Amount (USD)\n"
-        "09/10/2026,09/11/2026,Acme Store,Acme Store,Shopping,Purchase,20.00\n"
-    )
-    _label, _account_id, rows = db.parse_import_csv("export.csv", csv_text)
+    card_id = add_card(db, user_id, "Household Rewards Card")
+    label, _account_id, rows = db.parse_import_csv("export.csv", CARD_EXPORT)
+    db.save_import_account_link(user_id, label, card_id)
     db.upsert_imported_transactions(user_id, rows, "export.csv")
 
-    _label, _account_id, again = db.parse_import_csv("export.csv", csv_text)
+    _label, _account_id, again = db.parse_import_csv("export.csv", CARD_EXPORT)
     result = db.upsert_imported_transactions(user_id, again, "export.csv")
 
     assert result["inserted"] == 0

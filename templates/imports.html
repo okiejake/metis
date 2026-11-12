@@ -4,7 +4,7 @@
   <div>
     <p class="page-kicker">Import</p>
     <h2>Bring in real bank &amp; card transactions.</h2>
-    <p>Upload a Checking, Visa, or Apple Card CSV export. Re-uploading is safe — only new transactions are added.</p>
+    <p>Upload a CSV export from a checking account or a card. Re-uploading is safe — only new transactions are added.</p>
   </div>
   <div class="intro-badge-stack">
     <span class="stat-chip">{{ summary.total_count }} imported</span>
@@ -14,7 +14,7 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Upload a CSV</h2>
-    <p>Accepted: Checking / Visa exports and Apple Card exports. The format is detected automatically.</p>
+    <p>Accepted: the built-in checking and card exports, and any template you add below. The format is detected automatically.</p>
   </div>
   <form method="post" action="/import" enctype="multipart/form-data" class="import-upload-form">
     <label class="inline-field">
@@ -32,7 +32,7 @@
     </label>
     <button type="submit" class="button-link">Upload &amp; Import</button>
   </form>
-  <p class="card-note">Auto-detect covers the built-in Checking / Visa / Apple Card exports and any custom template whose columns match. Pick a template to force it.</p>
+  <p class="card-note">Auto-detect covers the built-in checking and card exports and any custom template whose columns match. Pick a template to force it.</p>
 </section>
 
 <section class="panel">

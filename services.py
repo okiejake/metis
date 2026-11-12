@@ -98,9 +98,12 @@ def migrate_card_payment_signs(conn: duckdb.DuckDBPyConnection) -> int:
     return int(affected)
 
 
-# Labels the built-in parsers stamp on a row before it is fingerprinted. Custom
-# templates use their account's name, which the candidates below already cover.
-BUILT_IN_IMPORT_LABELS = ("Checking", "Visa", "Apple Card")
+# Label each built-in format stamps on a row before it is fingerprinted, keyed by
+# the format name detect_csv_format returns. A label says what kind of export it
+# was and deliberately names no institution. Custom templates use their account's
+# name, which the migration's candidates below already cover.
+BUILT_IN_FORMAT_LABELS = {"checking": "Checking", "visa": "Visa", "cleared_card": "Card"}
+BUILT_IN_IMPORT_LABELS = tuple(BUILT_IN_FORMAT_LABELS.values())
 FINGERPRINT_MAX_OCCURRENCE = 4
 
 
@@ -2961,8 +2964,8 @@ def _import_squash(text: Any) -> str:
 
 
 def _visa_merchant(description: str) -> str:
-    """Visa descriptions look like 'LAKE 66        ARCADIA      OK' — the payee
-    is the leading chunk before the big whitespace gap."""
+    """Visa descriptions look like 'ACME HARDWARE     SPRINGFIELD    ST' — the
+    payee is the leading chunk before the big whitespace gap."""
     parts = re.split(r"\s{2,}", description.strip())
     return parts[0].strip() if parts else description.strip()
 
@@ -3084,7 +3087,7 @@ def _parse_checking_row(row: Dict[str, str], transfer_patterns: Sequence[str] = 
     else:
         flow = "expense"
     return {
-        "account": "Checking",
+        "account": BUILT_IN_FORMAT_LABELS["checking"],
         "tx_date": _parse_import_date(row.get("Processed Date", "")),
         "description": description,
         "merchant": _checking_merchant(description),
@@ -3114,7 +3117,7 @@ def _parse_visa_row(row: Dict[str, str], transfer_patterns: Sequence[str] = ()) 
     else:
         flow = "expense"
     return {
-        "account": "Visa",
+        "account": BUILT_IN_FORMAT_LABELS["visa"],
         "tx_date": _parse_import_date(row.get("Processed Date", "")),
         "description": description,
         "merchant": _visa_merchant(description),
@@ -3125,7 +3128,9 @@ def _parse_visa_row(row: Dict[str, str], transfer_patterns: Sequence[str] = ()) 
     }
 
 
-def _parse_apple_row(row: Dict[str, str], transfer_patterns: Sequence[str] = ()) -> Dict[str, Any]:
+def _parse_cleared_card_row(row: Dict[str, str], transfer_patterns: Sequence[str] = ()) -> Dict[str, Any]:
+    """A card export that carries both a transaction date and a clearing date,
+    types each row (purchase, payment, interest, credit…), and names no account."""
     description = _import_squash(row.get("Description", ""))
     merchant = _import_squash(row.get("Merchant", ""))
     raw_type = str(row.get("Type", "")).strip()
@@ -3140,22 +3145,22 @@ def _parse_apple_row(row: Dict[str, str], transfer_patterns: Sequence[str] = ())
         flow = "refund"
     else:
         flow = "expense"
-    # "Other"/"Debit" rows are tiny adjustments (e.g. Daily Cash corrections).
+    # "Other"/"Debit" rows are tiny adjustments (e.g. rewards corrections).
     # Only the ones that *reduce* the balance behave like a payment; one that
     # adds to the balance is a charge, and flagging it as a transfer would let it
     # count against a statement as a negative payment.
     if raw_type in ("Other", "Debit"):
         is_transfer = amount > 0
         flow = "transfer" if is_transfer else "fee"
-    # Apple bills a statement by when a charge *clears*, not when it was made, and
-    # the two straddle the month end often enough to file charges under the wrong
-    # statement. Pending rows have no clearing date yet, so fall back to the
+    # The issuer bills a statement by when a charge *clears*, not when it was made,
+    # and the two straddle the month end often enough to file charges under the
+    # wrong statement. Pending rows have no clearing date yet, so fall back to the
     # transaction date until a later export fills it in.
     tx_date = _parse_import_date(
         str(row.get("Clearing Date", "")).strip() or row.get("Transaction Date", "")
     )
     return {
-        "account": "Apple Card",
+        "account": BUILT_IN_FORMAT_LABELS["cleared_card"],
         "tx_date": tx_date,
         "description": description,
         "merchant": merchant,
@@ -3169,16 +3174,17 @@ def _parse_apple_row(row: Dict[str, str], transfer_patterns: Sequence[str] = ())
 _ROW_PARSERS = {
     "checking": _parse_checking_row,
     "visa": _parse_visa_row,
-    "apple": _parse_apple_row,
+    "cleared_card": _parse_cleared_card_row,
 }
 
 
 def detect_csv_format(header: List[str], first_row: Optional[Dict[str, str]]) -> Optional[str]:
-    """Identify which export a CSV is. Checking and Visa share an identical
-    6-column header, so they are disambiguated by the Account Name value."""
+    """Identify which built-in export a CSV is, by its columns. Checking and Visa
+    share an identical 6-column header, so they are disambiguated by the Account
+    Name value."""
     fields = {str(name).strip() for name in (header or []) if name}
     if "Amount (USD)" in fields and "Transaction Date" in fields:
-        return "apple"
+        return "cleared_card"
     if {"Processed Date", "Credit or Debit", "Amount", "Account Name"}.issubset(fields):
         account_name = str((first_row or {}).get("Account Name", "")).upper()
         if "CHECKING" in account_name:
@@ -3228,8 +3234,8 @@ def parse_import_csv(
                     break
     if fmt is None and template is None:
         raise CsvImportError(
-            "Unrecognized CSV format. Expected a Checking, Visa, or Apple Card "
-            "export, or a matching custom template."
+            "Unrecognized CSV format. Expected one of the built-in checking or card "
+            "exports, or a matching custom template."
         )
 
     parsed: List[Dict[str, Any]] = []
@@ -3246,7 +3252,7 @@ def parse_import_csv(
 
     if template is not None:
         return template["account_name"], int(template["account_id"]), parsed
-    account_label = parsed[0]["account"] if parsed else fmt.title()
+    account_label = BUILT_IN_FORMAT_LABELS[fmt]
     return account_label, None, parsed
 
 
@@ -3265,14 +3271,67 @@ def compute_import_fingerprint(row: Dict[str, Any], occurrence_index: int) -> st
     return hashlib.sha1(key.encode("utf-8")).hexdigest()
 
 
+def _import_content_key(tx_date: Any, amount: Any, description: Any) -> tuple:
+    """What makes a transaction itself, whatever its export called the account:
+    the day, the signed amount, and the description."""
+    return (
+        _as_date(tx_date).isoformat(),
+        round(float(amount), 2),
+        _import_squash(description).upper(),
+    )
+
+
+def _account_content_counts(user_id: int, first: date, last: date) -> Dict[int, Dict[tuple, int]]:
+    """How many times each transaction dated within [first, last] is already
+    held by each account: account id -> content key -> count."""
+    rows = fetch_all(
+        "SELECT account_id, tx_date, amount, description FROM imported_transactions "
+        "WHERE user_id = ? AND account_id IS NOT NULL AND tx_date >= ? AND tx_date <= ?",
+        [user_id, first, last],
+    )
+    counts: Dict[int, Dict[tuple, int]] = {}
+    for account_id, tx_date, amount, description in rows:
+        held = counts.setdefault(int(account_id), {})
+        key = _import_content_key(tx_date, amount, description)
+        held[key] = held.get(key, 0) + 1
+    return counts
+
+
+# Shared transactions an export needs with an account before it is taken to be
+# that account's (fewer only when the export itself is shorter than this).
+IMPORT_INFER_MIN_SHARED = 2
+
+
+def infer_import_account_id(
+    rows: List[Dict[str, Any]], held: Dict[int, Dict[tuple, int]], known_ids: set
+) -> Optional[int]:
+    """Which account an export belongs to, judged by the transactions it shares
+    with what that account already holds. For an export whose label matches
+    nothing: overlapping history is better evidence than any wording.
+
+    Deliberately timid, like the partial name match. It answers only when exactly
+    one account shares anything, and a lone shared row out of several is treated
+    as the coincidence it may well be — the same subscription price on the same
+    day on two cards. Otherwise the rows are left for the user to place."""
+    wanted = {_import_content_key(r["tx_date"], r["amount"], r["description"]) for r in rows}
+    shared = {
+        account_id: len(wanted & set(keys))
+        for account_id, keys in held.items()
+        if account_id in known_ids
+    }
+    candidates = [account_id for account_id, count in shared.items() if count]
+    if len(candidates) != 1:
+        return None
+    enough = min(IMPORT_INFER_MIN_SHARED, len(wanted))
+    return candidates[0] if shared[candidates[0]] >= enough else None
+
+
 def _assign_import_fingerprints(rows: List[Dict[str, Any]]) -> None:
     seen: Dict[tuple, int] = {}
     for row in rows:
         base_key = (
             row["account"],
-            row["tx_date"].isoformat(),
-            round(float(row["amount"]), 2),
-            _import_squash(row["description"]).upper(),
+            *_import_content_key(row["tx_date"], row["amount"], row["description"]),
         )
         occurrence = seen.get(base_key, 0)
         seen[base_key] = occurrence + 1
@@ -3288,8 +3347,13 @@ def _assign_import_fingerprints(rows: List[Dict[str, Any]]) -> None:
 def upsert_imported_transactions(
     user_id: int, rows: List[Dict[str, Any]], source_file: str
 ) -> Dict[str, int]:
-    """Insert only rows whose fingerprint is not already present for this user.
-    Idempotent: re-uploading overlapping exports adds nothing new."""
+    """Insert only the rows that are not already imported for this user.
+    Idempotent: re-uploading overlapping exports adds nothing new.
+
+    A row is already imported when its fingerprint is stored, or when its account
+    already holds that transaction. The fingerprint hashes the export's label, so
+    on its own it would re-add an account's whole history the day that label is
+    worded differently; the account is what the transaction actually belongs to."""
     if not rows:
         return {"inserted": 0, "skipped": 0, "transfers": 0}
 
@@ -3297,14 +3361,37 @@ def upsert_imported_transactions(
     fingerprints = [row["fingerprint"] for row in rows]
     fingerprints += [row["legacy_fingerprint"] for row in rows if row.get("legacy_fingerprint")]
 
-    # Anchor each row to an account by id at insert time. Prefer an account_id the
-    # parser already resolved (custom templates); otherwise resolve the export's
-    # label — a saved binding, the account's name, or an unambiguous partial match.
-    # Resolved once per label, since a file carries only one or two of them.
     accounts = load_accounts(user_id)
     links = load_import_account_links(user_id)
     id_to_name = {int(account["id"]): str(account["name"]) for account in accounts}
+    dates = [_as_date(row["tx_date"]) for row in rows]
+    held = _account_content_counts(user_id, min(dates), max(dates))
+
+    # Settle which account each row belongs to before deciding what is new. Prefer
+    # an account_id the parser already resolved (custom templates); otherwise
+    # resolve the export's label — a saved binding, the account's name, or an
+    # unambiguous partial match — and failing all of those, the account whose
+    # history the export shares. That last answer is saved as a binding, so the
+    # next export needs no overlap to be placed. Resolved once per label, since a
+    # file carries only one or two of them.
     resolved_labels: Dict[str, Optional[int]] = {}
+    targets: List[Optional[int]] = []
+    for row in rows:
+        account_id = row.get("account_id")
+        if account_id is None:
+            label = str(row["account"])
+            if label not in resolved_labels:
+                found = resolve_import_account_id(user_id, label, accounts=accounts, links=links)
+                if found is None:
+                    unplaced = [
+                        r for r in rows if r.get("account_id") is None and str(r["account"]) == label
+                    ]
+                    found = infer_import_account_id(unplaced, held, set(id_to_name))
+                    if found is not None:
+                        save_import_account_link(user_id, label, found)
+                resolved_labels[label] = found
+            account_id = resolved_labels[label]
+        targets.append(account_id)
 
     inserted = 0
     transfers = 0
@@ -3318,21 +3405,23 @@ def upsert_imported_transactions(
         already_present = {found[0] for found in existing}
 
         seen_in_batch: set = set()
-        for row in rows:
+        seen_on_account: Dict[tuple, int] = {}
+        for row, account_id in zip(rows, targets):
+            # Counted rather than merely looked up: two identical purchases on one
+            # day are two charges, so the nth copy in the file is already held only
+            # if the account holds at least n of them.
+            already_held = False
+            if account_id is not None:
+                content = _import_content_key(row["tx_date"], row["amount"], row["description"])
+                nth = seen_on_account.get((account_id, content), 0)
+                seen_on_account[(account_id, content)] = nth + 1
+                already_held = nth < held.get(account_id, {}).get(content, 0)
             fingerprint = row["fingerprint"]
-            if fingerprint in already_present or fingerprint in seen_in_batch:
+            if already_held or fingerprint in already_present or fingerprint in seen_in_batch:
                 continue
             if row.get("legacy_fingerprint") in already_present:
                 continue
             seen_in_batch.add(fingerprint)
-            account_id = row.get("account_id")
-            if account_id is None:
-                label = str(row["account"])
-                if label not in resolved_labels:
-                    resolved_labels[label] = resolve_import_account_id(
-                        user_id, label, accounts=accounts, links=links
-                    )
-                account_id = resolved_labels[label]
             # Store the account's own name rather than the export's label, so the
             # ledger reads in the user's terms and a later rename stays coherent.
             account_label = id_to_name.get(account_id, row["account"])
