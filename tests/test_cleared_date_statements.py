@@ -1,5 +1,5 @@
-"""Apple bills a statement by when a charge *clears*, not when it was made, and
-the two routinely straddle a month end. Filing a charge under the transaction date
+"""Some card issuers bill a statement by when a charge *clears*, not when it was
+made, and the two routinely straddle a month end. Filing a charge under the transaction date
 pushes it into the statement before the one it really belongs to, which shows up
 later as a statement the data calls underpaid even though it was settled in full.
 
@@ -14,7 +14,7 @@ from datetime import date
 from conftest import add_imported
 
 
-def apple_row(txn_date, clearing_date, amount="20.00", row_type="Purchase", merchant="Acme Store"):
+def cleared_row(txn_date, clearing_date, amount="20.00", row_type="Purchase", merchant="Acme Store"):
     return {
         "Transaction Date": txn_date,
         "Clearing Date": clearing_date,
@@ -29,7 +29,7 @@ def apple_row(txn_date, clearing_date, amount="20.00", row_type="Purchase", merc
 def test_charge_is_filed_on_the_date_it_cleared(db):
     """A month-end purchase that clears in the next month belongs to the next
     statement — the whole point of the clearing date."""
-    parsed = db._parse_apple_row(apple_row("07/31/2026", "08/02/2026"))
+    parsed = db._parse_cleared_card_row(cleared_row("07/31/2026", "08/02/2026"))
 
     assert parsed["tx_date"] == date(2026, 8, 2)
 
@@ -37,7 +37,7 @@ def test_charge_is_filed_on_the_date_it_cleared(db):
 def test_pending_charge_falls_back_to_the_transaction_date(db):
     """A charge that has not cleared yet has no clearing date; it still has to
     land somewhere rather than blowing up the import."""
-    parsed = db._parse_apple_row(apple_row("09/14/2026", ""))
+    parsed = db._parse_cleared_card_row(cleared_row("09/14/2026", ""))
 
     assert parsed["tx_date"] == date(2026, 9, 14)
 
@@ -45,14 +45,14 @@ def test_pending_charge_falls_back_to_the_transaction_date(db):
 def test_adjustment_that_increases_the_balance_is_not_a_payment(db):
     """A 'Debit'/'Other' adjustment that adds to what is owed is a charge. Calling
     it a transfer would let it count against a statement as a negative payment."""
-    parsed = db._parse_apple_row(apple_row("08/19/2026", "08/19/2026", "0.16", "Other"))
+    parsed = db._parse_cleared_card_row(cleared_row("08/19/2026", "08/19/2026", "0.16", "Other"))
 
     assert parsed["amount"] == -0.16, "adds to the balance, so it is signed like a charge"
     assert parsed["is_transfer"] is False
 
 
 def test_adjustment_that_reduces_the_balance_still_counts_as_a_payment(db):
-    parsed = db._parse_apple_row(apple_row("08/19/2026", "08/19/2026", "-0.16", "Other"))
+    parsed = db._parse_cleared_card_row(cleared_row("08/19/2026", "08/19/2026", "-0.16", "Other"))
 
     assert parsed["amount"] == 0.16
     assert parsed["is_transfer"] is True
