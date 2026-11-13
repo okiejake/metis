@@ -17,6 +17,7 @@ from routes.recurring import router as recurring_router
 from routes.review import router as review_router
 from routes.splits import router as splits_router
 from routes.statements import router as statements_router
+from routes.window import router as window_router
 from services import (
     SESSION_COOKIE,
     any_user_has_password,
@@ -95,6 +96,7 @@ app.include_router(accounts_router)
 app.include_router(splits_router)
 app.include_router(statements_router)
 app.include_router(review_router)
+app.include_router(window_router)
 
 
 if __name__ == "__main__":
