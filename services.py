@@ -16,6 +16,7 @@ from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
 
 from base_path import configured_base_path
+from merchants import legacy_merchant_key, merchant_key
 
 DB_PATH = os.getenv("FINANCE_DB_PATH", "finance.duckdb")
 VALID_KINDS = {"income", "expense"}
@@ -3953,8 +3954,6 @@ def load_expected_item(user_id: int, source_type: str, source_id: int) -> Option
 # dismiss. Dismissed/added keys are remembered so they don't reappear.
 # ---------------------------------------------------------------------------
 
-_SUGGEST_STATE_RE = re.compile(r"\b[A-Z]{2}\b")
-
 # Map a median day-gap between occurrences to a human cadence and the Metis
 # frequency parameters that reproduce it. (lo, hi) is the inclusive gap window.
 _SUGGEST_CADENCES = [
@@ -3967,18 +3966,6 @@ _SUGGEST_CADENCES = [
     ("Every 6 months", (136, 285), "every_x_months", 6),
     ("Yearly", (286, 430), "yearly", 12),
 ]
-
-
-def _suggest_norm_key(text: Any) -> str:
-    """Collapse a merchant/description to a stable grouping key (drop store #s,
-    trailing city/state, ' * ' / '_' suffixes, and long digit runs)."""
-    value = str(text or "").upper()
-    value = re.sub(r"#\s*\d+", "", value)          # store numbers
-    value = re.sub(r"\b\d{3,}\b", "", value)        # long digit runs / phone tails
-    value = re.sub(r"[*_].*$", "", value)           # SQ * / TST* / FOO_BAR suffixes
-    value = _SUGGEST_STATE_RE.sub("", value)
-    value = re.sub(r"\s+", " ", value).strip()
-    return value or str(text or "").upper().strip()
 
 
 def _suggest_clean_name(text: Any) -> str:
@@ -4098,8 +4085,9 @@ def detect_recurring_suggestions(
         if isinstance(tx_date, datetime):
             tx_date = tx_date.date()
         row["tx_date"] = tx_date
-        key = _suggest_norm_key(row.get("merchant") or row.get("description"))
-        if not key or key in dismissed:
+        text = row.get("merchant") or row.get("description")
+        key = merchant_key(text)
+        if not key or key in dismissed or legacy_merchant_key(text) in dismissed:
             continue
         groups.setdefault(key, []).append(row)
 
