@@ -183,13 +183,20 @@ _ACH_PAYEE = (
 )
 
 
-def derive_merchant(description: str) -> str:
-    """The payee named in a bank transfer description, else the description."""
+CHECKING_MERCHANT_WORDS = 4
+
+
+def derive_merchant(description: str, on_card: bool = False) -> str:
+    """The merchant for a row whose template reads no merchant column: the payee
+    named in a bank transfer description, else, on checking, the description's
+    first few words (bank descriptions trail with references and places), and on
+    a card the whole description. Matches how rows were named before templates,
+    so Review's merchant decisions keep applying to new imports."""
     for pattern in _ACH_PAYEE:
         match = pattern.search(description)
         if match:
             return match.group(1).strip()
-    return description
+    return description if on_card else " ".join(description.split()[:CHECKING_MERCHANT_WORDS])
 
 
 def parse_amount(value: Any) -> float:
@@ -260,7 +267,7 @@ def parse_row(row: Mapping[str, str], t: Mapping[str, Any], account: Mapping[str
         "account_id": int(account["id"]),
         "tx_date": parse_date(date_text, t.get("date_format")),
         "description": description,
-        "merchant": merchant or derive_merchant(description),
+        "merchant": merchant or derive_merchant(description, on_card),
         "amount": amount,
         "flow": flow,
         "is_transfer": is_transfer,

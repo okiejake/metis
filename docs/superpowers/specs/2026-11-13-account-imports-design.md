@@ -78,7 +78,9 @@ account the user created.
   or THANK YOU is a transfer; other money in is a refund. On checking, money out
   matching a card's payment pattern is a transfer, as today.
 - **Merchant without a merchant column:** the payee from an `ACH … TYPE:`
-  description, else the description.
+  description; otherwise the first four words on checking and the whole
+  description on a card. That reproduces how every existing row was named, so
+  Review's merchant decisions keep applying to new imports.
 - **Templates section on Accounts:** name, created date, accounts using it as
   default, Delete. A "New template" button there runs the upload and mapping
   steps without an account.

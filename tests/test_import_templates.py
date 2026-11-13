@@ -130,6 +130,13 @@ def test_the_merchant_column_wins_otherwise_the_ach_payee_or_the_description():
         "Acme", "ACME UTILITIES", "ACME GROCER"]
 
 
+def test_without_a_merchant_column_checking_keeps_four_words_and_a_card_the_description():
+    text = "Date,Description,Amount\n2026-07-01,POS PURCHASE ACME STORE 1234 SPRINGFIELD,-1\n"
+
+    assert parse(text, template())[0]["merchant"] == "POS PURCHASE ACME STORE"
+    assert parse(text, template(), CARD)[0]["merchant"] == "POS PURCHASE ACME STORE 1234 SPRINGFIELD"
+
+
 def test_read_csv_handles_a_byte_order_mark_and_older_encodings():
     header, rows = it.read_csv("﻿Date,Description\n2026-07-01,Café\n".encode("utf-8"))
     assert header == ["Date", "Description"]
