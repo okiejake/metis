@@ -31,7 +31,7 @@
         document.documentElement.setAttribute('data-theme', preferredTheme);
       })();
     </script>
-    <link rel="stylesheet" href="/static/styles.css?v=20260924a" />
+    <link rel="stylesheet" href="{{ base_path() }}/static/styles.css?v=20260924a" />
   </head>
   <body>
     <div class="app-glow app-glow-one" aria-hidden="true"></div>
@@ -49,12 +49,12 @@
             <h1>metis</h1>
           </div>
           <nav class="site-nav" aria-label="Primary">
-            <a href="/dashboard" class="{{ 'active' if active_path.startswith('/dashboard') else '' }}">Dashboard</a>
-            <a href="/ledger" class="{{ 'active' if active_path.startswith('/ledger') else '' }}">Ledger</a>
-            <a href="/statements" class="{{ 'active' if active_path.startswith('/statements') else '' }}">Statements</a>
-            <a href="/budget" class="{{ 'active' if active_path.startswith('/budget') or active_path.startswith('/expected') or active_path.startswith('/recurring') or active_path.startswith('/categories') else '' }}">Budget</a>
-            <a href="/import" class="{{ 'active' if active_path.startswith('/import') else '' }}">Import</a>
-            <a href="/accounts" class="{{ 'active' if active_path.startswith('/accounts') else '' }}">Accounts</a>
+            <a href="{{ base_path() }}/dashboard" class="{{ 'active' if active_path.startswith('/dashboard') else '' }}">Dashboard</a>
+            <a href="{{ base_path() }}/ledger" class="{{ 'active' if active_path.startswith('/ledger') else '' }}">Ledger</a>
+            <a href="{{ base_path() }}/statements" class="{{ 'active' if active_path.startswith('/statements') else '' }}">Statements</a>
+            <a href="{{ base_path() }}/budget" class="{{ 'active' if active_path.startswith('/budget') or active_path.startswith('/expected') or active_path.startswith('/recurring') or active_path.startswith('/categories') else '' }}">Budget</a>
+            <a href="{{ base_path() }}/import" class="{{ 'active' if active_path.startswith('/import') else '' }}">Import</a>
+            <a href="{{ base_path() }}/accounts" class="{{ 'active' if active_path.startswith('/accounts') else '' }}">Accounts</a>
           </nav>
         </div>
 
@@ -80,11 +80,11 @@
                 </select>
               </label>
 
-              <a href="/settings?section=user-management" class="user-menu-action">
+              <a href="{{ base_path() }}/settings?section=user-management" class="user-menu-action">
                 <i data-lucide="settings-2" class="menu-icon" aria-hidden="true"></i>
                 Settings
               </a>
-              <form method="post" action="/logout">
+              <form method="post" action="{{ base_path() }}/logout">
                 <button type="submit" class="user-menu-action buttonless">
                   <i data-lucide="log-out" class="menu-icon" aria-hidden="true"></i>
                   Sign out
@@ -96,7 +96,7 @@
       </div>
 
       {% if show_forecast_window_form %}
-      <form method="get" action="{{ window_form_action }}" class="header-window-form" id="header-window-form">
+      <form method="get" action="{{ base_path() }}{{ window_form_action }}" class="header-window-form" id="header-window-form">
         <input type="hidden" name="start" value="{{ start }}" id="header-window-start" />
         <input type="hidden" name="end" value="{{ end }}" id="header-window-end" />
 

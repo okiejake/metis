@@ -18,7 +18,7 @@
     <p>Update details and keep frequency fields synchronized with the selected start date.</p>
   </div>
   {% set item_day = item.day_of_month if item.day_of_month else item.start_date.day %}
-  <form method="post" action="/recurring/{{ item.id }}/edit" id="recurring-edit-form" class="grid-form">
+  <form method="post" action="{{ base_path() }}/recurring/{{ item.id }}/edit" id="recurring-edit-form" class="grid-form">
     <label>
       Name
       <input type="text" name="name" value="{{ item.name }}" required />
@@ -114,7 +114,7 @@
 
     <div class="full-row actions">
       <button type="submit" class="button-link">Save Changes</button>
-      <a class="button-link" href="/budget">Cancel</a>
+      <a class="button-link" href="{{ base_path() }}/budget">Cancel</a>
     </div>
   </form>
 </section>

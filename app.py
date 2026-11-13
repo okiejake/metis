@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from base_path import BasePathMiddleware, configured_base_path
 from routes.accounts import router as accounts_router
 from routes.categories import router as categories_router
 from routes.core import router as core_router
@@ -28,6 +29,7 @@ from web import templates
 app = FastAPI(title="Metis Finance Tracker")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates.env.filters["currency"] = format_currency
+templates.env.globals["base_path"] = configured_base_path
 
 
 @app.on_event("startup")
@@ -67,6 +69,11 @@ async def require_session(request: Request, call_next):
     request.state.current_user = user
     request.state.current_user_slug = user["slug"]
     return await call_next(request)
+
+
+# Added last so it runs first: every other part of the app, including the
+# session check above, sees plain paths.
+app.add_middleware(BasePathMiddleware)
 
 
 app.include_router(auth_router)

@@ -7,3 +7,16 @@ __pycache__/
 .env
 .env.*
 data/
+# Only the app goes in the image: no local tooling, notes or deploy settings.
+.DS_Store
+.claude/
+.mcp.json
+.vscode/
+.pytest_cache/
+.github/
+_incoming/
+deploy/
+docs/
+tests/
+*.command
+*.md

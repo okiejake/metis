@@ -57,7 +57,7 @@
     </button>
   </div>
 
-  <form method="post" action="/categories" class="inline-form category-add-form hidden" id="category-add">
+  <form method="post" action="{{ base_path() }}/categories" class="inline-form category-add-form hidden" id="category-add">
     <label>
       Name
       <input type="text" name="name" placeholder="e.g. Groceries" required />
@@ -137,7 +137,7 @@
 
         <div class="budget-bar-actions">
           {% if cat.id %}
-          <form method="post" action="/categories/{{ cat.id }}/budget" class="budget-set-form">
+          <form method="post" action="{{ base_path() }}/categories/{{ cat.id }}/budget" class="budget-set-form">
             <label>
               <span class="budget-set-label">Monthly budget</span>
               <input type="number" name="budget_amount" step="0.01" min="0"
@@ -146,7 +146,7 @@
             </label>
             <button type="submit" class="button-link">Save</button>
           </form>
-          <a class="button-link" href="/categories/{{ cat.id }}/edit">Edit category</a>
+          <a class="button-link" href="{{ base_path() }}/categories/{{ cat.id }}/edit">Edit category</a>
           {% endif %}
         </div>
       </div>
@@ -193,7 +193,7 @@
         {% if s.account_name %}· from <strong>{{ s.account_name }}</strong>{% endif %}
       </p>
 
-      <form method="post" action="/recurring" class="suggestion-form">
+      <form method="post" action="{{ base_path() }}/recurring" class="suggestion-form">
         <input type="hidden" name="kind" value="{{ s.kind }}" />
         <input type="hidden" name="suggestion_key" value="{{ s.key }}" />
         <input type="hidden" name="start_date" value="{{ s.start_date }}" />
@@ -247,7 +247,7 @@
         </div>
       </form>
 
-      <form method="post" action="/expected/suggestions/dismiss" class="suggestion-dismiss-form">
+      <form method="post" action="{{ base_path() }}/expected/suggestions/dismiss" class="suggestion-dismiss-form">
         <input type="hidden" name="suggestion_key" value="{{ s.key }}" />
         <button type="submit" class="button-link danger">Dismiss</button>
       </form>
@@ -258,7 +258,7 @@
   <p class="empty-state">No new suggestions right now — you've reviewed everything detected in your imports.</p>
   {% endif %}
   {% if dismissed_count %}
-  <form method="post" action="/expected/suggestions/reset" class="suggestions-reset-form">
+  <form method="post" action="{{ base_path() }}/expected/suggestions/reset" class="suggestions-reset-form">
     <button type="submit" class="button-link">Restore {{ dismissed_count }} dismissed suggestion{{ '' if dismissed_count == 1 else 's' }}</button>
   </form>
   {% endif %}
@@ -276,7 +276,7 @@
     <button type="button" class="button-link" data-mode="one_time" role="tab">One-time</button>
   </div>
 
-  <form method="post" action="/recurring" id="recurring-form" class="grid-form expected-add-form" data-mode-form="recurring">
+  <form method="post" action="{{ base_path() }}/recurring" id="recurring-form" class="grid-form expected-add-form" data-mode-form="recurring">
     <label>
       Name
       <input type="text" name="name" placeholder="Paycheck / Rent / Utilities" />
@@ -351,7 +351,7 @@
     </div>
   </form>
 
-  <form method="post" action="/expected/one-time" id="one-time-form" class="grid-form expected-add-form hidden" data-mode-form="one_time">
+  <form method="post" action="{{ base_path() }}/expected/one-time" id="one-time-form" class="grid-form expected-add-form hidden" data-mode-form="one_time">
     <label>
       Name
       <input type="text" name="name" placeholder="Vet bill / Car repair / Bonus" />
@@ -446,17 +446,17 @@
           </td>
           <td class="row-action-cell">
             <div class="row-action-inline">
-              <a href="/expected/recurring/{{ item.id }}/reconcile" class="button-link">Reconcile</a>
+              <a href="{{ base_path() }}/expected/recurring/{{ item.id }}/reconcile" class="button-link">Reconcile</a>
               <details class="row-action-menu">
                 <summary class="row-action-trigger" aria-label="Open item actions">
                   <i data-lucide="settings-2" class="menu-icon" aria-hidden="true"></i>
                 </summary>
                 <div class="row-action-dropdown">
-                  <a href="/recurring/{{ item.id }}/edit" class="row-action-item">Edit</a>
-                  <form method="post" action="/recurring/{{ item.id }}/toggle" class="row-action-item-form">
+                  <a href="{{ base_path() }}/recurring/{{ item.id }}/edit" class="row-action-item">Edit</a>
+                  <form method="post" action="{{ base_path() }}/recurring/{{ item.id }}/toggle" class="row-action-item-form">
                     <button type="submit" class="row-action-item">{{ 'Pause' if item.active else 'Resume' }}</button>
                   </form>
-                  <form method="post" action="/recurring/{{ item.id }}/delete" class="row-action-item-form" onsubmit="return confirm('Delete this recurring item?')">
+                  <form method="post" action="{{ base_path() }}/recurring/{{ item.id }}/delete" class="row-action-item-form" onsubmit="return confirm('Delete this recurring item?')">
                     <button type="submit" class="row-action-item danger">Delete</button>
                   </form>
                 </div>
@@ -518,8 +518,8 @@
           </td>
           <td class="row-action-cell">
             <div class="row-action-inline">
-              <a href="/expected/one_time/{{ item.id }}/reconcile" class="button-link">Reconcile</a>
-              <form method="post" action="/expected/one-time/{{ item.id }}/delete" class="row-action-item-form" onsubmit="return confirm('Delete this one-time expected item?')">
+              <a href="{{ base_path() }}/expected/one_time/{{ item.id }}/reconcile" class="button-link">Reconcile</a>
+              <form method="post" action="{{ base_path() }}/expected/one-time/{{ item.id }}/delete" class="row-action-item-form" onsubmit="return confirm('Delete this one-time expected item?')">
                 <button type="submit" class="button-link danger">Delete</button>
               </form>
             </div>

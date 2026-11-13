@@ -9,7 +9,7 @@
 {%- endmacro %}
 
 {% macro statement_url(statement) -%}
-/statements/{{ statement.account_id }}/{{ statement.close_date.isoformat() }}
+{{ base_path() }}/statements/{{ statement.account_id }}/{{ statement.close_date.isoformat() }}
 {%- endmacro %}
 
 {# The statement read top to bottom, the way an issuer prints one: what carried

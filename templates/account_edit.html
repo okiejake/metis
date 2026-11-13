@@ -2,7 +2,7 @@
 {% block content %}
 <section class="page-intro">
   <div>
-    <p class="page-kicker"><a href="/accounts" class="button-link">← Accounts</a></p>
+    <p class="page-kicker"><a href="{{ base_path() }}/accounts" class="button-link">← Accounts</a></p>
     <h2>Edit {{ account.name }}</h2>
     <p>Update the account type and, for credit cards, the billing-cycle days.</p>
   </div>
@@ -13,7 +13,7 @@
     <h2>Edit Account</h2>
     <p>Credit cards defer assigned charges to their payment due date.</p>
   </div>
-  <form method="post" action="/accounts/{{ account.id }}/edit" id="account-form" class="grid-form">
+  <form method="post" action="{{ base_path() }}/accounts/{{ account.id }}/edit" id="account-form" class="grid-form">
     <label>
       Name
       <input type="text" name="name" value="{{ account.name }}" required />
@@ -53,7 +53,7 @@
     </div>
     <div class="full-row">
       <button type="submit" class="button-link">Save Changes</button>
-      <a class="button-link" href="/accounts">Cancel</a>
+      <a class="button-link" href="{{ base_path() }}/accounts">Cancel</a>
     </div>
   </form>
 </section>

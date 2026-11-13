@@ -16,7 +16,7 @@
   <aside class="settings-sidebar">
     <h2>Settings</h2>
     <nav class="settings-nav">
-      <a href="/settings?section=user-management" class="{{ 'active' if section == 'user-management' else '' }}">User Management</a>
+      <a href="{{ base_path() }}/settings?section=user-management" class="{{ 'active' if section == 'user-management' else '' }}">User Management</a>
     </nav>
   </aside>
 
@@ -26,7 +26,7 @@
         <h2>Personal</h2>
         <p>Keep your identity and contact information current.</p>
       </div>
-      <form method="post" action="/settings/personal" class="grid-form compact">
+      <form method="post" action="{{ base_path() }}/settings/personal" class="grid-form compact">
         <label>
           Name
           <input type="text" name="display_name" value="{{ personal_user.display_name }}" required />
@@ -40,7 +40,7 @@
         </div>
       </form>
 
-      <form method="post" action="/settings/personal/password" class="grid-form compact">
+      <form method="post" action="{{ base_path() }}/settings/personal/password" class="grid-form compact">
         <label>
           Current password
           <input type="password" name="current_password" autocomplete="current-password" required />
@@ -82,7 +82,7 @@
               <td><code>{{ user_row.slug }}</code></td>
               <td colspan="3">
                 <div class="settings-user-row-actions">
-                  <form method="post" action="/settings/users/{{ user_row.id }}/edit" class="settings-user-row-form">
+                  <form method="post" action="{{ base_path() }}/settings/users/{{ user_row.id }}/edit" class="settings-user-row-form">
                     <input type="text" name="display_name" value="{{ user_row.display_name }}" required />
                     <input type="email" name="email" value="{{ user_row.email }}" placeholder="name@example.com" />
                     <button type="submit">Save</button>
@@ -92,7 +92,7 @@
                     <span class="table-pill neutral" title="This profile has no password, so nobody can sign in as it">no password</span>
                     {% endif %}
                   </form>
-                  <form method="post" action="/settings/users/{{ user_row.id }}/password" class="settings-user-row-form">
+                  <form method="post" action="{{ base_path() }}/settings/users/{{ user_row.id }}/password" class="settings-user-row-form">
                     <input type="password" name="password" placeholder="{{ 'Set a password' if not user_row.has_password else 'New password' }}"
                            autocomplete="new-password" minlength="10" required />
                     <input type="password" name="confirm" placeholder="Confirm" autocomplete="new-password" minlength="10" required />
@@ -100,7 +100,7 @@
                   </form>
                   <form
                     method="post"
-                    action="/settings/users/{{ user_row.id }}/delete"
+                    action="{{ base_path() }}/settings/users/{{ user_row.id }}/delete"
                     class="settings-user-delete-form js-user-delete-form"
                     data-user-name="{{ user_row.display_name }}"
                   >
@@ -117,7 +117,7 @@
       {% endif %}
 
       <h3>Add New User</h3>
-      <form method="post" action="/settings/users" class="inline-form">
+      <form method="post" action="{{ base_path() }}/settings/users" class="inline-form">
         <label>
           Name
           <input type="text" name="display_name" placeholder="New user name" required />

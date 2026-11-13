@@ -23,14 +23,14 @@
 
 {% if not cards %}
 <section class="panel">
-  <p class="empty-state">No credit cards yet. <a href="/accounts">Add one on the Accounts page</a> with its statement and due days.</p>
+  <p class="empty-state">No credit cards yet. <a href="{{ base_path() }}/accounts">Add one on the Accounts page</a> with its statement and due days.</p>
 </section>
 {% else %}
 
 {% if cards|length > 1 %}
 <nav class="import-filter-tabs" aria-label="Choose a card">
   {% for other in cards %}
-  <a href="/statements/{{ other.id }}" class="{{ 'active' if other.id == card.id else '' }}">{{ other.name }}</a>
+  <a href="{{ base_path() }}/statements/{{ other.id }}" class="{{ 'active' if other.id == card.id else '' }}">{{ other.name }}</a>
   {% endfor %}
 </nav>
 {% endif %}
@@ -38,7 +38,7 @@
 {% if not configured %}
 <section class="panel warning">
   <strong>{{ card.name }} has no billing cycle yet.</strong>
-  <a href="/accounts/{{ card.id }}/edit">Set its statement and due days</a> to see its statements.
+  <a href="{{ base_path() }}/accounts/{{ card.id }}/edit">Set its statement and due days</a> to see its statements.
 </section>
 {% else %}
 
@@ -71,7 +71,7 @@
     {% elif open_statement and open_statement.imported_through %}
     <p class="amount-value">{{ open_statement.imported_through }}</p>
     {% else %}<p class="card-note">Nothing imported yet</p>{% endif %}
-    <p class="card-note"><a href="/import">Import more</a></p>
+    <p class="card-note"><a href="{{ base_path() }}/import">Import more</a></p>
   </article>
 </section>
 

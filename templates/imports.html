@@ -16,7 +16,7 @@
     <h2>Upload a CSV</h2>
     <p>Accepted: the built-in checking and card exports, and any template you add below. The format is detected automatically.</p>
   </div>
-  <form method="post" action="/import" enctype="multipart/form-data" class="import-upload-form">
+  <form method="post" action="{{ base_path() }}/import" enctype="multipart/form-data" class="import-upload-form">
     <label class="inline-field">
       CSV file
       <input type="file" name="file" accept=".csv,text/csv" required />
@@ -61,7 +61,7 @@
           <td class="card-note">{{ tmpl.signature|join(', ') }}</td>
           <td class="card-note">{{ tmpl.date_field }} · {{ tmpl.amount_field }}{% if tmpl.amount_sign == 'inverted' %} (inverted){% endif %} · {{ tmpl.description_field }}</td>
           <td>
-            <form method="post" action="/import/templates/{{ tmpl.id }}/delete" onsubmit="return confirm('Delete this import template?')">
+            <form method="post" action="{{ base_path() }}/import/templates/{{ tmpl.id }}/delete" onsubmit="return confirm('Delete this import template?')">
               <button type="submit" class="danger">Delete</button>
             </form>
           </td>
@@ -74,7 +74,7 @@
   <p class="empty-state">No custom templates yet. Add one below for any CSV the 3 built-ins don't recognize.</p>
   {% endif %}
 
-  <form method="post" action="/import/templates" class="grid-form" style="margin-top: 1rem;">
+  <form method="post" action="{{ base_path() }}/import/templates" class="grid-form" style="margin-top: 1rem;">
     <label>
       Template name
       <input type="text" name="name" placeholder="e.g. Example Bank Checking" required />
@@ -154,7 +154,7 @@
           <td><span class="table-pill">{{ item.label }}</span></td>
           <td>{{ item.count }}</td>
           <td>
-            <form method="post" action="/import/map-account" class="inline-map-form">
+            <form method="post" action="{{ base_path() }}/import/map-account" class="inline-map-form">
               <input type="hidden" name="label" value="{{ item.label }}" />
               <select name="account_id" required>
                 <option value="" disabled selected>Choose account…</option>
@@ -194,7 +194,7 @@
           <td><span class="table-pill">{{ link.label }}</span></td>
           <td>{{ link.account_name }}</td>
           <td>
-            <form method="post" action="/import/links/delete" class="inline-map-form">
+            <form method="post" action="{{ base_path() }}/import/links/delete" class="inline-map-form">
               <input type="hidden" name="label" value="{{ link.label }}" />
               <button type="submit" class="button-link">Forget</button>
             </form>
@@ -240,9 +240,9 @@
 
   {% if accounts %}
   <nav class="import-filter-tabs" aria-label="Filter by account">
-    <a href="/import" class="{{ 'active' if not account_filter else '' }}">All</a>
+    <a href="{{ base_path() }}/import" class="{{ 'active' if not account_filter else '' }}">All</a>
     {% for account in accounts %}
-    <a href="/import?account={{ account|urlencode }}" class="{{ 'active' if account_filter == account else '' }}">{{ account }}</a>
+    <a href="{{ base_path() }}/import?account={{ account|urlencode }}" class="{{ 'active' if account_filter == account else '' }}">{{ account }}</a>
     {% endfor %}
   </nav>
   {% endif %}
