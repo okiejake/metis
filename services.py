@@ -204,6 +204,56 @@ def migrate_card_payment_fingerprints(conn: duckdb.DuckDBPyConnection) -> Dict[s
     return {"rekeyed": rekeyed, "removed": removed}
 
 
+# The layouts the removed built-in formats read, as templates. Checking and
+# Visa exports shared one layout. Column names are the exports' own; none names
+# an institution.
+LEGACY_TEMPLATES = (
+    {"name": "Checking and Visa export", "date_field": "Processed Date", "description_field": "Description",
+     "type_field": "Credit or Debit", "credit_value": "Credit", "amount_field": "Amount", "amount_sign": "standard"},
+    {"name": "Card export", "date_field": "Clearing Date", "date_fallback_field": "Transaction Date",
+     "description_field": "Description", "merchant_field": "Merchant", "type_field": "Type",
+     "amount_field": "Amount (USD)", "amount_sign": "inverted"},
+)
+LEGACY_TEMPLATE_FIELDS = ("name", "date_field", "date_fallback_field", "description_field", "merchant_field",
+                          "type_field", "credit_value", "amount_field", "amount_sign")
+
+
+def migrate_legacy_import_templates(conn: duckdb.DuckDBPyConnection) -> None:
+    """Once per user who imported before templates replaced the built-in formats:
+    give them those layouts as templates, and set each account's default where
+    its rows show which layout it used. Recorded in settings so a template the
+    user deletes stays deleted."""
+    users = conn.execute("SELECT DISTINCT user_id FROM imported_transactions").fetchall()
+    for (user_id,) in users:
+        flag = f"user:{user_id}:legacy_templates"
+        if conn.execute("SELECT 1 FROM settings WHERE key = ?", [flag]).fetchone():
+            continue
+        ids = {}
+        for template in LEGACY_TEMPLATES:
+            if conn.execute("SELECT 1 FROM import_templates WHERE user_id = ? AND LOWER(name) = LOWER(?)",
+                            [user_id, template["name"]]).fetchone():
+                continue
+            ids[template["name"]] = conn.execute(
+                f"INSERT INTO import_templates (user_id, {', '.join(LEGACY_TEMPLATE_FIELDS)}) "
+                f"VALUES (?, {', '.join('?' for _ in LEGACY_TEMPLATE_FIELDS)}) RETURNING id",
+                [user_id, *[template.get(field) for field in LEGACY_TEMPLATE_FIELDS]],
+            ).fetchone()[0]
+        shared, cleared = ids.get("Checking and Visa export"), ids.get("Card export")
+        for account_id, account_type in conn.execute(
+                "SELECT id, account_type FROM accounts WHERE user_id = ? AND default_template_id IS NULL",
+                [user_id]).fetchall():
+            types = {row[0] or "" for row in conn.execute(
+                "SELECT DISTINCT raw_type FROM imported_transactions WHERE user_id = ? AND account_id = ?",
+                [user_id, account_id]).fetchall()}
+            if not types:
+                continue
+            # Only the cleared-card export typed rows as anything but Credit/Debit.
+            default = cleared if account_type == "credit_card" and types - {"Credit", "Debit", ""} else shared
+            if default:
+                conn.execute("UPDATE accounts SET default_template_id = ? WHERE id = ?", [default, account_id])
+        conn.execute("INSERT INTO settings (key, value) VALUES (?, '1')", [flag])
+
+
 def migrate_categories_to_user_scoped_uniqueness(
     conn: duckdb.DuckDBPyConnection, default_user_id: int
 ) -> None:
@@ -726,6 +776,7 @@ def init_db() -> None:
         if not table_has_column(conn, "accounts", "default_template_id"):
             conn.execute("ALTER TABLE accounts ADD COLUMN default_template_id BIGINT")
         migrate_categories_to_user_scoped_uniqueness(conn, default_user_id)
+        migrate_legacy_import_templates(conn)
         migrate_card_payment_signs(conn)
         migrate_card_payment_fingerprints(conn)
         conn.execute(

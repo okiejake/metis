@@ -3,6 +3,7 @@
 #
 #   push to main       -> :main     (what a QA environment runs)
 #   release published  -> :release and :<version>  (what production runs)
+#   manual run from a branch -> :preview  (a branch tried in QA before merging)
 #
 # The image holds code only. .dockerignore keeps databases and local files out.
 name: image
@@ -42,6 +43,7 @@ jobs:
             type=raw,value=main,enable={{is_default_branch}}
             type=raw,value=release,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=semver,pattern={{version}}
+            type=raw,value=preview,enable=${{ github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' }}
 
       - uses: docker/build-push-action@v6
         with:

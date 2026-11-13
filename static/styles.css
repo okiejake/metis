@@ -2580,6 +2580,118 @@ body.amounts-hidden .amount-sensitive {
 }
 
 /* Review on a phone: one row at a time, as a card, with Skip. */
+/* Choice cards: one choice in a set, a radio underneath (_parts.choice_card). */
+.choice-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 0.6rem;
+  margin-bottom: 0.9rem;
+}
+
+.choice-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.85rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-solid);
+  cursor: pointer;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.choice-card input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.choice-card:hover {
+  border-color: var(--line-strong);
+}
+
+.choice-card:has(input:checked) {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 35%, transparent);
+  background: var(--primary-soft);
+}
+
+.choice-card:has(input:focus-visible) {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.choice-card.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.choice-card-title {
+  font-weight: 700;
+}
+
+.choice-card-note {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+/* A page of steps (add account, map columns). */
+.flow {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.flow-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+
+/* The import pop-up (_parts.import_dialog). */
+.import-dialog {
+  width: min(28rem, calc(100vw - 2rem));
+  padding: 1.2rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: var(--surface-solid);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+}
+
+.import-dialog::backdrop {
+  background: color-mix(in srgb, var(--gunmetal) 45%, transparent);
+}
+
+.import-dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.import-dialog-form h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.import-dialog-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.preview-error {
+  color: var(--over);
+  font-weight: 600;
+}
+
+.sample-table td,
+.sample-table th {
+  white-space: nowrap;
+}
+
 @media (max-width: 640px) {
   .review-list .review-row:not(.is-current) {
     display: none;

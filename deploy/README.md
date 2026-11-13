@@ -84,6 +84,11 @@ qa follows `main`, so a merged change is ready to try within minutes of GitHub
 finishing its build. Changes made in qa never reach prod's data. Whichever
 environment is running comes back after the server restarts.
 
+To try a branch before it is merged, run the `image` workflow on that branch
+(Actions → image → Run workflow). It publishes `:preview`. Set `QA_TAG=preview`
+in `.env` and qa follows it on the next update; set it back to `main` after the
+branch is merged.
+
 ## Settings
 
 All in `.env`, which stays on the server. See `.env.example` for each one.
