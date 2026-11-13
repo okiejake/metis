@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% import "_parts.html" as parts %}
+{% block content %}
+{% set v = values %}
+<section class="page-intro">
+  <div>
+    <p class="page-kicker"><a href="{{ base_path() }}/accounts" class="button-link">← Accounts</a></p>
+    <h2>Map columns{% if account %} for {{ account.name }}{% endif %}</h2>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Sample</h2></div>
+  <div class="table-wrap">
+    <table class="sample-table">
+      <thead><tr>{% for column in header %}<th>{{ column }}</th>{% endfor %}</tr></thead>
+      <tbody>
+        {% for row in sample %}
+        <tr>{% for column in header %}<td>{{ row.get(column, '') }}</td>{% endfor %}</tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<form method="post" action="{{ base_path() }}/templates" id="template-form"
+      data-preview-url="{{ base_path() }}/templates/preview">
+  <input type="hidden" name="upload_id" value="{{ upload_id }}" />
+  {% if account %}<input type="hidden" name="account_id" value="{{ account.id }}" />{% endif %}
+
+  <section class="panel">
+    <div class="panel-head"><h2>Columns</h2></div>
+    <div class="grid-form">
+      <label class="full-row">
+        Template name
+        <input type="text" name="name" value="{{ v.name or '' }}" required />
+      </label>
+      <label>Date {{ parts.column_select('date_field', header, v.date_field, required=True) }}</label>
+      <label>Date if blank {{ parts.column_select('date_fallback_field', header, v.date_fallback_field, optional=True) }}</label>
+      <label>
+        Date format
+        <select name="date_format">
+          <option value="">Choose…</option>
+          {% for fmt, example in date_formats %}
+          <option value="{{ fmt }}"{{ ' selected' if fmt == v.date_format else '' }}>{{ example }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Description {{ parts.column_select('description_field', header, v.description_field, required=True) }}</label>
+      <label>Merchant {{ parts.column_select('merchant_field', header, v.merchant_field, optional=True) }}</label>
+      <label>Type {{ parts.column_select('type_field', header, v.type_field, optional=True) }}</label>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Amounts</h2></div>
+    <div class="choice-cards" role="radiogroup" aria-label="Amounts">
+      {{ parts.choice_card('amount_layout', 'signed', 'One column', '+ in, − out', checked=v.amount_layout == 'signed') }}
+      {{ parts.choice_card('amount_layout', 'split', 'In and out columns', checked=v.amount_layout == 'split') }}
+      {{ parts.choice_card('amount_layout', 'typed', 'Amount and type', 'The type says money in', checked=v.amount_layout == 'typed') }}
+    </div>
+    <div class="grid-form">
+      <label data-layout="signed typed">Amount {{ parts.column_select('amount_field', header, v.amount_field) }}</label>
+      <label data-layout="signed" class="eom-toggle">
+        <input type="checkbox" name="amount_sign" value="inverted"{{ ' checked' if v.amount_sign == 'inverted' else '' }} /> Flip signs
+      </label>
+      <label data-layout="split">Money in {{ parts.column_select('amount_in_field', header, v.amount_in_field, optional=True) }}</label>
+      <label data-layout="split">Money out {{ parts.column_select('amount_out_field', header, v.amount_out_field, optional=True) }}</label>
+      <label data-layout="typed">
+        Type value for money in
+        <input type="text" name="credit_value" value="{{ v.credit_value or '' }}" />
+      </label>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Preview</h2></div>
+    <div id="template-preview" aria-live="polite">{% include "_template_preview.html" %}</div>
+  </section>
+
+  <div class="flow-actions">
+    <button type="submit" class="button-link">{{ 'Save and import' if account else 'Save template' }}</button>
+  </div>
+</form>
+
+<script>
+  (() => {
+    const form = document.getElementById('template-form');
+    const preview = document.getElementById('template-preview');
+    function syncLayout() {
+      const layout = form.elements.amount_layout.value;
+      form.querySelectorAll('[data-layout]').forEach((field) => {
+        field.classList.toggle('hidden', !field.dataset.layout.split(' ').includes(layout));
+      });
+    }
+    let timer = null;
+    async function refresh() {
+      const response = await fetch(form.dataset.previewUrl, { method: 'POST', body: new FormData(form) });
+      if (response.ok) { preview.innerHTML = await response.text(); }
+    }
+    function changed(event) {
+      if (event.target.name === 'amount_layout') { syncLayout(); }
+      clearTimeout(timer);
+      timer = setTimeout(refresh, 250);
+    }
+    form.addEventListener('change', changed);
+    form.addEventListener('input', changed);
+    syncLayout();
+  })();
+</script>
+{% endblock %}

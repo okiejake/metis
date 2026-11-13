@@ -6,6 +6,7 @@ from typing import Optional, Tuple, Union
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 
+import import_templates as it
 import review
 from services import (
     count_dismissed_suggestions,
@@ -21,7 +22,7 @@ from web import CurrentUser, render
 
 router = APIRouter()
 
-LISTS = ("transfers", "categories", "budgets", "recurring")
+LISTS = ("imports", "transfers", "categories", "budgets", "recurring")
 
 
 def _back(list_name: str, message: str, action_id: Optional[int]):
@@ -61,6 +62,7 @@ def review_page(request: Request, user: CurrentUser, start: str = "", end: str =
         review=review.build_review(user["id"], window_start, window_end),
         categories=load_categories(user["id"]),
         accounts=load_accounts(user["id"]),
+        templates=it.load_templates(user["id"]),
         dismissed_count=count_dismissed_suggestions(user["id"]),
         start=window_start.isoformat(),
         end=window_end.isoformat(),
@@ -85,6 +87,13 @@ def confirm_merchant(
     else:
         action = review.confirm_category(user["id"], key, picked, created=created)
     return _back(list, "Confirmed", action)
+
+
+@router.post("/review/imports/dismiss")
+def dismiss_import(request: Request, user: CurrentUser, key: str = Form(...)):
+    if not key.startswith(review.STALE_DISMISS_PREFIX):
+        return redirect_with_message("/review#imports", "Nothing to dismiss", is_error=True)
+    return _back("imports", "Dismissed", review.dismiss(user["id"], key))
 
 
 @router.post("/review/merchants/dismiss")

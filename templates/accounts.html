@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_parts.html" as parts %}
 {% block content %}
 <section class="page-intro">
   <div>
@@ -9,42 +10,8 @@
   <div class="intro-badge-stack">
     <span class="stat-chip amount-value">Checking opening ${{ starting_balance|currency }}</span>
     <span class="stat-chip">{{ accounts|length }} account{{ '' if accounts|length == 1 else 's' }}</span>
+    <a class="button-link" href="{{ base_path() }}/accounts/new">Add account</a>
   </div>
-</section>
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>Add Account</h2>
-    <p>Credit cards track a billing cycle so charges defer to the payment due date.</p>
-  </div>
-  <form method="post" action="{{ base_path() }}/accounts" id="account-form" class="grid-form">
-    <label>
-      Name
-      <input type="text" name="name" placeholder="Checking / Rewards Card" required />
-    </label>
-    <label>
-      Type
-      <select name="account_type" id="account_type">
-        <option value="checking">Checking</option>
-        <option value="credit_card">Credit card</option>
-      </select>
-    </label>
-    <div data-field="statement_day" class="conditional hidden cycle-field">
-      <label>Statement closes (day of month)
-        <input type="number" min="1" max="31" name="statement_day" value="15" class="cycle-day-input" />
-      </label>
-      <label class="eom-toggle"><input type="checkbox" name="statement_eom" value="1" class="eom-checkbox" data-target="statement_day" /> Last day of month</label>
-    </div>
-    <div data-field="due_day" class="conditional hidden cycle-field">
-      <label>Payment due (day of month)
-        <input type="number" min="1" max="31" name="due_day" value="10" class="cycle-day-input" />
-      </label>
-      <label class="eom-toggle"><input type="checkbox" name="due_eom" value="1" class="eom-checkbox" data-target="due_day" /> Last day of month</label>
-    </div>
-    <div class="full-row">
-      <button type="submit" class="button-link">Add Account</button>
-    </div>
-  </form>
 </section>
 
 <section class="panel">
@@ -116,6 +83,7 @@
           <td>{{ account.assigned_count }} item{{ '' if account.assigned_count == 1 else 's' }}</td>
           <td>
             <div class="actions">
+              {{ parts.import_button(account) }}
               {% if account.account_type == 'credit_card' %}
               <form method="get" action="{{ base_path() }}/statements/{{ account.id }}">
                 <button type="submit">Statements</button>
@@ -135,36 +103,70 @@
     </table>
   </div>
   {% else %}
-  <p class="empty-state">No accounts yet. Add your checking account and credit cards above.</p>
+  <p class="empty-state">No accounts yet.</p>
   {% endif %}
 </section>
 
-<script>
-  (() => {
-    const typeSelect = document.getElementById('account_type');
-    const statementField = document.querySelector('[data-field="statement_day"]');
-    const dueField = document.querySelector('[data-field="due_day"]');
-    function sync() {
-      const isCard = typeSelect.value === 'credit_card';
-      statementField.classList.toggle('hidden', !isCard);
-      dueField.classList.toggle('hidden', !isCard);
-    }
-    if (typeSelect) {
-      typeSelect.addEventListener('change', sync);
-      sync();
-    }
+{% if unplaced %}
+<section class="panel" id="unplaced">
+  <div class="panel-head">
+    <h2>Rows with no account</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Imported as</th><th>Rows</th><th>Move to</th></tr></thead>
+      <tbody>
+        {% for item in unplaced %}
+        <tr>
+          <td><span class="table-pill">{{ item.label }}</span></td>
+          <td>{{ item.count }}</td>
+          <td>
+            <form method="post" action="{{ base_path() }}/accounts/unplaced" class="inline-map-form">
+              <input type="hidden" name="label" value="{{ item.label }}" />
+              <select name="account_id" required>
+                <option value="" disabled selected>Choose…</option>
+                {% for acct in accounts %}<option value="{{ acct.id }}">{{ acct.name }}</option>{% endfor %}
+              </select>
+              <button type="submit" class="button-link">Move</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
 
-    document.querySelectorAll('.eom-checkbox').forEach((box) => {
-      const input = document.querySelector(`input[name="${box.dataset.target}"]`);
-      function syncEom() {
-        if (input) {
-          input.disabled = box.checked;
-          input.classList.toggle('is-disabled', box.checked);
-        }
-      }
-      box.addEventListener('change', syncEom);
-      syncEom();
-    });
-  })();
-</script>
+<section class="panel" id="templates">
+  <div class="panel-head review-list-head">
+    <h2>Templates</h2>
+    <a class="button-link" href="{{ base_path() }}/templates/new">New template</a>
+  </div>
+  {% if templates %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Name</th><th>Created</th><th>Default for</th><th></th></tr></thead>
+      <tbody>
+        {% for t in templates %}
+        <tr>
+          <td><strong>{{ t.name }}</strong></td>
+          <td>{{ t.created }}</td>
+          <td>{{ t.used_by|join(', ') or '—' }}</td>
+          <td>
+            <form method="post" action="{{ base_path() }}/templates/{{ t.id }}/delete" onsubmit="return confirm('Delete this template?')">
+              <button type="submit" class="danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-state">No templates yet.</p>
+  {% endif %}
+</section>
+
+{{ parts.import_dialog(templates) }}
 {% endblock %}

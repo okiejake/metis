@@ -10,7 +10,7 @@ from datetime import date, timedelta
 import pytest
 
 import review
-from conftest import add_imported, months_before
+from conftest import add_imported, months_before, quiet_imports
 from merchants import merchant_key
 
 TODAY = date.today()
@@ -137,6 +137,7 @@ def test_confirming_a_budget_sets_it_and_undo_clears_it(db, user_id, accounts):
 def test_the_waiting_count_follows_each_action(db, user_id, accounts):
     """Categorizing a merchant moves its category to Budgets; setting the budget
     clears it. The remembered count must follow both."""
+    quiet_imports(user_id)
     groceries = db.create_category(user_id, "Groceries")
     spend(db, user_id, accounts, "ACME GROCER #2", -30.0)
     db.save_forecast_window(user_id, *THIS_MONTH)

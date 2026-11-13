@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_parts.html" as parts %}
 {% block content %}
 <section class="page-intro">
   <div>
@@ -25,21 +26,8 @@
         <option value="credit_card" {{ 'selected' if account.account_type == 'credit_card' else '' }}>Credit card</option>
       </select>
     </label>
-    {% set statement_is_eom = account.statement_day == 0 %}
-    {% set due_is_eom = account.due_day == 0 %}
-    <div data-field="statement_day" class="conditional cycle-field {{ 'hidden' if account.account_type != 'credit_card' else '' }}">
-      <label>Statement closes (day of month)
-        <input type="number" min="1" max="31" name="statement_day" value="{{ account.statement_day if account.statement_day else 15 }}" class="cycle-day-input" />
-      </label>
-      <label class="eom-toggle"><input type="checkbox" name="statement_eom" value="1" class="eom-checkbox" data-target="statement_day" {{ 'checked' if statement_is_eom else '' }} /> Last day of month</label>
-    </div>
-    <div data-field="due_day" class="conditional cycle-field {{ 'hidden' if account.account_type != 'credit_card' else '' }}">
-      <label>Payment due (day of month)
-        <input type="number" min="1" max="31" name="due_day" value="{{ account.due_day if account.due_day else 10 }}" class="cycle-day-input" />
-      </label>
-      <label class="eom-toggle"><input type="checkbox" name="due_eom" value="1" class="eom-checkbox" data-target="due_day" {{ 'checked' if due_is_eom else '' }} /> Last day of month</label>
-    </div>
-    <div data-field="payment_pattern" class="conditional full-row {{ 'hidden' if account.account_type != 'credit_card' else '' }}">
+    {{ parts.cycle_fields(account) }}
+    <div data-field="payment_pattern" class="conditional full-row" data-card-only>
       <label>How payments to this card appear on your other statement
         <input type="text" name="payment_pattern" value="{{ account.payment_pattern }}"
                placeholder="{{ suggested_pattern }}" />
@@ -51,6 +39,15 @@
         generic wording like "CARD PAYMENT".
       </p>
     </div>
+    <label>
+      Default template
+      <select name="default_template_id">
+        <option value="">None</option>
+        {% for t in templates %}
+        <option value="{{ t.id }}"{{ ' selected' if t.id == account.default_template_id else '' }}>{{ t.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
     <div class="full-row">
       <button type="submit" class="button-link">Save Changes</button>
       <a class="button-link" href="{{ base_path() }}/accounts">Cancel</a>
@@ -58,34 +55,5 @@
   </form>
 </section>
 
-<script>
-  (() => {
-    const typeSelect = document.getElementById('account_type');
-    const statementField = document.querySelector('[data-field="statement_day"]');
-    const dueField = document.querySelector('[data-field="due_day"]');
-    const patternField = document.querySelector('[data-field="payment_pattern"]');
-    function sync() {
-      const isCard = typeSelect.value === 'credit_card';
-      statementField.classList.toggle('hidden', !isCard);
-      dueField.classList.toggle('hidden', !isCard);
-      if (patternField) { patternField.classList.toggle('hidden', !isCard); }
-    }
-    if (typeSelect) {
-      typeSelect.addEventListener('change', sync);
-      sync();
-    }
-
-    document.querySelectorAll('.eom-checkbox').forEach((box) => {
-      const input = document.querySelector(`input[name="${box.dataset.target}"]`);
-      function syncEom() {
-        if (input) {
-          input.disabled = box.checked;
-          input.classList.toggle('is-disabled', box.checked);
-        }
-      }
-      box.addEventListener('change', syncEom);
-      syncEom();
-    });
-  })();
-</script>
+{{ parts.cycle_fields_script('account-form') }}
 {% endblock %}

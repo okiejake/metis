@@ -578,9 +578,50 @@ def _budget_rows(user_id: int, window_start: date, window_end: date, dismissed: 
     return sorted(listed, key=lambda r: r["actual"], reverse=True)
 
 
+# --- Stale accounts ---------------------------------------------------------
+
+STALE_DISMISS_PREFIX = "stale:"
+STALE_MARGIN = 1.2      # flagged when more than 20% past the usual gap
+STALE_MIN_DAYS = 5      # transaction days needed before a gap means anything
+
+
+def stale_accounts(user_id: int, today: date) -> List[Dict[str, Any]]:
+    """Accounts that look overdue for an import, in account order. The usual gap
+    is the average number of days between an account's transaction days. An
+    account with nothing imported is listed too. A dismissal names the account's
+    last transaction day, so the next import brings the flag back."""
+    days: Dict[int, List[date]] = {}
+    for account_id, tx_date in db.fetch_all(
+            "SELECT DISTINCT account_id, tx_date FROM imported_transactions "
+            "WHERE user_id = ? AND account_id IS NOT NULL ORDER BY tx_date", [user_id]):
+        days.setdefault(int(account_id), []).append(db._as_date(tx_date))
+    dismissed = db.load_dismissed_suggestion_keys(user_id)
+
+    rows = []
+    for account in db.load_accounts(user_id):
+        held = days.get(int(account["id"]), [])
+        last = held[-1] if held else None
+        key = f"{STALE_DISMISS_PREFIX}{account['id']}:{last.isoformat() if last else 'none'}"
+        row = {"key": key, "account_id": int(account["id"]), "name": account["name"],
+               "default_template_id": account["default_template_id"], "last_date": last,
+               "days_since": None, "usual_gap": None}
+        if key in dismissed:
+            continue
+        if last is None:
+            rows.append(row)
+            continue
+        if len(held) < STALE_MIN_DAYS:
+            continue
+        usual = (held[-1] - held[0]).days / (len(held) - 1)
+        since = (today - last).days
+        if since > usual * STALE_MARGIN:
+            rows.append({**row, "days_since": since, "usual_gap": round(usual, 1)})
+    return rows
+
+
 def build_review(user_id: int, window_start: date, window_end: date) -> Dict[str, Any]:
-    """Everything Review shows for the date range: the meter and the four lists,
-    in working order, with no row in two lists."""
+    """Everything Review shows for the date range: the meter and the lists, in
+    working order, with no row in two lists."""
     parts = db.spending_parts(user_id, window_start, window_end)
     spending = round(sum(p["spent"] for p in parts), 2)
     uncategorized = round(sum(p["spent"] for p in parts if p["category_id"] is None), 2)
@@ -593,13 +634,15 @@ def build_review(user_id: int, window_start: date, window_end: date) -> Dict[str
     categories = _category_rows(user_id, parts, {row["key"] for row in transfers})
     budgets = _budget_rows(user_id, window_start, window_end, dismissed)
     recurring = db.detect_recurring_suggestions(user_id)
+    imports = stale_accounts(user_id, date.today())
     return {
         "meter": {"percent": percent, "spending": spending, "uncategorized": uncategorized},
+        "imports": imports,
         "transfers": transfers,
         "categories": categories,
         "budgets": budgets,
         "recurring": recurring,
-        "waiting": len(transfers) + len(categories) + len(budgets) + len(recurring),
+        "waiting": len(imports) + len(transfers) + len(categories) + len(budgets) + len(recurring),
     }
 
 
@@ -623,9 +666,11 @@ def _data_stamp(user_id: int) -> tuple:
           (SELECT COUNT(*) FROM categories WHERE user_id = ?),
           (SELECT SUM(budget_amount) FROM categories WHERE user_id = ?),
           (SELECT COUNT(*) FROM transaction_splits WHERE user_id = ?),
-          (SELECT COUNT(*) FROM expected_reconciliations WHERE user_id = ?)
+          (SELECT COUNT(*) FROM expected_reconciliations WHERE user_id = ?),
+          (SELECT COUNT(*) FROM accounts WHERE user_id = ?),
+          CURRENT_DATE
         """,
-        [user_id] * 11,
+        [user_id] * 12,
     ))
 
 

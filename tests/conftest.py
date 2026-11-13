@@ -160,3 +160,12 @@ __all__ = [
     "rows_on",
     "timedelta",
 ]
+
+
+def quiet_imports(user_id):
+    """Dismiss Review's stale-account flags, for tests about the other lists.
+    Fixture accounts start with nothing imported, which Review lists."""
+    import review
+
+    for row in review.stale_accounts(user_id, date.today()):
+        review.dismiss(user_id, row["key"])

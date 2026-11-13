@@ -99,3 +99,121 @@
   {{ category_picker("category_id", categories, s.category_id) }}
 </label>
 {%- endmacro %}
+
+{# One choice in a set of cards; a radio underneath, so it works without script. #}
+{% macro choice_card(name, value, title, note="", checked=False, disabled=False) -%}
+<label class="choice-card{{ ' is-disabled' if disabled else '' }}">
+  <input type="radio" name="{{ name }}" value="{{ value }}"{{ ' checked' if checked else '' }}{{ ' disabled' if disabled else '' }} />
+  <span class="choice-card-title">{{ title }}</span>
+  {% if note %}<span class="choice-card-note">{{ note }}</span>{% endif %}
+</label>
+{%- endmacro %}
+
+{# A picker of a CSV's columns, for mapping a template. #}
+{% macro column_select(field, header, selected=None, optional=False, required=False) -%}
+<select name="{{ field }}"{{ ' required' if required else '' }}>
+  <option value="">{{ 'None' if optional else 'Choose…' }}</option>
+  {% for column in header %}
+  <option value="{{ column }}"{{ ' selected' if column == selected else '' }}>{{ column }}</option>
+  {% endfor %}
+</select>
+{%- endmacro %}
+
+{# A card's statement and due days. Shown only while the form's account_type is
+   credit_card; see cycle_fields_script. #}
+{% macro cycle_fields(account=None) -%}
+{% set statement_day = account.statement_day if account else None %}
+{% set due_day = account.due_day if account else None %}
+<div data-field="statement_day" class="conditional cycle-field" data-card-only>
+  <label>Statement closes (day of month)
+    <input type="number" min="1" max="31" name="statement_day" value="{{ statement_day if statement_day else 15 }}" class="cycle-day-input" />
+  </label>
+  <label class="eom-toggle"><input type="checkbox" name="statement_eom" value="1" class="eom-checkbox" data-target="statement_day" {{ 'checked' if statement_day == 0 else '' }} /> Last day of month</label>
+</div>
+<div data-field="due_day" class="conditional cycle-field" data-card-only>
+  <label>Payment due (day of month)
+    <input type="number" min="1" max="31" name="due_day" value="{{ due_day if due_day else 10 }}" class="cycle-day-input" />
+  </label>
+  <label class="eom-toggle"><input type="checkbox" name="due_eom" value="1" class="eom-checkbox" data-target="due_day" {{ 'checked' if due_day == 0 else '' }} /> Last day of month</label>
+</div>
+{%- endmacro %}
+
+{% macro cycle_fields_script(form_id) -%}
+<script>
+  (() => {
+    const form = document.getElementById('{{ form_id }}');
+    if (!form) { return; }
+    function syncType() {
+      const isCard = form.elements.account_type.value === 'credit_card';
+      form.querySelectorAll('[data-card-only]').forEach((field) => field.classList.toggle('hidden', !isCard));
+    }
+    form.addEventListener('change', (event) => { if (event.target.name === 'account_type') { syncType(); } });
+    syncType();
+    form.querySelectorAll('.eom-checkbox').forEach((box) => {
+      const input = form.querySelector(`input[name="${box.dataset.target}"]`);
+      function syncEom() {
+        input.disabled = box.checked;
+        input.classList.toggle('is-disabled', box.checked);
+      }
+      box.addEventListener('change', syncEom);
+      syncEom();
+    });
+  })();
+</script>
+{%- endmacro %}
+
+{# The import pop-up. Any button with data-import-account opens it for that
+   account, with the account's default template (data-import-template) chosen. #}
+{% macro import_dialog(templates, next_path="/accounts") -%}
+<dialog class="import-dialog" id="import-dialog" aria-labelledby="import-dialog-title">
+  <form method="post" enctype="multipart/form-data" class="import-dialog-form" data-action-base="{{ base_path() }}/accounts/">
+    <h2 id="import-dialog-title">Import <span data-import-name></span></h2>
+    <input type="hidden" name="next" value="{{ next_path }}" />
+    <label>
+      Template
+      <select name="template_id" required>
+        <option value="">Choose…</option>
+        {% for t in templates %}
+        <option value="{{ t.id }}">{{ t.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      File
+      <input type="file" name="file" accept=".csv,text/csv" required />
+    </label>
+    <div class="actions">
+      <button type="submit" class="button-link">Import</button>
+      <a class="button-link" data-new-template href="{{ base_path() }}/templates/new">New template</a>
+      <button type="button" class="button-link" data-import-close>Cancel</button>
+    </div>
+  </form>
+</dialog>
+<script>
+  (() => {
+    const dialog = document.getElementById('import-dialog');
+    if (!dialog || !dialog.showModal) { return; }
+    const form = dialog.querySelector('form');
+    const newTemplate = dialog.querySelector('[data-new-template]');
+    const newTemplateBase = newTemplate.getAttribute('href');
+    document.querySelectorAll('[data-import-account]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const id = button.dataset.importAccount;
+        form.action = form.dataset.actionBase + id + '/import';
+        form.elements.template_id.value = button.dataset.importTemplate || '';
+        form.elements.file.value = '';
+        dialog.querySelector('[data-import-name]').textContent = button.dataset.importName;
+        newTemplate.setAttribute('href', newTemplateBase + '?account_id=' + id);
+        dialog.showModal();
+      });
+    });
+    dialog.querySelector('[data-import-close]').addEventListener('click', () => dialog.close());
+  })();
+</script>
+{%- endmacro %}
+
+{# The Import button that opens import_dialog for one account. #}
+{% macro import_button(account) -%}
+<button type="button" class="button-link" data-import-account="{{ account.id }}"
+        data-import-name="{{ account.name }}" data-import-template="{{ account.default_template_id or '' }}">Import</button>
+{%- endmacro %}
