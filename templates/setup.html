@@ -10,7 +10,7 @@
     </p>
 
     {% if pending_users %}
-    <form method="post" action="/setup" class="auth-form">
+    <form method="post" action="{{ base_path() }}/setup" class="auth-form">
       {% if pending_users|length > 1 %}
       <label>
         Profile

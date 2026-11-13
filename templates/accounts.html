@@ -17,7 +17,7 @@
     <h2>Add Account</h2>
     <p>Credit cards track a billing cycle so charges defer to the payment due date.</p>
   </div>
-  <form method="post" action="/accounts" id="account-form" class="grid-form">
+  <form method="post" action="{{ base_path() }}/accounts" id="account-form" class="grid-form">
     <label>
       Name
       <input type="text" name="name" placeholder="Checking / Rewards Card" required />
@@ -77,7 +77,7 @@
           </td>
           {% if account.account_type == 'checking' %}
           <td colspan="3">
-            <form method="post" action="/accounts/opening-balance" class="inline-balance-form">
+            <form method="post" action="{{ base_path() }}/accounts/opening-balance" class="inline-balance-form">
               <label class="inline-balance-label">
                 Opening balance{% if first_actual %} (as of {{ first_actual }}){% endif %}
                 <input type="number" step="0.01" name="value" value="{{ '%.2f'|format(starting_balance) }}" />
@@ -117,14 +117,14 @@
           <td>
             <div class="actions">
               {% if account.account_type == 'credit_card' %}
-              <form method="get" action="/statements/{{ account.id }}">
+              <form method="get" action="{{ base_path() }}/statements/{{ account.id }}">
                 <button type="submit">Statements</button>
               </form>
               {% endif %}
-              <form method="get" action="/accounts/{{ account.id }}/edit">
+              <form method="get" action="{{ base_path() }}/accounts/{{ account.id }}/edit">
                 <button type="submit">Edit</button>
               </form>
-              <form method="post" action="/accounts/{{ account.id }}/delete" onsubmit="return confirm('Delete this account? Assigned items become unassigned.')">
+              <form method="post" action="{{ base_path() }}/accounts/{{ account.id }}/delete" onsubmit="return confirm('Delete this account? Assigned items become unassigned.')">
                 <button type="submit" class="danger">Delete</button>
               </form>
             </div>

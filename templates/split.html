@@ -21,7 +21,7 @@
     <p>{{ transaction.account }} · {{ transaction.description }}</p>
   </div>
 
-  <form method="post" action="/transactions/{{ transaction.id }}/split">
+  <form method="post" action="{{ base_path() }}/transactions/{{ transaction.id }}/split">
     <div class="table-wrap">
       <table class="split-table">
         <thead>
@@ -71,12 +71,12 @@
     <div class="split-actions">
       <button type="button" class="button-link js-split-add">Add another part</button>
       <button type="submit" class="button-link">Save Split</button>
-      <a class="button-link" href="/ledger">Back to Ledger</a>
+      <a class="button-link" href="{{ base_path() }}/ledger">Back to Ledger</a>
     </div>
   </form>
 
   {% if splits %}
-  <form method="post" action="/transactions/{{ transaction.id }}/split/clear" class="inline-form">
+  <form method="post" action="{{ base_path() }}/transactions/{{ transaction.id }}/split/clear" class="inline-form">
     <button type="submit" class="button-link">Remove all parts</button>
   </form>
   {% endif %}

@@ -15,6 +15,8 @@ import duckdb
 from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
 
+from base_path import configured_base_path
+
 DB_PATH = os.getenv("FINANCE_DB_PATH", "finance.duckdb")
 VALID_KINDS = {"income", "expense"}
 VALID_FREQUENCIES = {"weekly", "biweekly", "semimonthly", "monthly", "yearly", "every_x_months"}
@@ -42,8 +44,22 @@ def format_currency(value: Any) -> str:
 
 
 
+def _connection_config() -> Dict[str, Any]:
+    """Optional caps for a machine with little to spare. DuckDB otherwise takes
+    most of the memory and every core. METIS_DB_MEMORY_LIMIT takes DuckDB's own
+    format, e.g. "128MB"."""
+    config: Dict[str, Any] = {}
+    memory_limit = os.getenv("METIS_DB_MEMORY_LIMIT", "").strip()
+    if memory_limit:
+        config["memory_limit"] = memory_limit
+    threads = os.getenv("METIS_DB_THREADS", "").strip()
+    if threads:
+        config["threads"] = int(threads)
+    return config
+
+
 def get_connection() -> duckdb.DuckDBPyConnection:
-    return duckdb.connect(DB_PATH)
+    return duckdb.connect(DB_PATH, config=_connection_config())
 
 
 def table_has_column(conn: duckdb.DuckDBPyConnection, table_name: str, column_name: str) -> bool:
@@ -969,12 +985,12 @@ def attach_session_cookie(response: Response, token: str) -> None:
         httponly=True,
         samesite="lax",
         secure=secure_cookies_enabled(),
-        path="/",
+        path=configured_base_path() or "/",
     )
 
 
 def clear_session_cookie(response: Response) -> None:
-    response.delete_cookie(SESSION_COOKIE, path="/")
+    response.delete_cookie(SESSION_COOKIE, path=configured_base_path() or "/")
 
 
 def template_context(request: Request, message: str, err: int, **kwargs: Any) -> Dict[str, Any]:

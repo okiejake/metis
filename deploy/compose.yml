@@ -1,0 +1,44 @@
+# Two Metis environments on one machine, each with its own database.
+#
+#   prod  follows the latest GitHub release. Always running.
+#   qa    follows main. Started only for testing (see metis.sh).
+#
+# Settings come from .env next to this file, which stays on the server.
+# Copy .env.example to .env to start.
+name: metis
+
+x-metis: &metis
+  restart: unless-stopped
+  mem_limit: ${METIS_MEM_LIMIT:-256m}
+
+x-environment: &environment
+  FINANCE_DB_PATH: /data/finance.duckdb
+  METIS_SECURE_COOKIES: ${METIS_SECURE_COOKIES:-1}
+  METIS_DB_MEMORY_LIMIT: ${METIS_DB_MEMORY_LIMIT:-96MB}
+  METIS_DB_THREADS: ${METIS_DB_THREADS:-1}
+
+services:
+  prod:
+    <<: *metis
+    image: ${METIS_IMAGE:-ghcr.io/okiejake/metis}:${PROD_TAG:-release}
+    environment:
+      <<: *environment
+      METIS_BASE_PATH: ${PROD_PATH:-/metis_prod}
+    # Bound to this machine only. Tailscale Serve is the way in.
+    ports:
+      - "127.0.0.1:${PROD_PORT:-8101}:8000"
+    volumes:
+      - ./prod:/data
+
+  qa:
+    <<: *metis
+    restart: "no"
+    profiles: [qa]
+    image: ${METIS_IMAGE:-ghcr.io/okiejake/metis}:${QA_TAG:-main}
+    environment:
+      <<: *environment
+      METIS_BASE_PATH: ${QA_PATH:-/metis_qa}
+    ports:
+      - "127.0.0.1:${QA_PORT:-8102}:8000"
+    volumes:
+      - ./qa:/data

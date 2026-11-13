@@ -13,7 +13,7 @@
     <h2>Edit One-Off Transaction</h2>
     <p>Changes save directly to this forecast window.</p>
   </div>
-  <form method="post" action="/manual/{{ tx.id }}/edit" class="grid-form compact">
+  <form method="post" action="{{ base_path() }}/manual/{{ tx.id }}/edit" class="grid-form compact">
     <input type="hidden" name="start" value="{{ start }}" />
     <input type="hidden" name="end" value="{{ end }}" />
 
@@ -59,7 +59,7 @@
 
     <div class="full-row actions">
       <button type="submit" class="button-link">Save Changes</button>
-      <a class="button-link" href="/ledger?start={{ start }}&end={{ end }}">Cancel</a>
+      <a class="button-link" href="{{ base_path() }}/ledger?start={{ start }}&end={{ end }}">Cancel</a>
     </div>
   </form>
 </section>

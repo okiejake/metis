@@ -135,8 +135,8 @@
                 <i data-lucide="settings-2" class="menu-icon" aria-hidden="true"></i>
               </summary>
               <div class="row-action-dropdown">
-                <a href="/manual/{{ row.id }}/edit?start={{ start }}&end={{ end }}" class="row-action-item">Edit</a>
-                <form method="post" action="/manual/{{ row.id }}/delete" class="row-action-item-form" onsubmit="return confirm('Delete this one-off transaction?')">
+                <a href="{{ base_path() }}/manual/{{ row.id }}/edit?start={{ start }}&end={{ end }}" class="row-action-item">Edit</a>
+                <form method="post" action="{{ base_path() }}/manual/{{ row.id }}/delete" class="row-action-item-form" onsubmit="return confirm('Delete this one-off transaction?')">
                   <input type="hidden" name="start" value="{{ start }}" />
                   <input type="hidden" name="end" value="{{ end }}" />
                   <button type="submit" class="row-action-item danger">Delete</button>
@@ -170,7 +170,7 @@
 
         <tr id="inline-insert-row" class="inline-insert-row hidden">
           <td colspan="8">
-            <form method="post" action="/manual" class="inline-insert-form" id="inline-insert-form">
+            <form method="post" action="{{ base_path() }}/manual" class="inline-insert-form" id="inline-insert-form">
               <input type="hidden" name="start" value="{{ start }}" />
               <input type="hidden" name="end" value="{{ end }}" />
 

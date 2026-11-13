@@ -3,7 +3,7 @@
 {% block content %}
 <section class="page-intro">
   <div>
-    <p class="page-kicker"><a href="/statements/{{ card.id }}">{{ card.name }} statements</a></p>
+    <p class="page-kicker"><a href="{{ base_path() }}/statements/{{ card.id }}">{{ card.name }} statements</a></p>
     <h2>{{ 'Statement closed' if statement.closed else 'Estimated statement closing' }} {{ statement.close_date }}</h2>
     <p>Covers {{ statement.period_start }} – {{ statement.close_date }}, due {{ statement.due_date }}.</p>
   </div>
@@ -17,7 +17,7 @@
 
 <nav class="import-filter-tabs statement-steps" aria-label="Other statements">
   {% if previous %}<a href="{{ stmt.statement_url(previous) }}">← {{ previous.close_date }}</a>{% endif %}
-  <a href="/statements/{{ card.id }}">All statements</a>
+  <a href="{{ base_path() }}/statements/{{ card.id }}">All statements</a>
   {% if following %}<a href="{{ stmt.statement_url(following) }}">{{ following.close_date }} →</a>{% endif %}
 </nav>
 
