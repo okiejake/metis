@@ -8,9 +8,9 @@
 {% macro bar(fill_pct=0, over_pct=0, neutral_pct=0, title="") -%}
 <div class="budget-bar-track"{% if title %} title="{{ title }}"{% endif %}>
   {% if neutral_pct > 0 %}
-  <span class="budget-bar-neutral" style="width: {{ neutral_pct }}%;"></span>
+  <span class="budget-bar-neutral" style="width: {{ [neutral_pct, 100]|min }}%;"></span>
   {% else %}
-  <span class="budget-bar-fill" style="width: {{ fill_pct }}%;"></span>
+  <span class="budget-bar-fill" style="width: {{ [fill_pct, 100]|min }}%;"></span>
   {% if over_pct > 0 %}
   <span class="budget-bar-overflow" style="width: {{ over_pct }}%;"></span>
   {% endif %}
@@ -18,16 +18,19 @@
 </div>
 {%- endmacro %}
 
-{# With extras, also offers "Transfer" and "New category"; choosing "New
-   category" reveals the name field (see the page's picker script). #}
-{% macro category_picker(field, categories, selected=None, extras=False) -%}
+{# With extras, also offers "New category" (choosing it reveals the name
+   field; see the page's picker script) and, unless transfer is false,
+   "Transfer". #}
+{% macro category_picker(field, categories, selected=None, extras=False, transfer=True) -%}
 <select name="{{ field }}" class="category-picker"{% if extras %} data-category-picker{% endif %}>
   <option value="">No category</option>
   {% for category in categories %}
   <option value="{{ category.id }}" {{ 'selected' if category.id == selected else '' }}>{{ category.name }}</option>
   {% endfor %}
-  {% if extras %}
+  {% if extras and transfer %}
   <option value="transfer">Transfer</option>
+  {% endif %}
+  {% if extras %}
   <option value="new">New category</option>
   {% endif %}
 </select>

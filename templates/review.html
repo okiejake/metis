@@ -86,7 +86,7 @@
     <form method="post" action="{{ base_path() }}/review/merchants/confirm" class="inline-form review-form">
       <input type="hidden" name="key" value="{{ row.key }}" />
       <input type="hidden" name="list" value="categories" />
-      {{ parts.category_picker('choice', categories, row.suggested_category_id, extras=True) }}
+      {{ parts.category_picker('choice', categories, row.suggested_category_id, extras=True, transfer=row.can_transfer) }}
       <button type="submit" class="button-link">Confirm</button>
     </form>
     <button type="button" class="card-expand-toggle js-review-toggle" data-target="charges-{{ loop.index }}"
@@ -96,7 +96,7 @@
       <li>
         <span class="review-charge-facts">{{ c.tx_date }} · ${{ c.amount|currency }}{{ ' · split' if c.split_count else '' }}</span>
         <form method="post" action="{{ base_path() }}/review/charges/{{ c.tx_id }}" class="inline-form review-form">
-          {{ parts.category_picker('choice', categories, None, extras=True) }}
+          {{ parts.category_picker('choice', categories, None, extras=True, transfer=not c.on_card) }}
           <button type="submit" class="button-link">Confirm</button>
         </form>
         <a class="button-link" href="{{ base_path() }}/transactions/{{ c.tx_id }}/split?next=/review%23categories">Split</a>

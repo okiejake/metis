@@ -3,8 +3,10 @@ settled, one decision per merchant.
 
 A decision is stored per merchant (merchant_decisions) and applied to every
 matching row, past and future: apply_review_decisions runs after each import.
-Rows a decision changed carry its id (imported_transactions.decision_id), and
-every action is recorded (review_actions) so Undo can reverse it completely.
+A merchant can hold one decision of each kind. Rows a category decision set
+carry its id in imported_transactions.decision_id; rows a transfer decision
+marked carry it in transfer_decision_id. Every action is recorded
+(review_actions) so Undo can reverse it completely.
 
 This module reads and writes through services; services never imports it.
 """
@@ -52,15 +54,14 @@ def undo(user_id: int, action_id: int) -> str:
 
 
 def _undo_decision(user_id: int, payload: Dict[str, Any]) -> None:
+    """Reverse a decision by the kind recorded with the action, so it works
+    even after the decision row was replaced."""
     decision_id = int(payload["decision_id"])
-    decision = db.fetch_one(
-        "SELECT kind FROM merchant_decisions WHERE id = ? AND user_id = ?", [decision_id, user_id]
-    )
     with db.get_connection() as conn:
-        if decision and decision[0] == "transfer":
+        if payload["kind"] == "transfer":
             conn.execute(
-                "UPDATE imported_transactions SET is_transfer = FALSE, decision_id = NULL "
-                "WHERE user_id = ? AND decision_id = ?",
+                "UPDATE imported_transactions SET is_transfer = FALSE, transfer_decision_id = NULL "
+                "WHERE user_id = ? AND transfer_decision_id = ?",
                 [user_id, decision_id],
             )
         else:
@@ -70,15 +71,36 @@ def _undo_decision(user_id: int, payload: Dict[str, Any]) -> None:
                 [user_id, decision_id],
             )
         conn.execute("DELETE FROM merchant_decisions WHERE id = ? AND user_id = ?", [decision_id, user_id])
+    _remove_created_category(user_id, payload.get("created_category_id"))
+
+
+def _remove_created_category(user_id: int, category_id: Optional[int]) -> None:
+    """Delete a category an undone action created, when nothing else uses it."""
+    if not category_id:
+        return
+    uses = db.fetch_one(
+        """
+        SELECT (SELECT COUNT(*) FROM imported_transactions WHERE user_id = ? AND category_id = ?)
+             + (SELECT COUNT(*) FROM transaction_splits WHERE user_id = ? AND category_id = ?)
+             + (SELECT COUNT(*) FROM category_rules WHERE user_id = ? AND category_id = ?)
+             + (SELECT COUNT(*) FROM recurring_items WHERE user_id = ? AND category_id = ?)
+             + (SELECT COUNT(*) FROM manual_transactions WHERE user_id = ? AND category_id = ?)
+             + (SELECT COUNT(*) FROM merchant_decisions WHERE user_id = ? AND category_id = ?)
+        """,
+        [user_id, category_id] * 6,
+    )[0]
+    if not uses:
+        db.execute("DELETE FROM categories WHERE id = ? AND user_id = ?", [category_id, user_id])
 
 
 def _undo_charge(user_id: int, payload: Dict[str, Any]) -> None:
     db.execute(
-        "UPDATE imported_transactions SET category_id = ?, category_via = ?, is_transfer = ?, decision_id = ? "
-        "WHERE id = ? AND user_id = ?",
+        "UPDATE imported_transactions SET category_id = ?, category_via = ?, is_transfer = ?, decision_id = ?, "
+        "transfer_decision_id = ? WHERE id = ? AND user_id = ?",
         [payload["category_id"], payload["category_via"], payload["is_transfer"],
-         payload["decision_id"], payload["tx_id"], user_id],
+         payload["decision_id"], payload.get("transfer_decision_id"), payload["tx_id"], user_id],
     )
+    _remove_created_category(user_id, payload.get("created_category_id"))
 
 
 _UNDO = {"decision": _undo_decision, "charge": _undo_charge}
@@ -97,10 +119,18 @@ def _uncategorized_ids_by_key(user_id: int) -> Dict[str, Set[int]]:
     return found
 
 
+def has_uncategorized(user_id: int, key: str) -> bool:
+    """Whether the merchant still has uncategorized spending to decide."""
+    return bool(_uncategorized_ids_by_key(user_id).get(key))
+
+
 def _save_decision(user_id: int, key: str, kind: str, category_id: Optional[int]) -> int:
-    """Store the merchant's decision, replacing an earlier one. Returns its id."""
+    """Store the merchant's decision of this kind, replacing an earlier one of
+    the same kind. Returns its id."""
     with db.get_connection() as conn:
-        conn.execute("DELETE FROM merchant_decisions WHERE user_id = ? AND merchant_key = ?", [user_id, key])
+        conn.execute(
+            "DELETE FROM merchant_decisions WHERE user_id = ? AND merchant_key = ? AND kind = ?", [user_id, key, kind]
+        )
         return int(conn.execute(
             "INSERT INTO merchant_decisions (user_id, merchant_key, kind, category_id) "
             "VALUES (?, ?, ?, ?) RETURNING id",
@@ -121,32 +151,39 @@ def _categorize(user_id: int, tx_ids: Set[int], category_id: int, decision_id: i
     return len(ids)
 
 
-def confirm_category(user_id: int, key: str, category_id: int) -> Optional[int]:
+def confirm_category(user_id: int, key: str, category_id: int, created: bool = False) -> Optional[int]:
     """Give every uncategorized charge from this merchant the category, now and
-    on every later import. Returns the action id, or None when nothing was left
-    to change."""
+    on every later import. `created` says the category was made for this
+    action, so Undo removes it too. Returns the action id, or None when nothing
+    was left to change."""
     tx_ids = _uncategorized_ids_by_key(user_id).get(key, set())
     if not tx_ids:
         return None
     decision_id = _save_decision(user_id, key, "category", category_id)
     _categorize(user_id, tx_ids, category_id, decision_id)
-    return record_action(user_id, "decision", {"decision_id": decision_id})
+    return record_action(user_id, "decision", {
+        "decision_id": decision_id, "kind": "category", "created_category_id": category_id if created else None,
+    })
 
 
-def set_charge(user_id: int, tx_id: int, choice: Choice) -> Optional[int]:
+def set_charge(user_id: int, tx_id: int, choice: Choice, created: bool = False) -> Optional[int]:
     """Set one charge by hand: a category, or "transfer". A hand-picked category
-    is never overwritten by a merchant decision or a rule. Returns the action
-    id, or None when the charge already reads that way."""
+    is never overwritten by a merchant decision or a rule. A card row is never
+    a transfer, so statements are untouched. Returns the action id, or None
+    when the charge already reads that way."""
     row = db.fetch_one(
-        "SELECT category_id, category_via, is_transfer, decision_id FROM imported_transactions "
-        "WHERE id = ? AND user_id = ?",
+        "SELECT category_id, category_via, is_transfer, decision_id, transfer_decision_id, account_id "
+        "FROM imported_transactions WHERE id = ? AND user_id = ?",
         [tx_id, user_id],
     )
     if not row:
         return None
-    before = {"tx_id": tx_id, "category_id": row[0], "category_via": row[1],
-              "is_transfer": bool(row[2]), "decision_id": row[3]}
+    before = {"tx_id": tx_id, "category_id": row[0], "category_via": row[1], "is_transfer": bool(row[2]),
+              "decision_id": row[3], "transfer_decision_id": row[4],
+              "created_category_id": int(choice) if created else None}
     if choice == "transfer":
+        if row[5] is not None and int(row[5]) in _card_ids(user_id):
+            raise ValueError("A card charge can't be a transfer")
         if before["is_transfer"]:
             return None
         db.execute(
@@ -170,7 +207,7 @@ def set_charge(user_id: int, tx_id: int, choice: Choice) -> Optional[int]:
 def _rows(user_id: int, where: str, params: List[Any]) -> List[Dict[str, Any]]:
     rows = db.query_all(
         f"""
-        SELECT id, account_id, tx_date, amount, is_transfer, decision_id,
+        SELECT id, account_id, tx_date, amount, is_transfer, transfer_decision_id,
                COALESCE(NULLIF(merchant, ''), description) AS merchant
         FROM imported_transactions
         WHERE user_id = ? AND account_id IS NOT NULL AND {where}
@@ -250,7 +287,7 @@ def _mark_transfers(user_id: int, tx_ids: Set[int], decision_id: int) -> int:
     ids = sorted(tx_ids)
     placeholders = ", ".join("?" for _ in ids)
     db.execute(
-        f"UPDATE imported_transactions SET is_transfer = TRUE, decision_id = ? "
+        f"UPDATE imported_transactions SET is_transfer = TRUE, transfer_decision_id = ? "
         f"WHERE user_id = ? AND id IN ({placeholders})",
         [decision_id, user_id, *ids],
     )
@@ -267,7 +304,7 @@ def _apply_transfer(user_id: int, key: str, decision_id: int, cards: Set[int]) -
     changed = _mark_transfers(
         user_id, {row["id"] for row in outflows if not row["is_transfer"]}, decision_id
     )
-    decided = [row for row in outflows if not row["is_transfer"] or row["decision_id"] == decision_id]
+    decided = [row for row in outflows if not row["is_transfer"] or row["transfer_decision_id"] == decision_id]
     arrivals = {
         arrival["id"]
         for arrival in _pair(decided, _inflows_near(user_id, decided)).values()
@@ -289,7 +326,7 @@ def confirm_transfer(user_id: int, key: str) -> Optional[int]:
         return None
     decision_id = _save_decision(user_id, key, "transfer", None)
     _apply_transfer(user_id, key, decision_id, cards)
-    return record_action(user_id, "decision", {"decision_id": decision_id})
+    return record_action(user_id, "decision", {"decision_id": decision_id, "kind": "transfer"})
 
 
 def load_decisions(user_id: int) -> List[Dict[str, Any]]:
@@ -327,6 +364,22 @@ TRANSFER_DISMISS_PREFIX = "transfer:"
 BUDGET_DISMISS_PREFIX = "budget:"
 
 
+def suggestion_added(user_id: int, key: str) -> bool:
+    """Whether a recurring suggestion was already turned into a recurring item."""
+    return bool(db.fetch_one(
+        "SELECT 1 FROM dismissed_suggestions WHERE user_id = ? AND suggestion_key = ? AND reason = 'added'",
+        [user_id, key],
+    ))
+
+
+def find_category_id(user_id: int, name: str) -> Optional[int]:
+    """The id of the user's category with this name, ignoring case."""
+    row = db.fetch_one(
+        "SELECT id FROM categories WHERE user_id = ? AND LOWER(name) = LOWER(?) LIMIT 1", [user_id, (name or "").strip()]
+    )
+    return int(row[0]) if row else None
+
+
 def dismiss(user_id: int, key: str) -> Optional[int]:
     """Reject a suggestion for good. Returns the action id, or None when it was
     already dismissed."""
@@ -347,7 +400,7 @@ def confirm_budget(user_id: int, category_id: int, monthly: float) -> Optional[i
     """Set a category's monthly budget. Returns the action id, or None when the
     category does not exist."""
     category = db.load_category_by_id(user_id, category_id)
-    if not category:
+    if not category or category["budget_amount"] == monthly:
         return None
     db.set_category_budget(user_id, category_id, monthly)
     return record_action(user_id, "budget", {"category_id": category_id, "before": category["budget_amount"]})
@@ -467,6 +520,7 @@ def _category_suggestions(user_id: int) -> Dict[str, int]:
 
 
 def _category_rows(user_id: int, parts: List[Dict[str, Any]], skip: Set[str]) -> List[Dict[str, Any]]:
+    cards = _card_ids(user_id)
     groups: Dict[str, Dict[int, Dict[str, Any]]] = {}
     for part in parts:
         if part["category_id"] is not None:
@@ -476,6 +530,7 @@ def _category_rows(user_id: int, parts: List[Dict[str, Any]], skip: Set[str]) ->
             continue
         charge = groups.setdefault(key, {}).setdefault(part["tx_id"], {
             "tx_id": part["tx_id"], "tx_date": part["tx_date"], "description": part["merchant"], "amount": 0.0,
+            "on_card": part["account_id"] is not None and int(part["account_id"]) in cards,
         })
         charge["amount"] = round(charge["amount"] + part["spent"], 2)
     suggestions = _category_suggestions(user_id)
@@ -483,7 +538,9 @@ def _category_rows(user_id: int, parts: List[Dict[str, Any]], skip: Set[str]) ->
     listed = []
     for key, charges in groups.items():
         total = round(sum(c["amount"] for c in charges.values()), 2)
-        if total <= 0.005:
+        # A merchant whose uncategorized rows net to a refund is listed too: the
+        # refund still needs a category.
+        if abs(total) <= 0.005:
             continue
         rows = sorted(charges.values(), key=lambda c: (c["tx_date"], c["tx_id"]))
         for charge in rows:
@@ -494,6 +551,7 @@ def _category_rows(user_id: int, parts: List[Dict[str, Any]], skip: Set[str]) ->
             "count": len(rows),
             "total": total,
             "suggested_category_id": suggestions.get(key),
+            "can_transfer": any(not c["on_card"] for c in rows),
             "charges": rows,
         })
     return sorted(listed, key=lambda r: r["total"], reverse=True)
@@ -526,9 +584,10 @@ def build_review(user_id: int, window_start: date, window_end: date) -> Dict[str
     parts = db.spending_parts(user_id, window_start, window_end)
     spending = round(sum(p["spent"] for p in parts), 2)
     uncategorized = round(sum(p["spent"] for p in parts if p["category_id"] is None), 2)
-    percent = round(100 * (spending - uncategorized) / spending) if spending > 0.005 else None
+    # Uncategorized refunds can push the raw share past 100; the meter reads 0..100.
+    percent = max(0, min(100, round(100 * (spending - uncategorized) / spending))) if spending > 0.005 else None
 
-    decided = {d["merchant_key"] for d in load_decisions(user_id)}
+    decided = {d["merchant_key"] for d in load_decisions(user_id) if d["kind"] == "transfer"}
     dismissed = db.load_dismissed_suggestion_keys(user_id)
     transfers = _transfer_rows(user_id, window_start, window_end, decided, dismissed)
     categories = _category_rows(user_id, parts, {row["key"] for row in transfers})

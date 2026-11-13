@@ -602,8 +602,11 @@ def init_db() -> None:
             """
         )
         # Review's per-merchant decisions (see review.py). kind is 'category' or
-        # 'transfer'. Rows a decision changed carry its id in
-        # imported_transactions.decision_id, so Undo can find every one of them.
+        # 'transfer'; a merchant can hold one of each (a card part categorized,
+        # a checking part a transfer). Rows a category decision changed carry
+        # its id in imported_transactions.decision_id, and rows a transfer
+        # decision marked carry it in transfer_decision_id, so Undo finds every
+        # one of them.
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS merchant_decisions (
@@ -613,7 +616,7 @@ def init_db() -> None:
                 kind TEXT NOT NULL,
                 category_id BIGINT,
                 created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                UNIQUE (user_id, merchant_key)
+                UNIQUE (user_id, merchant_key, kind)
             )
             """
         )
@@ -679,6 +682,8 @@ def init_db() -> None:
             conn.execute("ALTER TABLE import_account_links ADD COLUMN display_label TEXT")
         if not table_has_column(conn, "imported_transactions", "decision_id"):
             conn.execute("ALTER TABLE imported_transactions ADD COLUMN decision_id BIGINT")
+        if not table_has_column(conn, "imported_transactions", "transfer_decision_id"):
+            conn.execute("ALTER TABLE imported_transactions ADD COLUMN transfer_decision_id BIGINT")
         # Credentials. NULL password_hash means "not set yet", which puts the app
         # into first-run setup rather than letting anyone in.
         if not table_has_column(conn, "users", "password_hash"):

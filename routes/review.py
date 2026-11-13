@@ -1,7 +1,7 @@
 """The Review page and its actions. Every action lands back on its list with
 a message that carries an Undo."""
 
-from typing import Optional, Union
+from typing import Optional, Tuple, Union
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
@@ -12,6 +12,7 @@ from services import (
     create_category,
     load_accounts,
     load_categories,
+    load_imported_transaction_by_id,
     redirect_with_message,
     reset_dismissed_suggestions,
     resolve_forecast_window,
@@ -31,15 +32,20 @@ def _back(list_name: str, message: str, action_id: Optional[int]):
     return redirect_with_message(target, message, undo=action_id)
 
 
-def _choice(user_id: int, choice: str, new_category_name: str) -> Union[int, str]:
-    """A picker value: a category id, "transfer", or "new" (created here)."""
+def _choice(user_id: int, choice: str, new_category_name: str) -> Tuple[Union[int, str], bool]:
+    """A picker value as (category id or "transfer", created). "new" reuses a
+    category of that name, so a repeated submit doesn't fail, and otherwise
+    creates it. Call only once there is something to change."""
     if choice == "transfer":
-        return "transfer"
+        return "transfer", False
     if choice == "new":
-        return create_category(user_id, new_category_name)
+        existing = review.find_category_id(user_id, new_category_name)
+        if existing:
+            return existing, False
+        return create_category(user_id, new_category_name), True
     if not choice.strip():
         raise ValueError("Choose a category")
-    return int(choice)
+    return int(choice), False
 
 
 @router.get("/review", response_class=HTMLResponse)
@@ -68,14 +74,16 @@ def confirm_merchant(
     request: Request, user: CurrentUser,
     key: str = Form(...), choice: str = Form(""), new_category_name: str = Form(""), list: str = Form("categories"),
 ):
+    if choice != "transfer" and not review.has_uncategorized(user["id"], key):
+        return _back(list, "Confirmed", None)
     try:
-        picked = _choice(user["id"], choice, new_category_name)
+        picked, created = _choice(user["id"], choice, new_category_name)
     except ValueError as exc:
         return redirect_with_message(f"/review#{list}", str(exc), is_error=True)
     if picked == "transfer":
         action = review.confirm_transfer(user["id"], key)
     else:
-        action = review.confirm_category(user["id"], key, picked)
+        action = review.confirm_category(user["id"], key, picked, created=created)
     return _back(list, "Confirmed", action)
 
 
@@ -88,11 +96,14 @@ def dismiss_merchant(request: Request, user: CurrentUser, key: str = Form(...)):
 def set_charge(
     request: Request, user: CurrentUser, tx_id: int, choice: str = Form(""), new_category_name: str = Form(""),
 ):
+    if not load_imported_transaction_by_id(user["id"], tx_id):
+        return _back("categories", "Confirmed", None)
     try:
-        picked = _choice(user["id"], choice, new_category_name)
+        picked, created = _choice(user["id"], choice, new_category_name)
+        action = review.set_charge(user["id"], tx_id, picked, created=created)
     except ValueError as exc:
         return redirect_with_message("/review#categories", str(exc), is_error=True)
-    return _back("categories", "Confirmed", review.set_charge(user["id"], tx_id, picked))
+    return _back("categories", "Confirmed", action)
 
 
 @router.post("/review/budgets/confirm")

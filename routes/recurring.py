@@ -24,7 +24,7 @@ from services import (
     redirect_with_message,
     save_amount_override,
 )
-from review import record_action
+from review import record_action, suggestion_added as db_suggestion_added
 from web import CurrentUser, render
 
 router = APIRouter()
@@ -57,6 +57,8 @@ def create_recurring_item(
     next_path: str = Form("/budget"),
 ):
     redirect_target = next_path
+    if suggestion_key.strip() and db_suggestion_added(user["id"], suggestion_key.strip()):
+        return redirect_with_message(redirect_target, "Nothing left to change")
     try:
         cleaned_name = name.strip()
         if not cleaned_name:
