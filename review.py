@@ -317,3 +317,250 @@ def apply_review_decisions(user_id: int) -> int:
         elif decision["kind"] == "transfer":
             changed += _apply_transfer(user_id, decision["merchant_key"], int(decision["id"]), cards)
     return changed
+
+
+# --- Dismiss and budgets ----------------------------------------------------
+
+# Review's own dismissals share dismissed_suggestions with the recurring
+# detector, so one "Restore dismissed" brings every list's rows back.
+TRANSFER_DISMISS_PREFIX = "transfer:"
+BUDGET_DISMISS_PREFIX = "budget:"
+
+
+def dismiss(user_id: int, key: str) -> Optional[int]:
+    """Reject a suggestion for good. Returns the action id, or None when it was
+    already dismissed."""
+    if key in db.load_dismissed_suggestion_keys(user_id):
+        return None
+    db.dismiss_suggestion(user_id, key)
+    return record_action(user_id, "dismiss", {"key": key})
+
+
+def _undo_dismiss(user_id: int, payload: Dict[str, Any]) -> None:
+    db.execute(
+        "DELETE FROM dismissed_suggestions WHERE user_id = ? AND suggestion_key = ? AND reason = 'dismissed'",
+        [user_id, payload["key"]],
+    )
+
+
+def confirm_budget(user_id: int, category_id: int, monthly: float) -> Optional[int]:
+    """Set a category's monthly budget. Returns the action id, or None when the
+    category does not exist."""
+    category = db.load_category_by_id(user_id, category_id)
+    if not category:
+        return None
+    db.set_category_budget(user_id, category_id, monthly)
+    return record_action(user_id, "budget", {"category_id": category_id, "before": category["budget_amount"]})
+
+
+def _undo_budget(user_id: int, payload: Dict[str, Any]) -> None:
+    db.set_category_budget(user_id, int(payload["category_id"]), payload["before"])
+
+
+_UNDO.update({"dismiss": _undo_dismiss, "budget": _undo_budget})
+
+
+def suggested_budget(monthly: List[float]) -> Optional[float]:
+    """The median month, rounded up to the nearest 10. None when there is no
+    history or the median month had no spending."""
+    if not monthly:
+        return None
+    middle = db._median([float(m) for m in monthly])
+    if middle <= 0:
+        return None
+    return float(-(-middle // 10) * 10)
+
+
+# --- The four lists ---------------------------------------------------------
+
+
+def _mode(values: List[Any]) -> Any:
+    values = [v for v in values if v is not None]
+    return db._mode(values) if values else None
+
+
+def _recent_months(user_id: int, today: date) -> List[tuple]:
+    """Up to six complete calendar months before today, starting no earlier
+    than the month of the first imported row. Each is (first day, last day)."""
+    row = db.fetch_one("SELECT MIN(tx_date) FROM imported_transactions WHERE user_id = ?", [user_id])
+    first = db._as_date(row[0]) if row and row[0] else None
+    if first is None:
+        return []
+    months = []
+    end = today.replace(day=1) - timedelta(days=1)
+    while len(months) < 6:
+        start = end.replace(day=1)
+        if start < first.replace(day=1):
+            break
+        months.append((start, end))
+        end = start - timedelta(days=1)
+    return months
+
+
+def _monthly_by_category(user_id: int, today: date) -> Dict[int, List[float]]:
+    months = _recent_months(user_id, today)
+    if not months:
+        return {}
+    totals: Dict[int, List[float]] = {}
+    index = {start: i for i, (start, _end) in enumerate(months)}
+    for part in db.spending_parts(user_id, months[-1][0], months[0][1]):
+        if part["category_id"] is None:
+            continue
+        series = totals.setdefault(part["category_id"], [0.0] * len(months))
+        series[index[part["tx_date"].replace(day=1)]] += part["spent"]
+    return totals
+
+
+def _transfer_rows(user_id: int, window_start: date, window_end: date,
+                   decided: Set[str], dismissed: Set[str]) -> List[Dict[str, Any]]:
+    cards = _card_ids(user_id)
+    paired = paired_outflows(user_id, window_start, window_end)
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    for row in _rows(user_id, "NOT is_transfer AND amount < 0 AND tx_date >= ? AND tx_date <= ?",
+                     [window_start, window_end]):
+        if row["account_id"] not in cards:
+            groups.setdefault(merchant_key(row["merchant"]), []).append(row)
+    listed = []
+    for key, charges in groups.items():
+        matched = [c for c in charges if c["id"] in paired]
+        if key in decided or TRANSFER_DISMISS_PREFIX + key in dismissed or len(matched) * 2 < len(charges):
+            continue
+        listed.append({
+            "key": key,
+            "name": db._suggest_clean_name(_mode([c["merchant"] for c in charges])),
+            "count": len(charges),
+            "total": round(-sum(c["amount"] for c in charges), 2),
+            "arrived_in": _mode([paired[c["id"]]["account_name"] for c in matched]),
+            "charges": [{"tx_id": c["id"], "tx_date": c["tx_date"], "description": c["merchant"],
+                         "amount": c["amount"]} for c in charges],
+        })
+    return sorted(listed, key=lambda r: r["total"], reverse=True)
+
+
+def _category_suggestions(user_id: int) -> Dict[str, int]:
+    rows = db.fetch_all(
+        "SELECT COALESCE(NULLIF(merchant, ''), description), category_id FROM imported_transactions "
+        "WHERE user_id = ? AND category_id IS NOT NULL",
+        [user_id],
+    )
+    by_key: Dict[str, List[int]] = {}
+    for text, category_id in rows:
+        by_key.setdefault(merchant_key(text), []).append(int(category_id))
+    return {key: _mode(ids) for key, ids in by_key.items()}
+
+
+def _category_rows(user_id: int, parts: List[Dict[str, Any]], skip: Set[str]) -> List[Dict[str, Any]]:
+    groups: Dict[str, Dict[int, Dict[str, Any]]] = {}
+    for part in parts:
+        if part["category_id"] is not None:
+            continue
+        key = merchant_key(part["merchant"])
+        if key in skip:
+            continue
+        charge = groups.setdefault(key, {}).setdefault(part["tx_id"], {
+            "tx_id": part["tx_id"], "tx_date": part["tx_date"], "description": part["merchant"], "amount": 0.0,
+        })
+        charge["amount"] = round(charge["amount"] + part["spent"], 2)
+    suggestions = _category_suggestions(user_id)
+    splits = db.split_counts_by_transaction(user_id)
+    listed = []
+    for key, charges in groups.items():
+        total = round(sum(c["amount"] for c in charges.values()), 2)
+        if total <= 0.005:
+            continue
+        rows = sorted(charges.values(), key=lambda c: (c["tx_date"], c["tx_id"]))
+        for charge in rows:
+            charge["split_count"] = splits.get(charge["tx_id"], 0)
+        listed.append({
+            "key": key,
+            "name": db._suggest_clean_name(_mode([c["description"] for c in rows])),
+            "count": len(rows),
+            "total": total,
+            "suggested_category_id": suggestions.get(key),
+            "charges": rows,
+        })
+    return sorted(listed, key=lambda r: r["total"], reverse=True)
+
+
+def _budget_rows(user_id: int, window_start: date, window_end: date, dismissed: Set[str]) -> List[Dict[str, Any]]:
+    summary = db.build_budget_summary(user_id, window_start, window_end)
+    monthly = _monthly_by_category(user_id, date.today())
+    listed = []
+    for category in summary["categories"]:
+        category_id = category.get("id")
+        if (not category_id or category["has_target"] or category["actual"] <= 0.005
+                or f"{BUDGET_DISMISS_PREFIX}{category_id}" in dismissed):
+            continue
+        series = monthly.get(int(category_id), [])
+        listed.append({
+            "category_id": int(category_id),
+            "name": category["name"],
+            "color": category["color"],
+            "typical": round(db._median(series), 2) if series else None,
+            "suggested": suggested_budget(series),
+            "actual": category["actual"],
+        })
+    return sorted(listed, key=lambda r: r["actual"], reverse=True)
+
+
+def build_review(user_id: int, window_start: date, window_end: date) -> Dict[str, Any]:
+    """Everything Review shows for the date range: the meter and the four lists,
+    in working order, with no row in two lists."""
+    parts = db.spending_parts(user_id, window_start, window_end)
+    spending = round(sum(p["spent"] for p in parts), 2)
+    uncategorized = round(sum(p["spent"] for p in parts if p["category_id"] is None), 2)
+    percent = round(100 * (spending - uncategorized) / spending) if spending > 0.005 else None
+
+    decided = {d["merchant_key"] for d in load_decisions(user_id)}
+    dismissed = db.load_dismissed_suggestion_keys(user_id)
+    transfers = _transfer_rows(user_id, window_start, window_end, decided, dismissed)
+    categories = _category_rows(user_id, parts, {row["key"] for row in transfers})
+    budgets = _budget_rows(user_id, window_start, window_end, dismissed)
+    recurring = db.detect_recurring_suggestions(user_id)
+    return {
+        "meter": {"percent": percent, "spending": spending, "uncategorized": uncategorized},
+        "transfers": transfers,
+        "categories": categories,
+        "budgets": budgets,
+        "recurring": recurring,
+        "waiting": len(transfers) + len(categories) + len(budgets) + len(recurring),
+    }
+
+
+# --- Waiting count ----------------------------------------------------------
+
+_WAITING: Dict[int, tuple] = {}
+
+
+def _data_stamp(user_id: int) -> tuple:
+    """Cheap fingerprint of everything the lists depend on."""
+    return tuple(db.fetch_one(
+        """
+        SELECT
+          (SELECT COUNT(*) FROM imported_transactions WHERE user_id = ?),
+          (SELECT MAX(id) FROM imported_transactions WHERE user_id = ?),
+          (SELECT SUM(COALESCE(category_id, 0)) FROM imported_transactions WHERE user_id = ?),
+          (SELECT SUM(CAST(is_transfer AS INTEGER)) FROM imported_transactions WHERE user_id = ?),
+          (SELECT COUNT(*) FROM merchant_decisions WHERE user_id = ?),
+          (SELECT COUNT(*) FROM dismissed_suggestions WHERE user_id = ?),
+          (SELECT COUNT(*) FROM recurring_items WHERE user_id = ?),
+          (SELECT COUNT(*) FROM categories WHERE user_id = ?),
+          (SELECT SUM(budget_amount) FROM categories WHERE user_id = ?),
+          (SELECT COUNT(*) FROM transaction_splits WHERE user_id = ?),
+          (SELECT COUNT(*) FROM expected_reconciliations WHERE user_id = ?)
+        """,
+        [user_id] * 11,
+    ))
+
+
+def review_waiting_count(user_id: int) -> int:
+    """How many rows Review lists for the shared date range. Remembered until
+    the data or the range changes, since every page shows it."""
+    window_start, window_end, _invalid = db.resolve_forecast_window(user_id)
+    stamp = (_data_stamp(user_id), window_start, window_end)
+    cached = _WAITING.get(user_id)
+    if cached and cached[0] == stamp:
+        return cached[1]
+    count = build_review(user_id, window_start, window_end)["waiting"]
+    _WAITING[user_id] = (stamp, count)
+    return count
