@@ -7,8 +7,10 @@ import json
 import os
 import re
 import secrets
+import threading
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Iterator, List, Optional, Sequence
 from urllib.parse import quote_plus
 
 import duckdb
@@ -58,8 +60,41 @@ def _connection_config() -> Dict[str, Any]:
     return config
 
 
-def get_connection() -> duckdb.DuckDBPyConnection:
-    return duckdb.connect(DB_PATH, config=_connection_config())
+# One open database per file for the life of the process. Opening the file is
+# far slower than any query Metis runs, and every query used to open and close
+# it. Each `with get_connection() as conn:` block gets its own cursor on the
+# shared database and runs alone: DuckDB refuses two simultaneous writes to the
+# same row, and with queries this quick, taking turns costs nothing noticeable.
+# The lock is re-entrant, so a block may call code that opens another.
+_DATABASE: Dict[str, duckdb.DuckDBPyConnection] = {}
+_DATABASE_LOCK = threading.RLock()
+
+
+def _database() -> duckdb.DuckDBPyConnection:
+    database = _DATABASE.get(DB_PATH)
+    if database is None:
+        for path in list(_DATABASE):  # tests move DB_PATH between files
+            _DATABASE.pop(path).close()
+        database = _DATABASE[DB_PATH] = duckdb.connect(DB_PATH, config=_connection_config())
+    return database
+
+
+@contextmanager
+def get_connection() -> Iterator[duckdb.DuckDBPyConnection]:
+    with _DATABASE_LOCK:
+        cursor = _database().cursor()
+        try:
+            yield cursor
+        finally:
+            cursor.close()
+
+
+def close_database() -> None:
+    """Close the shared database, writing everything to the file. The next
+    query opens it again."""
+    with _DATABASE_LOCK:
+        for path in list(_DATABASE):
+            _DATABASE.pop(path).close()
 
 
 def table_has_column(conn: duckdb.DuckDBPyConnection, table_name: str, column_name: str) -> bool:
