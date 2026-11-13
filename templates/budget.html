@@ -9,7 +9,7 @@
   <div class="intro-badge-stack">
     <span class="stat-chip">Today {{ today_iso }}</span>
     {% if suggestions %}<span class="stat-chip success">{{ suggestions|length }} suggested</span>{% endif %}
-    <span class="stat-chip">{{ recurring_items|length }} recurring</span>
+    <span class="stat-chip">{{ recurring_items|selectattr("status", "equalto", "active")|list|length }} recurring</span>
     <span class="stat-chip">{{ one_time_items|length }} one-time</span>
   </div>
 </section>
@@ -271,7 +271,7 @@
     <p>Choose recurring for repeating items, or one-time for a single expected payment.</p>
   </div>
 
-  <div class="expected-type-toggle" role="tablist">
+  <div class="segmented" role="tablist">
     <button type="button" class="button-link active" data-mode="recurring" role="tab">Recurring</button>
     <button type="button" class="button-link" data-mode="one_time" role="tab">One-time</button>
   </div>
@@ -401,6 +401,11 @@
     <p>Repeating expected income and bills. Reconcile to mark occurrences paid.</p>
   </div>
   {% if recurring_items %}
+  <div class="segmented" role="tablist" aria-label="Show recurring items by status">
+    {% for status, label in [('active', 'Active'), ('completed', 'Completed'), ('paused', 'Paused'), ('all', 'All')] %}
+    <button type="button" class="button-link{{ ' active' if status == 'active' else '' }}" data-status-filter="{{ status }}" role="tab">{{ label }}</button>
+    {% endfor %}
+  </div>
   <div class="table-wrap">
     <table>
       <thead>
@@ -418,7 +423,7 @@
       </thead>
       <tbody>
         {% for item in recurring_items %}
-        <tr>
+        <tr data-status="{{ item.status }}">
           <td>{{ item.name }}</td>
           <td>
             {% if item.category_name %}
@@ -440,9 +445,7 @@
             {% endif %}
           </td>
           <td>
-            <span class="table-pill {{ 'success' if item.active else 'neutral' }}">
-              {{ 'Active' if item.active else 'Paused' }}
-            </span>
+            <span class="table-pill {{ 'success' if item.status == 'active' else 'neutral' }}">{{ item.status|capitalize }}</span>
           </td>
           <td class="row-action-cell">
             <div class="row-action-inline">
@@ -453,9 +456,11 @@
                 </summary>
                 <div class="row-action-dropdown">
                   <a href="{{ base_path() }}/recurring/{{ item.id }}/edit" class="row-action-item">Edit</a>
+                  {% if item.status != 'completed' %}
                   <form method="post" action="{{ base_path() }}/recurring/{{ item.id }}/toggle" class="row-action-item-form">
                     <button type="submit" class="row-action-item">{{ 'Pause' if item.active else 'Resume' }}</button>
                   </form>
+                  {% endif %}
                   <form method="post" action="{{ base_path() }}/recurring/{{ item.id }}/delete" class="row-action-item-form" onsubmit="return confirm('Delete this recurring item?')">
                     <button type="submit" class="row-action-item danger">Delete</button>
                   </form>
@@ -468,6 +473,7 @@
       </tbody>
     </table>
   </div>
+  <p class="empty-state hidden" id="recurring-filter-empty">Nothing here.</p>
   {% else %}
   <p class="empty-state">No recurring expected items yet.</p>
   {% endif %}
@@ -582,6 +588,23 @@
       forms.forEach((form) => form.classList.toggle('hidden', form.dataset.modeForm !== mode));
     }
     toggleButtons.forEach((btn) => btn.addEventListener('click', () => setMode(btn.dataset.mode)));
+
+    // Recurring status filter. Active is shown first.
+    const statusButtons = Array.from(document.querySelectorAll('[data-status-filter]'));
+    const statusRows = Array.from(document.querySelectorAll('tr[data-status]'));
+    const statusEmpty = document.getElementById('recurring-filter-empty');
+    function showStatus(status) {
+      let shown = 0;
+      statusButtons.forEach((btn) => btn.classList.toggle('active', btn.dataset.statusFilter === status));
+      statusRows.forEach((row) => {
+        const match = status === 'all' || row.dataset.status === status;
+        row.classList.toggle('hidden', !match);
+        if (match) { shown += 1; }
+      });
+      if (statusEmpty) { statusEmpty.classList.toggle('hidden', shown > 0); }
+    }
+    statusButtons.forEach((btn) => btn.addEventListener('click', () => showStatus(btn.dataset.statusFilter)));
+    if (statusButtons.length) { showStatus('active'); }
 
     // Conditional frequency fields for the recurring form.
     const frequencySelect = document.getElementById('frequency_type');
