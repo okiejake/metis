@@ -122,6 +122,31 @@
     return `${first.getFullYear()}s`;
   }
 
+
+  // ---- Preview: which view, and which months --------------------------------
+
+  // Months the range touches: a month counts if any day of the range is in it.
+  function monthsTouched(start, end) {
+    return (end.getFullYear() * 12 + end.getMonth()) - (start.getFullYear() * 12 + start.getMonth()) + 1;
+  }
+
+  // The view depends only on the months covered, never on the grain.
+  function previewView(count) {
+    if (count <= 3) return 'full';
+    if (count <= 24) return 'mini';
+    return 'years';
+  }
+
+  // Quarters the range touches, plus one before and one after, so January is
+  // always in column 1 of the mini view. Each row is [year, first month 1-12].
+  function quarterRows(start, end) {
+    const first = start.getFullYear() * 4 + Math.floor(start.getMonth() / 3) - 1;
+    const last = end.getFullYear() * 4 + Math.floor(end.getMonth() / 3) + 1;
+    const rows = [];
+    for (let q = first; q <= last; q += 1) rows.push([Math.floor(q / 4), (q % 4) * 3 + 1]);
+    return rows;
+  }
+
   const api = {
     GRAINS,
     RELATIVE_LIMITS,
@@ -132,6 +157,9 @@
     resolveRule,
     convertRule,
     stepLabel,
+    monthsTouched,
+    previewView,
+    quarterRows,
   };
 
   if (typeof module !== 'undefined' && module.exports) {
@@ -141,6 +169,119 @@
     return;
   }
   window.MetisDateRange = api;
+
+
+  // ---- Preview rendering ----------------------------------------------------
+
+  const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+  const MONTH_LETTERS = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
+
+  function sameDay(a, b) {
+    return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  }
+
+  function div(className, text) {
+    const node = document.createElement('div');
+    node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  // One month's day grid. `full` adds day numbers and the filled start/end days.
+  function monthBlock(year, monthIndex, start, end, today, opts) {
+    const block = div(`rp-month${opts.dim ? ' rp-dim' : ''}${opts.full ? '' : ' rp-small'}`);
+    const title = opts.full ? `${new Date(year, monthIndex, 1).toLocaleDateString('en-US', { month: 'long' })} ${year}` : `${MONTH_SHORT[monthIndex]} ${year}`;
+    block.appendChild(div('rp-title', title));
+    if (opts.full) {
+      const weekdays = div('rp-weekdays');
+      WEEKDAYS.forEach((letter) => weekdays.appendChild(div('', letter)));
+      block.appendChild(weekdays);
+    }
+    const grid = div('rp-days');
+    const lead = new Date(year, monthIndex, 1).getDay();
+    const days = monthEnd(year, monthIndex).getDate();
+    for (let i = 0; i < lead; i += 1) grid.appendChild(div('rp-day rp-blank'));
+    for (let dayNumber = 1; dayNumber <= days; dayNumber += 1) {
+      const d = new Date(year, monthIndex, dayNumber);
+      let className = 'rp-day';
+      if (d >= start && d <= end) {
+        className += opts.full && (sameDay(d, start) || sameDay(d, end)) ? ' rp-edge' : ' rp-in';
+      }
+      if (sameDay(d, today)) className += ' rp-today';
+      grid.appendChild(div(className, opts.full ? String(dayNumber) : undefined));
+    }
+    block.appendChild(grid);
+    block.style.setProperty('--rp-cell', `${opts.cell}px`);
+    return block;
+  }
+
+  function setFade(container, fade) {
+    const mask = fade
+      ? `linear-gradient(to bottom, transparent 0, #000 ${fade}px, #000 calc(100% - ${fade}px), transparent 100%)`
+      : '';
+    container.style.maskImage = mask;
+    container.style.webkitMaskImage = mask;
+  }
+
+  function renderPreview(container, start, end, today) {
+    if (!container) return;
+    const H = container.clientHeight;
+    const count = monthsTouched(start, end);
+    const view = previewView(count);
+    const content = div(`rp-content rp-${view}`);
+
+    if (view === 'full') {
+      // Range months take ~80% of H; the month before and after peek in, faded.
+      const monthH = Math.min(230, (H * 0.8) / count);
+      const cell = Math.max(10, Math.floor((monthH - 54) / 6));
+      for (let i = -1; i <= count; i += 1) {
+        const first = new Date(start.getFullYear(), start.getMonth() + i, 1);
+        content.appendChild(monthBlock(first.getFullYear(), first.getMonth(), start, end, today, {
+          full: true, dim: i < 0 || i >= count, cell,
+        }));
+      }
+      setFade(container, H * 0.12);
+    } else if (view === 'mini') {
+      // Range rows plus half a neighbour row at each end fill H.
+      const rows = quarterRows(start, end);
+      const rowH = H / (rows.length - 2 + 1);
+      const gap = Math.max(6, rowH * 0.12);
+      const cell = Math.max(3, Math.floor((rowH - gap - 22) / 6));
+      const firstShown = new Date(start.getFullYear(), start.getMonth(), 1);
+      content.style.rowGap = `${gap}px`;
+      rows.forEach(([year, firstMonth], index) => {
+        for (let k = 0; k < 3; k += 1) {
+          const monthIndex = firstMonth - 1 + k;
+          const neighbour = index === 0 || index === rows.length - 1;
+          const outside = new Date(year, monthIndex, 1) < firstShown || new Date(year, monthIndex, 1) > end;
+          content.appendChild(monthBlock(year, monthIndex, start, end, today, { full: false, dim: neighbour || outside, cell }));
+        }
+      });
+      setFade(container, rowH * 0.5);
+    } else {
+      // One row per year, a block per month; rows share H.
+      const years = end.getFullYear() - start.getFullYear() + 1;
+      const gap = years > 20 ? 2 : 4;
+      const rowH = Math.min(28, (H - gap * (years - 1)) / years);
+      content.style.setProperty('--rp-row', `${rowH}px`);
+      content.style.rowGap = `${gap}px`;
+      for (let year = start.getFullYear(); year <= end.getFullYear(); year += 1) {
+        const row = div('rp-year');
+        row.appendChild(div('rp-year-label', String(year)));
+        for (let m = 0; m < 12; m += 1) {
+          let className = 'rp-block';
+          if (new Date(year, m, 1) <= end && monthEnd(year, m) >= start) className += ' rp-in';
+          if (year === today.getFullYear() && m === today.getMonth()) className += ' rp-today';
+          row.appendChild(div(className, rowH >= 14 ? MONTH_LETTERS[m] : undefined));
+        }
+        content.appendChild(row);
+      }
+      setFade(container, 0);
+    }
+    container.replaceChildren(content);
+  }
+
+  api.renderPreview = renderPreview;
 
   // ---- The popup ----------------------------------------------------------
 

@@ -32,6 +32,7 @@
   --danger-soft: color-mix(in srgb, var(--steel-blue) 14%, var(--platinum));
   --warning: color-mix(in srgb, var(--steel-blue) 70%, var(--green));
   --warning-soft: color-mix(in srgb, var(--steel-blue) 12%, var(--platinum));
+  --today: #e8890c;
 
   --shadow-lg: 0 20px 40px color-mix(in srgb, var(--gunmetal) 16%, transparent), 0 3px 8px color-mix(in srgb, var(--gunmetal) 12%, transparent);
   --shadow-md: 0 12px 24px color-mix(in srgb, var(--gunmetal) 14%, transparent), 0 2px 5px color-mix(in srgb, var(--gunmetal) 10%, transparent);
@@ -282,6 +283,145 @@ body.is-ready .container > *:nth-child(4) {
   position: relative;
   min-height: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 0 1rem;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* The preview is flat: the data, not the frame. */
+.rp-content {
+  width: 100%;
+}
+
+.rp-full {
+  display: grid;
+  gap: 0.9rem;
+  max-width: 300px;
+}
+
+.rp-mini {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  column-gap: 1.1rem;
+  max-width: 560px;
+}
+
+.rp-month.rp-dim {
+  opacity: 0.3;
+}
+
+.rp-title {
+  margin-bottom: 0.25rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.rp-small .rp-title {
+  margin-bottom: 0.15rem;
+  font-size: 0.66rem;
+  font-weight: 600;
+}
+
+.rp-weekdays,
+.rp-days {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.rp-weekdays div {
+  font-size: 0.6rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+.rp-day {
+  height: var(--rp-cell);
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  font-size: min(0.72rem, calc(var(--rp-cell) * 0.55));
+  color: var(--text);
+}
+
+.rp-small .rp-days {
+  gap: 1.5px;
+}
+
+.rp-small .rp-day {
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--line) 70%, transparent);
+}
+
+.rp-day.rp-blank {
+  background: none;
+}
+
+.rp-day.rp-in {
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
+}
+
+.rp-small .rp-day.rp-in {
+  background: color-mix(in srgb, var(--primary) 60%, transparent);
+}
+
+.rp-day.rp-edge {
+  background: var(--primary);
+  color: var(--on-primary);
+  font-weight: 700;
+}
+
+.rp-day.rp-today {
+  box-shadow: inset 0 0 0 2px var(--today);
+}
+
+.rp-small .rp-day.rp-today {
+  background: var(--today);
+  box-shadow: none;
+}
+
+.rp-years {
+  display: grid;
+  gap: 4px;
+}
+
+.rp-year {
+  display: grid;
+  grid-template-columns: 2.6rem repeat(12, 1fr);
+  column-gap: 3px;
+  align-items: center;
+  height: var(--rp-row);
+}
+
+.rp-year-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.rp-block {
+  height: max(2px, calc(var(--rp-row) - 2px));
+  display: grid;
+  place-items: center;
+  border-radius: 3px;
+  font-size: 0.55rem;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--line) 70%, transparent);
+}
+
+.rp-block.rp-in {
+  background: color-mix(in srgb, var(--primary) 60%, transparent);
+  color: var(--on-primary);
+}
+
+.rp-block.rp-today {
+  background: var(--today);
+  color: var(--on-primary);
 }
 
 .brand-kicker {

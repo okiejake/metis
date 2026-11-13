@@ -46,6 +46,19 @@ check('stepLabel year', dr.stepLabel('year', 1, today), '2027');
 check('stepLabel day', dr.stepLabel('day', -3, today), 'Nov 10, 2026');
 check('formatRange', dr.formatRange(day(2026, 1, 1), day(2026, 12, 31)), 'Jan 1, 2026 – Dec 31, 2026');
 
+check('monthsTouched 3', dr.monthsTouched(day(2026, 11, 10), day(2027, 1, 20)), 3);
+check('monthsTouched 12', dr.monthsTouched(day(2026, 1, 1), day(2026, 12, 31)), 12);
+check('monthsTouched 24', dr.monthsTouched(day(2026, 8, 1), day(2028, 7, 31)), 24);
+check('previewView 3', dr.previewView(3), 'full');
+check('previewView 4', dr.previewView(4), 'mini');
+check('previewView 24', dr.previewView(24), 'mini');
+check('previewView 25', dr.previewView(25), 'years');
+check(
+  'quarterRows',
+  dr.quarterRows(day(2026, 8, 1), day(2027, 7, 31)),
+  [[2026, 4], [2026, 7], [2026, 10], [2027, 1], [2027, 4], [2027, 7], [2027, 10]],
+);
+
 if (failures) {
   process.exit(1);
 }
