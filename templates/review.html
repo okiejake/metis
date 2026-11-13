@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% import "_parts.html" as parts %}
+{% block content %}
+{% set r = review %}
+
+{% macro restore() -%}
+{% if dismissed_count %}
+<form method="post" action="{{ base_path() }}/review/restore" class="inline-form review-restore">
+  <button type="submit" class="button-link">Restore dismissed ({{ dismissed_count }})</button>
+</form>
+{% endif %}
+{%- endmacro %}
+
+{% macro list_head(title, rows, total) -%}
+<div class="panel-head review-list-head">
+  <h2>{{ title }}</h2>
+  <p class="review-list-figures">{{ rows|length }} · ${{ total|currency }}</p>
+</div>
+{%- endmacro %}
+
+{% if r.waiting == 0 %}
+<section class="panel">
+  <p class="empty-state">Nothing to review.</p>
+  {{ restore() }}
+</section>
+{% else %}
+
+{% set totals = {
+  'transfers': r.transfers|sum(attribute='total'),
+  'categories': r.categories|sum(attribute='total'),
+  'budgets': r.budgets|sum(attribute='actual'),
+  'recurring': r.recurring|sum(attribute='amount'),
+} %}
+{% set titles = [('transfers', 'Transfers'), ('categories', 'Categories'), ('budgets', 'Budgets'), ('recurring', 'Recurring')] %}
+
+<section class="panel review-summary">
+  {% if r.meter.percent is not none %}
+  <div class="review-meter">
+    <p class="review-meter-label">
+      <strong>Categorized {{ r.meter.percent }}%</strong>
+      <span class="card-note">${{ r.meter.uncategorized|currency }} uncategorized</span>
+    </p>
+    {{ parts.bar(r.meter.percent) }}
+  </div>
+  {% endif %}
+  <div class="summary-grid compact-grid">
+    {% for name, title in titles %}{% if r[name] %}
+    <a class="card compact-card review-tile" href="#{{ name }}">
+      <h3>{{ title }}</h3>
+      <p class="amount-value">${{ totals[name]|currency }}</p>
+      <p class="card-note">{{ r[name]|length }}</p>
+    </a>
+    {% endif %}{% endfor %}
+  </div>
+</section>
+
+{% if r.transfers %}
+<section class="panel" id="transfers">
+  {{ list_head('Transfers', r.transfers, totals.transfers) }}
+  <ol class="review-list">
+    {% for row in r.transfers %}
+    {% call parts.review_row(row.name, row.count ~ ' · $' ~ row.total|currency ~ (' · to ' ~ row.arrived_in if row.arrived_in else ''), row.key) %}
+    <form method="post" action="{{ base_path() }}/review/merchants/confirm" class="inline-form review-form">
+      <input type="hidden" name="key" value="{{ row.key }}" />
+      <input type="hidden" name="list" value="transfers" />
+      <input type="hidden" name="choice" value="transfer" />
+      <button type="submit" class="button-link">Confirm</button>
+    </form>
+    <form method="post" action="{{ base_path() }}/review/merchants/dismiss" class="inline-form">
+      <input type="hidden" name="key" value="{{ row.key }}" />
+      <button type="submit" class="button-link">Dismiss</button>
+    </form>
+    {% endcall %}
+    {% endfor %}
+  </ol>
+</section>
+{% endif %}
+
+{% if r.categories %}
+<section class="panel" id="categories">
+  {{ list_head('Categories', r.categories, totals.categories) }}
+  <ol class="review-list">
+    {% for row in r.categories %}
+    {% call parts.review_row(row.name, row.count ~ ' · $' ~ row.total|currency, row.key) %}
+    <form method="post" action="{{ base_path() }}/review/merchants/confirm" class="inline-form review-form">
+      <input type="hidden" name="key" value="{{ row.key }}" />
+      <input type="hidden" name="list" value="categories" />
+      {{ parts.category_picker('choice', categories, row.suggested_category_id, extras=True) }}
+      <button type="submit" class="button-link">Confirm</button>
+    </form>
+    <button type="button" class="card-expand-toggle js-review-toggle" data-target="charges-{{ loop.index }}"
+            aria-expanded="false" aria-label="Show {{ row.name }}'s charges">›</button>
+    <ul class="review-charges hidden" id="charges-{{ loop.index }}">
+      {% for c in row.charges %}
+      <li>
+        <span class="review-charge-facts">{{ c.tx_date }} · ${{ c.amount|currency }}{{ ' · split' if c.split_count else '' }}</span>
+        <form method="post" action="{{ base_path() }}/review/charges/{{ c.tx_id }}" class="inline-form review-form">
+          {{ parts.category_picker('choice', categories, None, extras=True) }}
+          <button type="submit" class="button-link">Confirm</button>
+        </form>
+        <a class="button-link" href="{{ base_path() }}/transactions/{{ c.tx_id }}/split?next=/review%23categories">Split</a>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endcall %}
+    {% endfor %}
+  </ol>
+</section>
+{% endif %}
+
+{% if r.budgets %}
+<section class="panel" id="budgets">
+  {{ list_head('Budgets', r.budgets, totals.budgets) }}
+  <ol class="review-list">
+    {% for row in r.budgets %}
+    {% call parts.review_row(row.name, ('$' ~ row.typical|currency ~ ' a month') if row.typical is not none else ('$' ~ row.actual|currency), 'budget-' ~ row.category_id) %}
+    <form method="post" action="{{ base_path() }}/review/budgets/confirm" class="inline-form review-form">
+      <input type="hidden" name="category_id" value="{{ row.category_id }}" />
+      <input type="number" name="amount" step="0.01" min="0" required aria-label="Monthly budget for {{ row.name }}"
+             value="{{ '%.2f'|format(row.suggested) if row.suggested is not none else '' }}" />
+      <button type="submit" class="button-link">Confirm</button>
+    </form>
+    <form method="post" action="{{ base_path() }}/review/budgets/dismiss" class="inline-form">
+      <input type="hidden" name="category_id" value="{{ row.category_id }}" />
+      <button type="submit" class="button-link">Dismiss</button>
+    </form>
+    {% endcall %}
+    {% endfor %}
+  </ol>
+</section>
+{% endif %}
+
+{% if r.recurring %}
+<section class="panel" id="recurring">
+  {{ list_head('Recurring', r.recurring, totals.recurring) }}
+  <ol class="review-list">
+    {% for s in r.recurring %}
+    {% call parts.review_row(s.name, s.frequency_label ~ ' · $' ~ s.amount|currency, s.key) %}
+    <form method="post" action="{{ base_path() }}/recurring" class="inline-form review-form">
+      <input type="hidden" name="next_path" value="/review#recurring" />
+      <button type="submit" class="button-link">Confirm</button>
+      <button type="button" class="card-expand-toggle js-review-toggle" data-target="recurring-{{ loop.index }}"
+              aria-expanded="false" aria-label="Change {{ s.name }} before confirming">›</button>
+      <div class="review-fields hidden" id="recurring-{{ loop.index }}">
+        {{ parts.recurring_fields(s, accounts, categories) }}
+      </div>
+    </form>
+    <form method="post" action="{{ base_path() }}/review/recurring/dismiss" class="inline-form">
+      <input type="hidden" name="suggestion_key" value="{{ s.key }}" />
+      <button type="submit" class="button-link">Dismiss</button>
+    </form>
+    {% endcall %}
+    {% endfor %}
+  </ol>
+</section>
+{% endif %}
+
+{{ restore() }}
+{% endif %}
+
+<script>
+  (() => {
+    // Expand a row's detail (a merchant's charges, a suggestion's fields).
+    document.querySelectorAll('.js-review-toggle').forEach((button) => {
+      button.addEventListener('click', () => {
+        const target = document.getElementById(button.dataset.target);
+        if (!target) { return; }
+        const showing = target.classList.toggle('hidden') === false;
+        button.setAttribute('aria-expanded', String(showing));
+      });
+    });
+
+    // "New category" in a picker reveals its name field.
+    document.querySelectorAll('[data-category-picker]').forEach((picker) => {
+      const name = picker.parentElement.querySelector('[data-new-category]');
+      if (!name) { return; }
+      const sync = () => {
+        const adding = picker.value === 'new';
+        name.classList.toggle('hidden', !adding);
+        name.required = adding;
+        if (adding) { name.focus(); }
+      };
+      picker.addEventListener('change', sync);
+    });
+  })();
+</script>
+{% endblock %}

@@ -22,6 +22,7 @@
   </div>
 
   <form method="post" action="{{ base_path() }}/transactions/{{ transaction.id }}/split">
+    {% if next_path %}<input type="hidden" name="next" value="{{ next_path }}" />{% endif %}
     <div class="table-wrap">
       <table class="split-table">
         <thead>
@@ -77,6 +78,7 @@
 
   {% if splits %}
   <form method="post" action="{{ base_path() }}/transactions/{{ transaction.id }}/split/clear" class="inline-form">
+    {% if next_path %}<input type="hidden" name="next" value="{{ next_path }}" />{% endif %}
     <button type="submit" class="button-link">Remove all parts</button>
   </form>
   {% endif %}

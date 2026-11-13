@@ -141,7 +141,15 @@
 
     <main class="container">
       {% if message %}
-      <div class="flash {{ 'error' if is_error else 'success' }}">{{ message }}</div>
+      {% set undo_id = request.query_params.get('undo', '')|int(0) %}
+      <div class="flash {{ 'error' if is_error else 'success' }}">
+        {{ message }}
+        {% if undo_id and not is_error %}
+        <form method="post" action="{{ base_path() }}/review/undo/{{ undo_id }}" class="inline-form flash-undo">
+          <button type="submit" class="button-link">Undo</button>
+        </form>
+        {% endif %}
+      </div>
       {% endif %}
 
       {% block content %}{% endblock %}

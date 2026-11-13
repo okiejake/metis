@@ -1154,10 +1154,18 @@ def parse_form_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def redirect_with_message(path: str, message: str, is_error: bool = False) -> RedirectResponse:
-    path = resolve_safe_redirect_target(path)
+def redirect_with_message(
+    path: str, message: str, is_error: bool = False, undo: Optional[int] = None
+) -> RedirectResponse:
+    """Redirect within this site with a message, and an Undo when an action id
+    is given. A #fragment stays at the end, so the page opens at that place."""
+    path, has_fragment, fragment = resolve_safe_redirect_target(path).partition("#")
     separator = "&" if "?" in path else "?"
     url = f"{path}{separator}msg={quote_plus(message)}&err={1 if is_error else 0}"
+    if undo is not None:
+        url += f"&undo={int(undo)}"
+    if has_fragment:
+        url += f"#{fragment}"
     return RedirectResponse(url=url, status_code=303)
 
 

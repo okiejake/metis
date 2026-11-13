@@ -14,6 +14,7 @@ from routes.manual import router as manual_router
 from routes.overview import router as overview_router
 from routes.auth import router as auth_router
 from routes.recurring import router as recurring_router
+from routes.review import router as review_router
 from routes.splits import router as splits_router
 from routes.statements import router as statements_router
 from services import (
@@ -87,6 +88,7 @@ app.include_router(expected_router)
 app.include_router(accounts_router)
 app.include_router(splits_router)
 app.include_router(statements_router)
+app.include_router(review_router)
 
 
 if __name__ == "__main__":

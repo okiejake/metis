@@ -357,7 +357,24 @@ def _undo_budget(user_id: int, payload: Dict[str, Any]) -> None:
     db.set_category_budget(user_id, int(payload["category_id"]), payload["before"])
 
 
-_UNDO.update({"dismiss": _undo_dismiss, "budget": _undo_budget})
+def _undo_recurring(user_id: int, payload: Dict[str, Any]) -> None:
+    """Remove a recurring item added from a suggestion, so it is suggested again."""
+    item_id = int(payload["item_id"])
+    with db.get_connection() as conn:
+        conn.execute("DELETE FROM amount_overrides WHERE recurring_item_id = ?", [item_id])
+        for table in ("expected_match_rules", "expected_reconciliations"):
+            conn.execute(
+                f"DELETE FROM {table} WHERE user_id = ? AND source_type = 'recurring' AND source_id = ?",
+                [user_id, item_id],
+            )
+        conn.execute("DELETE FROM recurring_items WHERE id = ? AND user_id = ?", [item_id, user_id])
+        conn.execute(
+            "DELETE FROM dismissed_suggestions WHERE user_id = ? AND suggestion_key = ? AND reason = 'added'",
+            [user_id, payload["suggestion_key"]],
+        )
+
+
+_UNDO.update({"dismiss": _undo_dismiss, "budget": _undo_budget, "recurring": _undo_recurring})
 
 
 def suggested_budget(monthly: List[float]) -> Optional[float]:

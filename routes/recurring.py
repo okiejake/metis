@@ -24,6 +24,7 @@ from services import (
     redirect_with_message,
     save_amount_override,
 )
+from review import record_action
 from web import CurrentUser, render
 
 router = APIRouter()
@@ -53,8 +54,9 @@ def create_recurring_item(
     semimonthly_day1: str = Form("1"),
     semimonthly_day2: str = Form("15"),
     suggestion_key: str = Form(""),
+    next_path: str = Form("/budget"),
 ):
-    redirect_target = "/budget"
+    redirect_target = next_path
     try:
         cleaned_name = name.strip()
         if not cleaned_name:
@@ -81,7 +83,7 @@ def create_recurring_item(
         parsed_account_id = parse_optional_account_id(user["id"], account_id)
 
         with get_connection() as conn:
-            conn.execute(
+            new_item_id = conn.execute(
                 """
                 INSERT INTO recurring_items (
                     name, kind, amount, start_date, end_date, frequency_type,
@@ -89,6 +91,7 @@ def create_recurring_item(
                     category_id, account_id, user_id, active
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)
+                RETURNING id
                 """,
                 [
                     cleaned_name,
@@ -105,17 +108,19 @@ def create_recurring_item(
                     parsed_account_id,
                     user["id"],
                 ],
-            )
+            ).fetchone()[0]
     except ValueError as exc:
         return redirect_with_message(redirect_target, str(exc), is_error=True)
 
     if suggestion_key.strip():
-        # Remember the confirmed suggestion so it stops being suggested.
+        # Remember the confirmed suggestion so it stops being suggested, and
+        # record it so the message can offer Undo.
         dismiss_suggestion(user["id"], suggestion_key, reason="added")
-        return redirect_with_message(
-            "/budget", f"Added recurring item “{cleaned_name}” from suggestion"
+        action = record_action(
+            user["id"], "recurring", {"item_id": new_item_id, "suggestion_key": suggestion_key.strip()}
         )
-    return redirect_with_message("/budget", "Recurring item added")
+        return redirect_with_message(redirect_target, f"Added recurring item “{cleaned_name}”", undo=action)
+    return redirect_with_message(redirect_target, "Recurring item added")
 
 
 @router.get("/recurring/{item_id}/edit", response_class=HTMLResponse)
