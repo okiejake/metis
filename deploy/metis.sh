@@ -17,6 +17,8 @@ PROD_PORT=${PROD_PORT:-8101}
 QA_PORT=${QA_PORT:-8102}
 KEEP_BACKUPS=${KEEP_BACKUPS:-14}
 DB=finance.duckdb
+# Synology's Docker refuses to start a container whose data folder is missing.
+mkdir -p prod qa
 
 compose() { "$DOCKER" compose --profile qa "$@"; }
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*"; }
