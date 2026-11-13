@@ -18,6 +18,7 @@ from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
 
 from base_path import configured_base_path
+from date_range import DEFAULT_RULE, RangeRule, resolve_rule, rule_from_saved, rule_to_saved
 from merchants import legacy_merchant_key, merchant_key
 
 DB_PATH = os.getenv("FINANCE_DB_PATH", "finance.duckdb")
@@ -28,7 +29,6 @@ HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 FORECAST_WINDOW_SETTINGS_KEY = "forecast_window"
 FORECAST_WINDOW_FALLBACK_START_KEY = "ledger_window_start"
 FORECAST_WINDOW_FALLBACK_END_KEY = "ledger_window_end"
-FORECAST_WINDOW_DEFAULT_DAYS = 180
 DEFAULT_USER_SLUG = "personal"
 DEFAULT_USER_DISPLAY_NAME = "Personal"
 USER_SLUG_COOKIE = "metis_user"
@@ -1343,54 +1343,59 @@ def parse_optional_iso_date(value: Any) -> Optional[date]:
         return None
 
 
-def load_saved_forecast_window(user_id: int) -> tuple[Optional[date], Optional[date]]:
-    object_value = get_setting_value(user_id, FORECAST_WINDOW_SETTINGS_KEY)
-    if object_value:
+def load_range_rule(user_id: int) -> RangeRule:
+    """The saved date range rule. An older two-date value reads as day/absolute,
+    the oldest per-key dates likewise, and anything unreadable as the default."""
+    raw = get_setting_value(user_id, FORECAST_WINDOW_SETTINGS_KEY)
+    if raw:
         try:
-            parsed = json.loads(object_value)
+            rule = rule_from_saved(json.loads(raw))
         except json.JSONDecodeError:
-            parsed = None
-        if isinstance(parsed, dict):
-            saved_start = parse_optional_iso_date(parsed.get("start"))
-            saved_end = parse_optional_iso_date(parsed.get("end"))
-            if saved_start or saved_end:
-                return saved_start, saved_end
+            rule = None
+        if rule:
+            return rule
+    legacy = rule_from_saved({
+        "start": get_setting_value(user_id, FORECAST_WINDOW_FALLBACK_START_KEY),
+        "end": get_setting_value(user_id, FORECAST_WINDOW_FALLBACK_END_KEY),
+    })
+    return legacy or DEFAULT_RULE
 
-    # Backward compatibility for prior per-ledger keys.
-    fallback_start = parse_optional_iso_date(get_setting_value(user_id, FORECAST_WINDOW_FALLBACK_START_KEY))
-    fallback_end = parse_optional_iso_date(get_setting_value(user_id, FORECAST_WINDOW_FALLBACK_END_KEY))
-    return fallback_start, fallback_end
+
+def save_range_rule(user_id: int, rule: RangeRule) -> None:
+    set_setting_value(user_id, FORECAST_WINDOW_SETTINGS_KEY, json.dumps(rule_to_saved(rule)))
 
 
 def save_forecast_window(user_id: int, window_start: date, window_end: date) -> None:
-    set_setting_value(
-        user_id,
-        FORECAST_WINDOW_SETTINGS_KEY,
-        json.dumps({"start": window_start.isoformat(), "end": window_end.isoformat()}),
-    )
+    """Save two fixed dates as a day/absolute rule."""
+    save_range_rule(user_id, RangeRule("day", "absolute", window_start.isoformat(), window_end.isoformat()))
 
 
-def resolve_forecast_window(user_id: int, start: str = "", end: str = "") -> tuple[date, date, bool]:
-    today = date.today()
-    saved_start, saved_end = load_saved_forecast_window(user_id)
-    # Blend-friendly default: recent past → near future so actuals + forecast both show.
-    default_start = saved_start or (today - timedelta(days=90))
-    default_end = saved_end or (default_start + timedelta(days=FORECAST_WINDOW_DEFAULT_DAYS))
-
+def resolve_forecast_window(
+    user_id: int, start: str = "", end: str = "", today: Optional[date] = None
+) -> tuple[date, date, bool]:
+    """The range a page shows: the saved rule resolved for today, with any
+    ?start=/?end= from a link taking over that side for this view only. Link
+    dates are never saved. The flag is True when a link date didn't parse."""
+    saved_start, saved_end = resolve_rule(load_range_rule(user_id), today or date.today())
     invalid_filter = False
     try:
-        window_start = parse_iso_date(start) if start else default_start
-        window_end = parse_iso_date(end) if end else default_end
+        window_start = parse_iso_date(start) if start else saved_start
+        window_end = parse_iso_date(end) if end else saved_end
     except ValueError:
-        window_start = default_start
-        window_end = default_end
+        window_start, window_end = saved_start, saved_end
         invalid_filter = True
 
     if window_end < window_start:
         window_start, window_end = window_end, window_start
-
-    save_forecast_window(user_id, window_start, window_end)
     return window_start, window_end, invalid_filter
+
+
+def range_first_year(user_id: int, today: date) -> int:
+    """The first year the picker's dropdowns offer: the earliest transaction's
+    year, or ten years back if that is earlier."""
+    row = fetch_one("SELECT MIN(tx_date) FROM imported_transactions WHERE user_id = ?", [user_id])
+    earliest = row[0].year if row and row[0] else today.year
+    return min(earliest, today.year - 10)
 
 
 def load_categories(user_id: int) -> List[Dict[str, Any]]:

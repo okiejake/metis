@@ -86,8 +86,6 @@ def budget_page(request: Request, user: CurrentUser, start: str = "", end: str =
         today_iso=date.today().isoformat(),
         start=window_start.isoformat(),
         end=window_end.isoformat(),
-        show_forecast_window_form=True,
-        window_form_action="/budget",
     )
 
 

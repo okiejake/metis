@@ -1,5 +1,6 @@
-"""Dashboard, Ledger and Budget share one saved date range: setting it on any of
-them is what the others open on next.
+"""Dashboard, Ledger, Budget and Review share one saved date range: what is saved
+is what each of them opens on. A link carrying ?start=&end= shows those dates on
+that view only and never replaces the saved range.
 
 All data here is synthetic.
 """
@@ -8,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app as app_module
+from date_range import RangeRule
 from services import SESSION_COOKIE
 
 
@@ -21,18 +23,20 @@ def client(db, user_id):
         yield test_client
 
 
-@pytest.mark.parametrize(
-    "set_on, read_on",
-    [
-        ("/dashboard", "/budget"),
-        ("/budget", "/dashboard"),
-        ("/budget", "/ledger"),
-    ],
-)
-def test_date_range_set_on_one_page_carries_to_the_next(client, set_on, read_on):
-    client.get(f"{set_on}?start=2026-02-01&end=2026-03-31")
+@pytest.mark.parametrize("read_on", ["/dashboard", "/ledger", "/budget", "/review"])
+def test_every_page_opens_on_the_saved_range(client, db, user_id, read_on):
+    db.save_range_rule(user_id, RangeRule("day", "absolute", "2026-02-01", "2026-03-31"))
 
     response = client.get(read_on)
 
     assert response.status_code == 200
     assert (response.context["start"], response.context["end"]) == ("2026-02-01", "2026-03-31")
+
+
+def test_a_start_end_link_shows_that_range_without_saving_it(client, db, user_id):
+    db.save_range_rule(user_id, RangeRule("month", "relative", -3, 3))
+
+    response = client.get("/ledger?start=2026-02-01&end=2026-03-31")
+
+    assert (response.context["start"], response.context["end"]) == ("2026-02-01", "2026-03-31")
+    assert db.load_range_rule(user_id) == RangeRule("month", "relative", -3, 3)

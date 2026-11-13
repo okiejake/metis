@@ -66,8 +66,6 @@ def review_page(request: Request, user: CurrentUser, start: str = "", end: str =
         dismissed_count=count_dismissed_suggestions(user["id"]),
         start=window_start.isoformat(),
         end=window_end.isoformat(),
-        show_forecast_window_form=True,
-        window_form_action="/review",
     )
 
 
