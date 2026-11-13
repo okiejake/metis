@@ -31,7 +31,6 @@ DEFAULT_USER_DISPLAY_NAME = "Personal"
 USER_SLUG_COOKIE = "metis_user"
 USER_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365 * 5
 USER_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
-EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 
@@ -241,11 +240,22 @@ def normalize_user_slug(slug: str) -> str:
     return cleaned
 
 
+def _looks_like_email(value: str) -> bool:
+    """One @, something before it, no spaces, and a domain with a dot that has
+    something on both sides. Plain string checks rather than a pattern, so the
+    time taken grows with the length of the input, not its square."""
+    local, at, domain = value.partition("@")
+    if not at or not local or "@" in domain or any(ch.isspace() for ch in value):
+        return False
+    head, dot, tail = domain.rpartition(".")
+    return bool(dot and head and tail)
+
+
 def normalize_user_email(email: str) -> str:
     cleaned = email.strip().lower()
     if not cleaned:
         return ""
-    if not EMAIL_RE.match(cleaned):
+    if not _looks_like_email(cleaned):
         raise ValueError("Please enter a valid email address")
     return cleaned
 
@@ -1112,6 +1122,7 @@ def parse_form_bool(value: str) -> bool:
 
 
 def redirect_with_message(path: str, message: str, is_error: bool = False) -> RedirectResponse:
+    path = resolve_safe_redirect_target(path)
     separator = "&" if "?" in path else "?"
     url = f"{path}{separator}msg={quote_plus(message)}&err={1 if is_error else 0}"
     return RedirectResponse(url=url, status_code=303)
@@ -3284,6 +3295,9 @@ def compute_import_fingerprint(row: Dict[str, Any], occurrence_index: int) -> st
             str(occurrence_index),
         ]
     )
+    # SHA-1 only names a row for de-duplication. Nothing secret is hashed, and
+    # switching algorithms would re-key every stored row, so a re-import would
+    # add them all again.
     return hashlib.sha1(key.encode("utf-8")).hexdigest()
 
 
@@ -4211,9 +4225,14 @@ def suggest_rule_pattern(description: str) -> str:
     text = _import_squash(description).upper()
     if not text:
         return ""
-    ach = re.search(r"\bACH\s+(.+?)\s+TYPE:", text)
+    # The payee between "ACH" and "TYPE:". Found with one fixed-text search and
+    # str.find, so a description repeating "ACH" can't make this slow. The text
+    # is already squashed, so words are separated by single spaces.
+    ach = re.search(r"\bACH ", text)
     if ach:
-        return ach.group(1).strip()[:40]
+        type_at = text.find(" TYPE:", ach.end())
+        if type_at > ach.end():
+            return text[ach.end():type_at].strip()[:40]
     kept: List[str] = []
     for token in text.split():
         if re.fullmatch(r"[0-9#*.\-]+", token):
