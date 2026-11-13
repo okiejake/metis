@@ -7,8 +7,10 @@ import json
 import os
 import re
 import secrets
+import threading
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Iterator, List, Optional, Sequence
 from urllib.parse import quote_plus
 
 import duckdb
@@ -58,13 +60,51 @@ def _connection_config() -> Dict[str, Any]:
     return config
 
 
-def get_connection() -> duckdb.DuckDBPyConnection:
-    return duckdb.connect(DB_PATH, config=_connection_config())
+# One open database per file for the life of the process. Opening the file is
+# far slower than any query Metis runs, and every query used to open and close
+# it. Each `with get_connection() as conn:` block gets its own cursor on the
+# shared database and runs alone: DuckDB refuses two simultaneous writes to the
+# same row, and with queries this quick, taking turns costs nothing noticeable.
+# The lock is re-entrant, so a block may call code that opens another.
+_DATABASE: Dict[str, duckdb.DuckDBPyConnection] = {}
+_DATABASE_LOCK = threading.RLock()
+
+
+def _database() -> duckdb.DuckDBPyConnection:
+    database = _DATABASE.get(DB_PATH)
+    if database is None:
+        for path in list(_DATABASE):  # tests move DB_PATH between files
+            _DATABASE.pop(path).close()
+        database = _DATABASE[DB_PATH] = duckdb.connect(DB_PATH, config=_connection_config())
+    return database
+
+
+@contextmanager
+def get_connection() -> Iterator[duckdb.DuckDBPyConnection]:
+    with _DATABASE_LOCK:
+        cursor = _database().cursor()
+        try:
+            yield cursor
+        finally:
+            cursor.close()
+
+
+def close_database() -> None:
+    """Close the shared database, writing everything to the file. The next
+    query opens it again."""
+    with _DATABASE_LOCK:
+        for path in list(_DATABASE):
+            _DATABASE.pop(path).close()
 
 
 def table_has_column(conn: duckdb.DuckDBPyConnection, table_name: str, column_name: str) -> bool:
     rows = conn.execute(f"PRAGMA table_info('{table_name}')").fetchall()
     return any(row[1] == column_name for row in rows)
+
+
+def column_is_nullable(conn: duckdb.DuckDBPyConnection, table_name: str, column_name: str) -> bool:
+    rows = conn.execute(f"PRAGMA table_info('{table_name}')").fetchall()
+    return any(row[1] == column_name and not row[3] for row in rows)
 
 
 def categories_has_global_name_unique(conn: duckdb.DuckDBPyConnection) -> bool:
@@ -114,12 +154,11 @@ def migrate_card_payment_signs(conn: duckdb.DuckDBPyConnection) -> int:
     return int(affected)
 
 
-# Label each built-in format stamps on a row before it is fingerprinted, keyed by
-# the format name detect_csv_format returns. A label says what kind of export it
-# was and deliberately names no institution. Custom templates use their account's
-# name, which the migration's candidates below already cover.
-BUILT_IN_FORMAT_LABELS = {"checking": "Checking", "visa": "Visa", "cleared_card": "Card"}
-BUILT_IN_IMPORT_LABELS = tuple(BUILT_IN_FORMAT_LABELS.values())
+# Labels the removed built-in formats stamped on rows before fingerprinting them.
+# Rows imported back then still carry these keys, so the repair below looks for
+# them. Each says what kind of export it was and names no institution; templates
+# use their account's name, which the repair's candidates already cover.
+BUILT_IN_IMPORT_LABELS = ("Checking", "Visa", "Card")
 FINGERPRINT_MAX_OCCURRENCE = 4
 
 
@@ -198,6 +237,55 @@ def migrate_card_payment_fingerprints(conn: duckdb.DuckDBPyConnection) -> Dict[s
             conn.execute("DELETE FROM imported_transactions WHERE id = ?", [tx_id])
             removed += 1
     return {"rekeyed": rekeyed, "removed": removed}
+
+
+# The layouts the removed built-in formats read, as templates. Checking and
+# Visa exports shared one layout. Column names are the exports' own; none names
+# an institution.
+LEGACY_TEMPLATES = (
+    {"name": "Checking and Visa export", "date_field": "Processed Date", "description_field": "Description",
+     "type_field": "Credit or Debit", "credit_value": "Credit", "amount_field": "Amount", "amount_sign": "standard"},
+    {"name": "Card export", "date_field": "Clearing Date", "date_fallback_field": "Transaction Date",
+     "description_field": "Description", "merchant_field": "Merchant", "type_field": "Type",
+     "amount_field": "Amount (USD)", "amount_sign": "inverted"},
+)
+LEGACY_TEMPLATE_FIELDS = ("name", "date_field", "date_fallback_field", "description_field", "merchant_field",
+                          "type_field", "credit_value", "amount_field", "amount_sign")
+
+
+def migrate_legacy_import_templates(conn: duckdb.DuckDBPyConnection) -> None:
+    """On a database's first start with templates, give each user who already
+    imported the old built-in layouts as templates, and set each account's
+    default where its rows show which layout it used. Runs once per database, so
+    a later user never gets them and a template the user deletes stays deleted."""
+    if conn.execute("SELECT 1 FROM applied_migrations WHERE name = 'legacy_templates'").fetchone():
+        return
+    conn.execute("INSERT INTO applied_migrations (name) VALUES ('legacy_templates')")
+    users = conn.execute("SELECT DISTINCT user_id FROM imported_transactions").fetchall()
+    for (user_id,) in users:
+        ids = {}
+        for template in LEGACY_TEMPLATES:
+            if conn.execute("SELECT 1 FROM import_templates WHERE user_id = ? AND LOWER(name) = LOWER(?)",
+                            [user_id, template["name"]]).fetchone():
+                continue
+            ids[template["name"]] = conn.execute(
+                f"INSERT INTO import_templates (user_id, {', '.join(LEGACY_TEMPLATE_FIELDS)}) "
+                f"VALUES (?, {', '.join('?' for _ in LEGACY_TEMPLATE_FIELDS)}) RETURNING id",
+                [user_id, *[template.get(field) for field in LEGACY_TEMPLATE_FIELDS]],
+            ).fetchone()[0]
+        shared, cleared = ids.get("Checking and Visa export"), ids.get("Card export")
+        for account_id, account_type in conn.execute(
+                "SELECT id, account_type FROM accounts WHERE user_id = ? AND default_template_id IS NULL",
+                [user_id]).fetchall():
+            types = {row[0] or "" for row in conn.execute(
+                "SELECT DISTINCT raw_type FROM imported_transactions WHERE user_id = ? AND account_id = ?",
+                [user_id, account_id]).fetchall()}
+            if not types:
+                continue
+            # Only the cleared-card export typed rows as anything but Credit/Debit.
+            default = cleared if account_type == "credit_card" and types - {"Credit", "Debit", ""} else shared
+            if default:
+                conn.execute("UPDATE accounts SET default_template_id = ? WHERE id = ?", [default, account_id])
 
 
 def migrate_categories_to_user_scoped_uniqueness(
@@ -347,6 +435,7 @@ def init_db() -> None:
         conn.execute("CREATE SEQUENCE IF NOT EXISTS expected_match_rules_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS accounts_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS import_templates_id_seq START 1")
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS import_uploads_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS category_rules_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS transaction_splits_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS sessions_id_seq START 1")
@@ -547,16 +636,37 @@ def init_db() -> None:
                 id BIGINT PRIMARY KEY DEFAULT nextval('import_templates_id_seq'),
                 user_id BIGINT NOT NULL,
                 name TEXT NOT NULL,
-                account_id BIGINT NOT NULL,
+                account_id BIGINT,
                 date_field TEXT NOT NULL,
+                date_fallback_field TEXT,
                 date_format TEXT,
-                amount_field TEXT NOT NULL,
+                amount_field TEXT,
+                amount_in_field TEXT,
+                amount_out_field TEXT,
                 amount_sign TEXT NOT NULL DEFAULT 'standard',
                 type_field TEXT,
                 credit_value TEXT,
                 description_field TEXT NOT NULL,
                 merchant_field TEXT,
                 signature TEXT NOT NULL DEFAULT '[]',
+                created_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        # One-time data steps already taken on this database.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS applied_migrations "
+            "(name TEXT PRIMARY KEY, applied_at TIMESTAMP NOT NULL DEFAULT NOW())"
+        )
+        # A file uploaded while its template is being mapped. Deleted when the
+        # template is saved, or a day later.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS import_uploads (
+                id BIGINT PRIMARY KEY DEFAULT nextval('import_uploads_id_seq'),
+                user_id BIGINT NOT NULL,
+                filename TEXT NOT NULL,
+                content BLOB NOT NULL,
                 created_at TIMESTAMP NOT NULL DEFAULT NOW()
             )
             """
@@ -692,7 +802,20 @@ def init_db() -> None:
             conn.execute("ALTER TABLE users ADD COLUMN failed_attempts INTEGER DEFAULT 0")
         if not table_has_column(conn, "users", "locked_until"):
             conn.execute("ALTER TABLE users ADD COLUMN locked_until TIMESTAMP")
+        # Templates stand alone, shared by any number of accounts; an account
+        # points at its default one. DuckDB will not relax a column while an index
+        # depends on the table, so that index is dropped and recreated below.
+        for column in ("account_id", "amount_field"):
+            if not column_is_nullable(conn, "import_templates", column):
+                conn.execute("DROP INDEX IF EXISTS idx_import_templates_user")
+                conn.execute(f"ALTER TABLE import_templates ALTER COLUMN {column} DROP NOT NULL")
+        for column in ("date_fallback_field", "amount_in_field", "amount_out_field"):
+            if not table_has_column(conn, "import_templates", column):
+                conn.execute(f"ALTER TABLE import_templates ADD COLUMN {column} TEXT")
+        if not table_has_column(conn, "accounts", "default_template_id"):
+            conn.execute("ALTER TABLE accounts ADD COLUMN default_template_id BIGINT")
         migrate_categories_to_user_scoped_uniqueness(conn, default_user_id)
+        migrate_legacy_import_templates(conn)
         migrate_card_payment_signs(conn)
         migrate_card_payment_fingerprints(conn)
         conn.execute(
@@ -704,8 +827,7 @@ def init_db() -> None:
         conn.execute("UPDATE manual_transactions SET user_id = ? WHERE user_id IS NULL", [default_user_id])
         conn.execute("UPDATE users SET email = '' WHERE email IS NULL")
         # Anchor imported rows to accounts by id. Backfill exact name matches;
-        # rows whose account was renamed stay NULL and are relinked via the
-        # Import-page mapping UI (load_unmapped_import_labels / map_import_label_to_account).
+        # the rest are placed by hand from Accounts (map_import_label_to_account).
         conn.execute(
             """
             UPDATE imported_transactions SET account_id = (
@@ -1759,23 +1881,21 @@ def account_cycle_status(account: Dict[str, Any], today: Optional[date] = None) 
     return {"next_close": close, "next_due": due}
 
 
+ACCOUNT_COLUMNS = "id, name, account_type, statement_day, due_day, payment_pattern, default_template_id"
+
+
 def load_accounts(user_id: int) -> List[Dict[str, Any]]:
-    return query_all("SELECT id, name, account_type, statement_day, due_day, payment_pattern FROM accounts "
-                "WHERE user_id = ? ORDER BY account_type, LOWER(name), id", [user_id])
+    return query_all(f"SELECT {ACCOUNT_COLUMNS} FROM accounts "
+                     "WHERE user_id = ? ORDER BY account_type, LOWER(name), id", [user_id])
 
 
 def load_account_by_id(user_id: int, account_id: int) -> Optional[Dict[str, Any]]:
-    row = fetch_one("SELECT id, name, account_type, statement_day, due_day, payment_pattern FROM accounts WHERE id = ? AND user_id = ?", [account_id, user_id])
-    if not row:
+    rows = query_all(f"SELECT {ACCOUNT_COLUMNS} FROM accounts WHERE id = ? AND user_id = ?", [account_id, user_id])
+    if not rows:
         return None
-    return {
-        "id": int(row[0]),
-        "name": row[1],
-        "account_type": row[2],
-        "statement_day": row[3],
-        "due_day": row[4],
-        "payment_pattern": row[5] or "",
-    }
+    account = rows[0]
+    account["payment_pattern"] = account["payment_pattern"] or ""
+    return account
 
 
 def load_accounts_map(user_id: int) -> Dict[int, Dict[str, Any]]:
@@ -1793,28 +1913,6 @@ def parse_optional_account_id(user_id: int, value: str) -> Optional[int]:
     if parsed < 1 or not load_account_by_id(user_id, parsed):
         raise ValueError("Selected account does not exist")
     return parsed
-
-
-def ensure_seed_accounts(user_id: int) -> None:
-    """First-time convenience: if the user has no accounts but has imported data,
-    create one account per distinct imported account name (Checking→checking,
-    others→credit_card) so they can just fill in cycle days."""
-    with get_connection() as conn:
-        if conn.execute("SELECT COUNT(*) FROM accounts WHERE user_id = ?", [user_id]).fetchone()[0]:
-            return
-        names = [
-            row[0]
-            for row in conn.execute(
-                "SELECT DISTINCT account FROM imported_transactions WHERE user_id = ? ORDER BY account",
-                [user_id],
-            ).fetchall()
-        ]
-        for name in names:
-            account_type = "checking" if "checking" in name.lower() else "credit_card"
-            conn.execute(
-                "INSERT INTO accounts (user_id, name, account_type) VALUES (?, ?, ?)",
-                [user_id, name, account_type],
-            )
 
 
 def _apply_cash_flow_deferral(
@@ -3091,299 +3189,6 @@ def _import_squash(text: Any) -> str:
     return _IMPORT_SQUASH_RE.sub(" ", str(text if text is not None else "")).strip()
 
 
-def _visa_merchant(description: str) -> str:
-    """Visa descriptions look like 'ACME HARDWARE     SPRINGFIELD    ST' — the
-    payee is the leading chunk before the big whitespace gap."""
-    parts = re.split(r"\s{2,}", description.strip())
-    return parts[0].strip() if parts else description.strip()
-
-
-def _checking_merchant(description: str) -> str:
-    """Pull a readable payee out of a checking-account ACH description."""
-    desc = _import_squash(description)
-    match = re.search(r"\bACH\s+(.+?)\s+TYPE:", desc, re.IGNORECASE)
-    if match:
-        return match.group(1).strip()
-    match = re.search(r"\bACH\s+(.+?)(?:\s+ID:|\s+CO:|$)", desc, re.IGNORECASE)
-    if match:
-        return match.group(1).strip()
-    return " ".join(desc.split()[:4])
-
-
-def _parse_import_date(value: str) -> date:
-    cleaned = str(value or "").strip()
-    if not cleaned:
-        raise CsvImportError("row is missing a date")
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
-        try:
-            return datetime.strptime(cleaned, fmt).date()
-        except ValueError:
-            continue
-    try:
-        return date.fromisoformat(cleaned[:10])
-    except ValueError as exc:
-        raise CsvImportError(f"unrecognized date '{cleaned}'") from exc
-
-
-def _parse_import_amount(value: str) -> float:
-    cleaned = str(value or "").strip().replace(",", "").replace("$", "")
-    if cleaned in ("", "-"):
-        return 0.0
-    try:
-        return float(cleaned)
-    except ValueError as exc:
-        raise CsvImportError(f"unrecognized amount '{value}'") from exc
-
-
-def _parse_import_date_with(value: str, date_format: Optional[str]) -> date:
-    """Parse a date using a template's explicit strptime format when given,
-    falling back to the built-in multi-format parser."""
-    if date_format:
-        cleaned = str(value or "").strip()
-        if not cleaned:
-            raise CsvImportError("row is missing a date")
-        try:
-            return datetime.strptime(cleaned, date_format).date()
-        except ValueError:
-            pass  # fall through to the tolerant parser
-    return _parse_import_date(value)
-
-
-def _parse_template_row(
-    row: Dict[str, str], template: Dict[str, Any], transfer_patterns: Sequence[str] = ()
-) -> Dict[str, Any]:
-    """Normalize a CSV row using a user-defined template. Output mirrors the
-    built-in parsers' keys and additionally carries the target account_id."""
-    description = _import_squash(row.get(template["description_field"], ""))
-    merchant_field = template.get("merchant_field")
-    merchant = _import_squash(row.get(merchant_field, "")) if merchant_field else description
-
-    tx_date = _parse_import_date_with(row.get(template["date_field"], ""), template.get("date_format"))
-
-    raw = _parse_import_amount(row.get(template["amount_field"], "0"))
-    if (template.get("amount_sign") or "standard") == "inverted":
-        raw = -raw
-    magnitude = abs(raw)
-
-    type_field = template.get("type_field")
-    raw_type = str(row.get(type_field, "")).strip() if type_field else ""
-    if type_field:
-        is_credit = raw_type == str(template.get("credit_value") or "").strip()
-    else:
-        is_credit = raw > 0  # sign-based: positive = money in
-
-    target_is_card = template.get("account_type") == "credit_card"
-    if is_credit:
-        # Money in, so positive whatever it is called. A payment is only singled
-        # out to flag it as a transfer; it pays the balance down exactly as a
-        # refund does and must not be stored negative, which would read as debt.
-        is_payment = target_is_card and bool(_CARD_PAYMENT_RE.search(description))
-        if is_payment:
-            amount, flow, is_transfer = magnitude, "transfer", True
-        else:
-            amount, flow, is_transfer = magnitude, ("refund" if target_is_card else "income"), False
-    else:
-        pays_card = (not target_is_card) and _matches_any(description, transfer_patterns or ())
-        amount, flow, is_transfer = -magnitude, ("transfer" if pays_card else "expense"), pays_card
-
-    return {
-        "account": template["account_name"],
-        "account_id": template["account_id"],
-        "tx_date": tx_date,
-        "description": description,
-        "merchant": merchant,
-        "amount": amount,
-        "flow": flow,
-        "is_transfer": is_transfer,
-        "raw_type": raw_type,
-    }
-
-
-def _parse_checking_row(row: Dict[str, str], transfer_patterns: Sequence[str] = ()) -> Dict[str, Any]:
-    description = _import_squash(row.get("Description", ""))
-    raw_type = str(row.get("Credit or Debit", "")).strip()
-    is_credit = raw_type == "Credit"
-    magnitude = abs(_parse_import_amount(row.get("Amount", "0")))
-    # Credit -> money in (+), Debit -> money out (-).
-    amount = magnitude if is_credit else -magnitude
-    # A debit matching one of the user's card payment patterns is a transfer.
-    pays_card = (not is_credit) and _matches_any(description, transfer_patterns or ())
-    if is_credit:
-        flow = "income"
-    elif pays_card:
-        flow = "transfer"
-    else:
-        flow = "expense"
-    return {
-        "account": BUILT_IN_FORMAT_LABELS["checking"],
-        "tx_date": _parse_import_date(row.get("Processed Date", "")),
-        "description": description,
-        "merchant": _checking_merchant(description),
-        "amount": amount,
-        "flow": flow,
-        "is_transfer": pays_card,
-        "raw_type": raw_type,
-    }
-
-
-def _parse_visa_row(row: Dict[str, str], transfer_patterns: Sequence[str] = ()) -> Dict[str, Any]:
-    description = _import_squash(row.get("Description", ""))
-    raw_type = str(row.get("Credit or Debit", "")).strip()
-    is_credit = raw_type == "Credit"
-    is_payment = is_credit and bool(_CARD_PAYMENT_RE.search(description))
-    is_refund = is_credit and not is_payment
-    magnitude = abs(_parse_import_amount(row.get("Amount", "0")))
-    # Debit on a card = purchase (money out, -). Every credit — refund or payment
-    # alike — is money *in* to the card and so positive: that is what pays the
-    # balance down. Storing a payment negative reads as "owe more", which made a
-    # card's balance climb with every payment made against it.
-    amount = magnitude if is_credit else -magnitude
-    if is_payment:
-        flow = "transfer"
-    elif is_refund:
-        flow = "refund"
-    else:
-        flow = "expense"
-    return {
-        "account": BUILT_IN_FORMAT_LABELS["visa"],
-        "tx_date": _parse_import_date(row.get("Processed Date", "")),
-        "description": description,
-        "merchant": _visa_merchant(description),
-        "amount": amount,
-        "flow": flow,
-        "is_transfer": is_payment,
-        "raw_type": raw_type,
-    }
-
-
-def _parse_cleared_card_row(row: Dict[str, str], transfer_patterns: Sequence[str] = ()) -> Dict[str, Any]:
-    """A card export that carries both a transaction date and a clearing date,
-    types each row (purchase, payment, interest, credit…), and names no account."""
-    description = _import_squash(row.get("Description", ""))
-    merchant = _import_squash(row.get("Merchant", ""))
-    raw_type = str(row.get("Type", "")).strip()
-    usd = _parse_import_amount(row.get("Amount (USD)", "0"))  # purchases +, credits -
-    amount = -usd  # purchase (+usd) -> expense (-)
-    is_transfer = raw_type == "Payment"
-    if raw_type == "Payment":
-        flow = "transfer"
-    elif raw_type == "Interest":
-        flow = "fee"
-    elif raw_type == "Credit":
-        flow = "refund"
-    else:
-        flow = "expense"
-    # "Other"/"Debit" rows are tiny adjustments (e.g. rewards corrections).
-    # Only the ones that *reduce* the balance behave like a payment; one that
-    # adds to the balance is a charge, and flagging it as a transfer would let it
-    # count against a statement as a negative payment.
-    if raw_type in ("Other", "Debit"):
-        is_transfer = amount > 0
-        flow = "transfer" if is_transfer else "fee"
-    # The issuer bills a statement by when a charge *clears*, not when it was made,
-    # and the two straddle the month end often enough to file charges under the
-    # wrong statement. Pending rows have no clearing date yet, so fall back to the
-    # transaction date until a later export fills it in.
-    tx_date = _parse_import_date(
-        str(row.get("Clearing Date", "")).strip() or row.get("Transaction Date", "")
-    )
-    return {
-        "account": BUILT_IN_FORMAT_LABELS["cleared_card"],
-        "tx_date": tx_date,
-        "description": description,
-        "merchant": merchant,
-        "amount": amount,
-        "flow": flow,
-        "is_transfer": is_transfer,
-        "raw_type": raw_type,
-    }
-
-
-_ROW_PARSERS = {
-    "checking": _parse_checking_row,
-    "visa": _parse_visa_row,
-    "cleared_card": _parse_cleared_card_row,
-}
-
-
-def detect_csv_format(header: List[str], first_row: Optional[Dict[str, str]]) -> Optional[str]:
-    """Identify which built-in export a CSV is, by its columns. Checking and Visa
-    share an identical 6-column header, so they are disambiguated by the Account
-    Name value."""
-    fields = {str(name).strip() for name in (header or []) if name}
-    if "Amount (USD)" in fields and "Transaction Date" in fields:
-        return "cleared_card"
-    if {"Processed Date", "Credit or Debit", "Amount", "Account Name"}.issubset(fields):
-        account_name = str((first_row or {}).get("Account Name", "")).upper()
-        if "CHECKING" in account_name:
-            return "checking"
-        if "VISA" in account_name:
-            return "visa"
-    return None
-
-
-def _template_signature_matches(header_fields: set, template: Dict[str, Any]) -> bool:
-    signature = template.get("signature") or []
-    return bool(signature) and all(col in header_fields for col in signature)
-
-
-def parse_import_csv(
-    filename: str,
-    text: str,
-    templates: Optional[List[Dict[str, Any]]] = None,
-    forced_template: Optional[Dict[str, Any]] = None,
-    transfer_patterns: Optional[Sequence[str]] = None,
-) -> tuple[str, Optional[int], List[Dict[str, Any]]]:
-    """Parse a bank/card CSV export into normalized rows.
-
-    Tries the 3 built-in parsers first, then any user templates by signature;
-    `forced_template` skips detection (manual picker). Returns
-    (account_label, account_id, rows). account_id is None for built-in formats
-    (resolved by name at upsert). Raises CsvImportError on an unrecognized format.
-    """
-    patterns = tuple(transfer_patterns or GENERIC_CARD_PAYMENT_HINTS)
-    if text.startswith("﻿"):  # strip UTF-8 BOM so header cells match
-        text = text[1:]
-    reader = csv.DictReader(io.StringIO(text))
-    if reader.fieldnames is None:
-        raise CsvImportError("The file is empty or not a valid CSV.")
-    raw_rows = list(reader)
-    header = list(reader.fieldnames)
-
-    template = forced_template
-    fmt: Optional[str] = None
-    if template is None:
-        fmt = detect_csv_format(header, raw_rows[0] if raw_rows else None)
-        if fmt is None and templates:
-            fields = {str(name).strip() for name in header if name}
-            for candidate in templates:
-                if _template_signature_matches(fields, candidate):
-                    template = candidate
-                    break
-    if fmt is None and template is None:
-        raise CsvImportError(
-            "Unrecognized CSV format. Expected one of the built-in checking or card "
-            "exports, or a matching custom template."
-        )
-
-    parsed: List[Dict[str, Any]] = []
-    for index, raw in enumerate(raw_rows):
-        if not any(str(value).strip() for value in raw.values()):
-            continue  # skip fully blank lines
-        try:
-            if template is not None:
-                parsed.append(_parse_template_row(raw, template, patterns))
-            else:
-                parsed.append(_ROW_PARSERS[fmt](raw, patterns))
-        except CsvImportError as exc:
-            raise CsvImportError(f"row {index + 2}: {exc}") from exc
-
-    if template is not None:
-        return template["account_name"], int(template["account_id"]), parsed
-    account_label = BUILT_IN_FORMAT_LABELS[fmt]
-    return account_label, None, parsed
-
-
 def compute_import_fingerprint(row: Dict[str, Any], occurrence_index: int) -> str:
     """Stable dedup key for one transaction. The occurrence_index disambiguates
     genuinely identical same-day rows while keeping re-uploads reproducible."""
@@ -3428,35 +3233,6 @@ def _account_content_counts(user_id: int, first: date, last: date) -> Dict[int, 
     return counts
 
 
-# Shared transactions an export needs with an account before it is taken to be
-# that account's (fewer only when the export itself is shorter than this).
-IMPORT_INFER_MIN_SHARED = 2
-
-
-def infer_import_account_id(
-    rows: List[Dict[str, Any]], held: Dict[int, Dict[tuple, int]], known_ids: set
-) -> Optional[int]:
-    """Which account an export belongs to, judged by the transactions it shares
-    with what that account already holds. For an export whose label matches
-    nothing: overlapping history is better evidence than any wording.
-
-    Deliberately timid, like the partial name match. It answers only when exactly
-    one account shares anything, and a lone shared row out of several is treated
-    as the coincidence it may well be — the same subscription price on the same
-    day on two cards. Otherwise the rows are left for the user to place."""
-    wanted = {_import_content_key(r["tx_date"], r["amount"], r["description"]) for r in rows}
-    shared = {
-        account_id: len(wanted & set(keys))
-        for account_id, keys in held.items()
-        if account_id in known_ids
-    }
-    candidates = [account_id for account_id, count in shared.items() if count]
-    if len(candidates) != 1:
-        return None
-    enough = min(IMPORT_INFER_MIN_SHARED, len(wanted))
-    return candidates[0] if shared[candidates[0]] >= enough else None
-
-
 def _assign_import_fingerprints(rows: List[Dict[str, Any]]) -> None:
     seen: Dict[tuple, int] = {}
     for row in rows:
@@ -3492,37 +3268,10 @@ def upsert_imported_transactions(
     fingerprints = [row["fingerprint"] for row in rows]
     fingerprints += [row["legacy_fingerprint"] for row in rows if row.get("legacy_fingerprint")]
 
-    accounts = load_accounts(user_id)
-    links = load_import_account_links(user_id)
-    id_to_name = {int(account["id"]): str(account["name"]) for account in accounts}
+    id_to_name = {int(account["id"]): str(account["name"]) for account in load_accounts(user_id)}
     dates = [_as_date(row["tx_date"]) for row in rows]
     held = _account_content_counts(user_id, min(dates), max(dates))
-
-    # Settle which account each row belongs to before deciding what is new. Prefer
-    # an account_id the parser already resolved (custom templates); otherwise
-    # resolve the export's label — a saved binding, the account's name, or an
-    # unambiguous partial match — and failing all of those, the account whose
-    # history the export shares. That last answer is saved as a binding, so the
-    # next export needs no overlap to be placed. Resolved once per label, since a
-    # file carries only one or two of them.
-    resolved_labels: Dict[str, Optional[int]] = {}
-    targets: List[Optional[int]] = []
-    for row in rows:
-        account_id = row.get("account_id")
-        if account_id is None:
-            label = str(row["account"])
-            if label not in resolved_labels:
-                found = resolve_import_account_id(user_id, label, accounts=accounts, links=links)
-                if found is None:
-                    unplaced = [
-                        r for r in rows if r.get("account_id") is None and str(r["account"]) == label
-                    ]
-                    found = infer_import_account_id(unplaced, held, set(id_to_name))
-                    if found is not None:
-                        save_import_account_link(user_id, label, found)
-                resolved_labels[label] = found
-            account_id = resolved_labels[label]
-        targets.append(account_id)
+    targets: List[Optional[int]] = [row.get("account_id") for row in rows]
 
     inserted = 0
     transfers = 0
@@ -3586,43 +3335,9 @@ def upsert_imported_transactions(
     return {"inserted": inserted, "skipped": len(rows) - inserted, "transfers": transfers}
 
 
-def load_imported_transactions(
-    user_id: int, account_filter: str = "", limit: int = 500
-) -> List[Dict[str, Any]]:
-    query = """
-        SELECT i.id, i.account, i.tx_date, i.description, i.merchant, i.amount,
-               i.flow, i.is_transfer, i.raw_type, i.category_id, i.source_file,
-               c.name AS category_name, c.color AS category_color
-        FROM imported_transactions i
-        LEFT JOIN categories c ON c.id = i.category_id AND c.user_id = i.user_id
-        WHERE i.user_id = ?
-    """
-    params: List[Any] = [user_id]
-    if account_filter:
-        query += " AND i.account = ?"
-        params.append(account_filter)
-    query += " ORDER BY i.tx_date DESC, i.id DESC LIMIT ?"
-    params.append(limit)
-
-    rows = query_all(query, params)
-
-    for row in rows:
-        tx_date = row["tx_date"]
-        if isinstance(tx_date, datetime):
-            row["tx_date"] = tx_date.date()
-        row["category_color"] = safe_hex_color(row.get("category_color"))
-    return rows
-
-
-def load_imported_accounts(user_id: int) -> List[str]:
-    rows = fetch_all("SELECT DISTINCT account FROM imported_transactions WHERE user_id = ? ORDER BY account", [user_id])
-    return [row[0] for row in rows]
-
-
 def load_unmapped_import_labels(user_id: int) -> List[Dict[str, Any]]:
-    """Distinct imported-account labels whose rows are not yet anchored to an
-    account (account_id IS NULL) — i.e. the labels of already-renamed accounts
-    that the exact-name backfill could not match. Each entry: {label, count}."""
+    """Labels of imported rows that belong to no account, left over from when
+    Metis placed rows by the file's wording. Each entry: {label, count}."""
     rows = fetch_all("""
             SELECT account, COUNT(*) AS n
             FROM imported_transactions
@@ -3633,110 +3348,9 @@ def load_unmapped_import_labels(user_id: int) -> List[Dict[str, Any]]:
     return [{"label": row[0], "count": int(row[1])} for row in rows]
 
 
-# Words that say what kind of account something is rather than which one it is.
-# Dropping them lets an export's label ("Acme Card") meet the account the user
-# actually named ("Acme Credit Card") without matching every card to every other.
-IMPORT_LABEL_NOISE = {
-    "account", "acct", "bank", "card", "cards", "checking", "classic",
-    "contactless", "credit", "debit", "standard", "transactions",
-}
-
-
-def _import_label_tokens(value: str) -> set:
-    """Identifying words in an account label, lowercased and stripped of the
-    generic account-type noise that every card name shares."""
-    tokens = {part for part in re.split(r"[^a-z0-9]+", str(value).lower()) if part}
-    return tokens - IMPORT_LABEL_NOISE
-
-
-def load_import_account_links(user_id: int) -> Dict[str, int]:
-    """Saved 'this export label is this account' bindings, keyed by lowercased
-    label. Written whenever the user maps a label by hand, so the mapping is a
-    one-time step instead of a chore on every import."""
-    rows = fetch_all(
-        "SELECT label, account_id FROM import_account_links WHERE user_id = ?", [user_id]
-    )
-    return {str(row[0]).lower(): int(row[1]) for row in rows}
-
-
-def load_import_account_links_detailed(user_id: int) -> List[Dict[str, Any]]:
-    """Saved label bindings with the account each one points at, for display."""
-    rows = fetch_all("""
-            SELECT COALESCE(NULLIF(l.display_label, ''), l.label), l.account_id, a.name
-            FROM import_account_links l
-            JOIN accounts a ON a.id = l.account_id AND a.user_id = l.user_id
-            WHERE l.user_id = ?
-            ORDER BY l.label
-            """, [user_id])
-    return [
-        {"label": row[0], "account_id": int(row[1]), "account_name": row[2]}
-        for row in rows
-    ]
-
-
-def save_import_account_link(user_id: int, label: str, account_id: int) -> None:
-    cleaned = label.strip()
-    if not cleaned:
-        return
-    execute(
-        "INSERT INTO import_account_links (user_id, label, display_label, account_id) "
-        "VALUES (?, ?, ?, ?) ON CONFLICT (user_id, label) DO UPDATE SET "
-        "display_label = excluded.display_label, account_id = excluded.account_id",
-        [user_id, cleaned.lower(), cleaned, int(account_id)],
-    )
-
-
-def delete_import_account_link(user_id: int, label: str) -> None:
-    execute(
-        "DELETE FROM import_account_links WHERE user_id = ? AND label = ?",
-        [user_id, label.strip().lower()],
-    )
-
-
-def resolve_import_account_id(
-    user_id: int,
-    label: str,
-    accounts: Optional[List[Dict[str, Any]]] = None,
-    links: Optional[Dict[str, int]] = None,
-) -> Optional[int]:
-    """Which account an imported label belongs to: a binding the user saved
-    earlier, else an exact name match, else an unambiguous partial one.
-
-    A saved binding outranks an exact name match because it is the user's own
-    decision about a label whose name never matched in the first place. The
-    partial match is deliberately timid — it gives up when two accounts fit, so a
-    second card is never silently handed another card's history."""
-    if accounts is None:
-        accounts = load_accounts(user_id)
-    if links is None:
-        links = load_import_account_links(user_id)
-    key = str(label).strip().lower()
-    known = {int(account["id"]) for account in accounts}
-
-    linked = links.get(key)
-    if linked in known:
-        return linked
-
-    for account in accounts:
-        if str(account["name"]).strip().lower() == key:
-            return int(account["id"])
-
-    label_tokens = _import_label_tokens(key)
-    if label_tokens:
-        hits = [
-            int(account["id"])
-            for account in accounts
-            if label_tokens & _import_label_tokens(account["name"])
-        ]
-        if len(hits) == 1:
-            return hits[0]
-    return None
-
-
 def map_import_label_to_account(user_id: int, label: str, account_id: int) -> int:
     """Relink every unanchored imported row carrying `label` to `account_id`, and
-    align its display label to that account's current name. Remembers the choice
-    so the next export carrying this label anchors itself. Returns rows updated."""
+    align its display label to that account's current name. Returns rows updated."""
     with get_connection() as conn:
         account = conn.execute(
             "SELECT name FROM accounts WHERE user_id = ? AND id = ?",
@@ -3757,154 +3371,7 @@ def map_import_label_to_account(user_id: int, label: str, account_id: int) -> in
             """,
             [account_id, account[0], user_id, label],
         )
-    save_import_account_link(user_id, label, account_id)
     return int(matched)
-
-
-IMPORT_TEMPLATE_SIGN_MODES = {"standard", "inverted"}
-
-
-def _row_to_import_template(row: Dict[str, Any]) -> Dict[str, Any]:
-    try:
-        signature = json.loads(row.get("signature") or "[]")
-    except (json.JSONDecodeError, TypeError):
-        signature = []
-    if not isinstance(signature, list):
-        signature = []
-    row["signature"] = [str(col) for col in signature]
-    return row
-
-
-def load_import_templates(user_id: int) -> List[Dict[str, Any]]:
-    """User-defined CSV templates joined to their target account (name + type)."""
-    rows = query_all("""
-                SELECT t.id, t.name, t.account_id, t.date_field, t.date_format,
-                       t.amount_field, t.amount_sign, t.type_field, t.credit_value,
-                       t.description_field, t.merchant_field, t.signature,
-                       a.name AS account_name, a.account_type
-                FROM import_templates t
-                JOIN accounts a ON a.id = t.account_id AND a.user_id = t.user_id
-                WHERE t.user_id = ?
-                ORDER BY LOWER(t.name), t.id
-                """, [user_id])
-    return [_row_to_import_template(row) for row in rows]
-
-
-def load_import_template(user_id: int, template_id: int) -> Optional[Dict[str, Any]]:
-    for template in load_import_templates(user_id):
-        if int(template["id"]) == int(template_id):
-            return template
-    return None
-
-
-def save_import_template(
-    user_id: int,
-    name: str,
-    account_id: int,
-    date_field: str,
-    amount_field: str,
-    description_field: str,
-    signature: List[str],
-    amount_sign: str = "standard",
-    date_format: Optional[str] = None,
-    type_field: Optional[str] = None,
-    credit_value: Optional[str] = None,
-    merchant_field: Optional[str] = None,
-    template_id: Optional[int] = None,
-) -> None:
-    """Create or update a custom import template. Raises ValueError on bad input."""
-    name = (name or "").strip()
-    if not name:
-        raise ValueError("Template name is required")
-    for label, value in (("date column", date_field), ("amount column", amount_field), ("description column", description_field)):
-        if not (value or "").strip():
-            raise ValueError(f"The {label} is required")
-    if amount_sign not in IMPORT_TEMPLATE_SIGN_MODES:
-        raise ValueError("Amount sign must be standard or inverted")
-    sig = [str(c).strip() for c in signature if str(c).strip()]
-    if not sig:
-        raise ValueError("List at least one header column that identifies this format")
-
-    def _opt(value: Optional[str]) -> Optional[str]:
-        value = (value or "").strip()
-        return value or None
-
-    fields = [
-        name, int(account_id), date_field.strip(), _opt(date_format), amount_field.strip(),
-        amount_sign, _opt(type_field), _opt(credit_value), description_field.strip(),
-        _opt(merchant_field), json.dumps(sig),
-    ]
-    with get_connection() as conn:
-        if not conn.execute(
-            "SELECT 1 FROM accounts WHERE id = ? AND user_id = ?", [int(account_id), user_id]
-        ).fetchone():
-            raise ValueError("Target account not found")
-        if template_id:
-            conn.execute(
-                """
-                UPDATE import_templates
-                SET name = ?, account_id = ?, date_field = ?, date_format = ?, amount_field = ?,
-                    amount_sign = ?, type_field = ?, credit_value = ?, description_field = ?,
-                    merchant_field = ?, signature = ?
-                WHERE id = ? AND user_id = ?
-                """,
-                [*fields, int(template_id), user_id],
-            )
-        else:
-            conn.execute(
-                """
-                INSERT INTO import_templates (
-                    name, account_id, date_field, date_format, amount_field, amount_sign,
-                    type_field, credit_value, description_field, merchant_field, signature, user_id
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [*fields, user_id],
-            )
-
-
-def delete_import_template(user_id: int, template_id: int) -> None:
-    execute("DELETE FROM import_templates WHERE id = ? AND user_id = ?", [int(template_id), user_id])
-
-
-def summarize_imported(user_id: int) -> Dict[str, Any]:
-    """Per-account counts + totals for the import page header. Spending and
-    income both exclude transfers so card payments never double-count."""
-    with get_connection() as conn:
-        total_row = conn.execute(
-            "SELECT COUNT(*) FROM imported_transactions WHERE user_id = ?",
-            [user_id],
-        ).fetchone()
-        accounts = rows_to_dicts(
-            conn.execute(
-                """
-                SELECT account,
-                       COUNT(*) AS n,
-                       COALESCE(SUM(CASE WHEN NOT is_transfer AND amount < 0 THEN -amount ELSE 0 END), 0) AS spending,
-                       COALESCE(SUM(CASE WHEN NOT is_transfer AND amount > 0 THEN amount ELSE 0 END), 0) AS income,
-                       COALESCE(SUM(CASE WHEN is_transfer THEN 1 ELSE 0 END), 0) AS transfers,
-                       MIN(tx_date) AS first_date,
-                       MAX(tx_date) AS last_date
-                FROM imported_transactions
-                WHERE user_id = ?
-                GROUP BY account
-                ORDER BY account
-                """,
-                [user_id],
-            )
-        )
-
-    for account in accounts:
-        for key in ("first_date", "last_date"):
-            if isinstance(account.get(key), datetime):
-                account[key] = account[key].date()
-
-    return {
-        "total_count": int(total_row[0]) if total_row else 0,
-        "accounts": accounts,
-        "total_spending": sum(float(account["spending"]) for account in accounts),
-        "total_income": sum(float(account["income"]) for account in accounts),
-    }
 
 
 # ---------------------------------------------------------------------------

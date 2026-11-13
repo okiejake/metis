@@ -33,7 +33,8 @@ def page(db, user_id, accounts):
 
 
 def test_every_row_has_skip_and_every_list_has_a_position_line(page):
-    assert page.count('class="review-row"') == len(re.findall(r"<button[^>]*data-review-skip", page)) == 3
+    # Three merchants to categorize, and the checking account with no imports yet.
+    assert page.count('class="review-row"') == len(re.findall(r"<button[^>]*data-review-skip", page)) == 4
     assert page.count('<ol class="review-list"') == len(re.findall(r"<p[^>]*data-review-position", page)) >= 1
 
 

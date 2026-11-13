@@ -14,10 +14,12 @@ from datetime import date
 
 import pytest
 
+import import_templates as it
+
 EXPORT = "export.csv"
 
 
-def visa_payment(when="2026-07-15", amount="250.00"):
+def card_payment(when="2026-07-15", amount="250.00"):
     return {
         "Processed Date": when,
         "Description": "PAYMENT - THANK YOU",
@@ -26,7 +28,7 @@ def visa_payment(when="2026-07-15", amount="250.00"):
     }
 
 
-def visa_purchase(when="2026-07-10", amount="40.00"):
+def card_purchase(when="2026-07-10", amount="40.00"):
     return {
         "Processed Date": when,
         "Description": "ACME HARDWARE",
@@ -35,23 +37,31 @@ def visa_purchase(when="2026-07-10", amount="40.00"):
     }
 
 
+TYPED = it.build_template({"name": "Example card export", "date_field": "Processed Date",
+                           "description_field": "Description", "amount_layout": "typed", "amount_field": "Amount",
+                           "type_field": "Credit or Debit", "credit_value": "Credit"})
+
+
 @pytest.fixture
 def card_id(db, user_id, accounts):
-    """The built-in Visa parser labels rows 'Visa'; bind that to the card."""
-    db.save_import_account_link(user_id, "Visa", accounts["Example Card"])
     return accounts["Example Card"]
 
 
+def parse(db, user_id, card_id, raw_rows):
+    card = db.load_account_by_id(user_id, card_id)
+    return [it.parse_row(row, TYPED, card) for row in raw_rows]
+
+
 def import_rows(db, user_id, *raw_rows):
-    return db.upsert_imported_transactions(
-        user_id, [db._parse_visa_row(row) for row in raw_rows], EXPORT
-    )
+    card_id = db.fetch_one("SELECT id FROM accounts WHERE user_id = ? AND name = 'Example Card'", [user_id])[0]
+    return db.upsert_imported_transactions(user_id, parse(db, user_id, card_id, raw_rows), EXPORT)
 
 
 def import_the_old_way(db, user_id, *raw_rows):
     """What the importer did before the sign fix: payments stored negative, and
     keyed by that negative amount. The startup repair then flips the sign."""
-    rows = [db._parse_visa_row(row) for row in raw_rows]
+    card_id = db.fetch_one("SELECT id FROM accounts WHERE user_id = ? AND name = 'Example Card'", [user_id])[0]
+    rows = parse(db, user_id, card_id, raw_rows)
     for row in rows:
         if row["is_transfer"]:
             row["amount"] = -row["amount"]
@@ -69,16 +79,16 @@ def payments_on(db, user_id, card_id):
 
 
 def test_reimport_skips_a_payment_stored_under_its_old_key(db, user_id, card_id):
-    import_the_old_way(db, user_id, visa_purchase(), visa_payment())
+    import_the_old_way(db, user_id, card_purchase(), card_payment())
 
-    result = import_rows(db, user_id, visa_purchase(), visa_payment())
+    result = import_rows(db, user_id, card_purchase(), card_payment())
 
     assert result["inserted"] == 0, "the payment was already imported, just keyed by its old sign"
     assert payments_on(db, user_id, card_id) == [(date(2026, 7, 15), 250.00)]
 
 
 def test_startup_repair_rekeys_old_payments(db, user_id, card_id):
-    import_the_old_way(db, user_id, visa_payment())
+    import_the_old_way(db, user_id, card_payment())
 
     with db.get_connection() as conn:
         outcome = db.migrate_card_payment_fingerprints(conn)
@@ -88,15 +98,15 @@ def test_startup_repair_rekeys_old_payments(db, user_id, card_id):
         "SELECT fingerprint FROM imported_transactions WHERE user_id = ? AND account_id = ?",
         [user_id, card_id],
     )[0]
-    fresh = db._parse_visa_row(visa_payment())
+    fresh = parse(db, user_id, card_id, [card_payment()])[0]
     db._assign_import_fingerprints([fresh])
     assert stored == fresh["fingerprint"], "re-keyed to what an import computes today"
 
 
 def test_startup_repair_removes_a_payment_already_imported_twice(db, user_id, card_id):
-    import_the_old_way(db, user_id, visa_payment())
+    import_the_old_way(db, user_id, card_payment())
     # A re-import from before this fix: the fresh key missed, so it went in again.
-    rows = [db._parse_visa_row(visa_payment())]
+    rows = [parse(db, user_id, card_id, [card_payment()])[0]]
     db._assign_import_fingerprints(rows)
     rows[0].pop("legacy_fingerprint")
     with db.get_connection() as conn:
@@ -117,7 +127,7 @@ def test_startup_repair_removes_a_payment_already_imported_twice(db, user_id, ca
 
 
 def test_startup_repair_is_idempotent(db, user_id, card_id):
-    import_the_old_way(db, user_id, visa_payment())
+    import_the_old_way(db, user_id, card_payment())
     with db.get_connection() as conn:
         db.migrate_card_payment_fingerprints(conn)
         second = db.migrate_card_payment_fingerprints(conn)
@@ -127,8 +137,8 @@ def test_startup_repair_is_idempotent(db, user_id, card_id):
 
 def test_a_genuine_second_payment_is_kept(db, user_id, card_id):
     """Same amount, different day: two real payments, not a duplicate."""
-    import_the_old_way(db, user_id, visa_payment("2026-07-15"))
-    import_rows(db, user_id, visa_payment("2026-07-18"))
+    import_the_old_way(db, user_id, card_payment("2026-07-15"))
+    import_rows(db, user_id, card_payment("2026-07-18"))
 
     with db.get_connection() as conn:
         db.migrate_card_payment_fingerprints(conn)

@@ -1,14 +1,16 @@
 from datetime import date, timedelta
+from typing import Optional
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
+
+import import_templates as it
 
 from services import (
     suggest_payment_pattern,
     account_cycle_status,
     card_balance_summary,
     card_cycle_configured,
-    ensure_seed_accounts,
     first_checking_actual_date,
     forecast_card_payments,
     latest_checking_actual_date,
@@ -16,6 +18,7 @@ from services import (
     get_setting_float,
     load_account_by_id,
     load_accounts,
+    load_unmapped_import_labels,
     parse_day,
     parse_form_bool,
     redirect_with_message,
@@ -68,8 +71,6 @@ def _projected_card_payments(user_id: int, horizon_days: int = 150):
 
 @router.get("/accounts", response_class=HTMLResponse)
 def accounts_page(request: Request, user: CurrentUser, msg: str = "", err: int = 0):
-    ensure_seed_accounts(user["id"])
-
     accounts = load_accounts(user["id"])
     usage = _load_account_usage(user["id"])
     projected = _projected_card_payments(user["id"])
@@ -90,6 +91,8 @@ def accounts_page(request: Request, user: CurrentUser, msg: str = "", err: int =
         starting_balance=get_setting_float(user["id"], "starting_balance", 0.0),
         first_actual=first_checking_actual_date(user["id"]),
         today_iso=today.isoformat(),
+        templates=it.load_templates(user["id"]),
+        unplaced=load_unmapped_import_labels(user["id"]),
     )
 
 
@@ -104,42 +107,54 @@ def update_opening_balance(request: Request, user: CurrentUser, value: str = For
     return redirect_with_message("/accounts", "Checking opening balance updated")
 
 
-@router.post("/accounts")
-def create_account(
+def _create_account(user_id: int, name: str, account_type: str, statement_day: str, due_day: str,
+                    statement_eom: str, due_eom: str) -> int:
+    cleaned_name = name.strip()
+    if not cleaned_name:
+        raise ValueError("Account name is required")
+    parsed_statement, parsed_due = _parse_account_form(account_type, statement_day, due_day, statement_eom, due_eom)
+    with get_connection() as conn:
+        if conn.execute("SELECT 1 FROM accounts WHERE user_id = ? AND LOWER(name) = LOWER(?)",
+                        [user_id, cleaned_name]).fetchone():
+            raise ValueError("An account with this name already exists")
+        row = conn.execute(
+            "INSERT INTO accounts (user_id, name, account_type, statement_day, due_day, payment_pattern) "
+            "VALUES (?, ?, ?, ?, ?, '') RETURNING id",
+            [user_id, cleaned_name, account_type, parsed_statement, parsed_due],
+        ).fetchone()
+    return int(row[0])
+
+
+@router.get("/accounts/new", response_class=HTMLResponse)
+def new_account_page(request: Request, user: CurrentUser, msg: str = "", err: int = 0):
+    return render(request, "account_new.html", msg, err, templates=it.load_templates(user["id"]))
+
+
+@router.post("/accounts/new")
+def add_account(
     request: Request, user: CurrentUser,
-    name: str = Form(...),
-    account_type: str = Form(...),
+    name: str = Form(""),
+    account_type: str = Form("checking"),
     statement_day: str = Form(""),
     due_day: str = Form(""),
-    payment_pattern: str = Form(""),
     statement_eom: str = Form(""),
     due_eom: str = Form(""),
+    method: str = Form("manual"),
+    template: str = Form("new"),
 ):
     try:
-        cleaned_name = name.strip()
-        if not cleaned_name:
-            raise ValueError("Account name is required")
-        parsed_statement, parsed_due = _parse_account_form(
-            account_type, statement_day, due_day, statement_eom, due_eom
-        )
-        # Only cards fund payments from another account, so only cards carry one.
-        cleaned_pattern = payment_pattern.strip().upper() if account_type == "credit_card" else ""
-
-        with get_connection() as conn:
-            existing = conn.execute(
-                "SELECT id FROM accounts WHERE user_id = ? AND LOWER(name) = LOWER(?) LIMIT 1",
-                [user["id"], cleaned_name],
-            ).fetchone()
-            if existing:
-                raise ValueError("An account with this name already exists")
-            conn.execute(
-                "INSERT INTO accounts (user_id, name, account_type, statement_day, due_day, payment_pattern) VALUES (?, ?, ?, ?, ?, ?)",
-                [user["id"], cleaned_name, account_type, parsed_statement, parsed_due, cleaned_pattern],
-            )
+        if method != "manual":
+            raise ValueError("Plaid is coming soon. Choose Manual Import.")
+        chosen = None if template == "new" else it.load_template(user["id"], template)
+        if template != "new" and not chosen:
+            raise ValueError("Choose a template")
+        account_id = _create_account(user["id"], name, account_type, statement_day, due_day, statement_eom, due_eom)
     except ValueError as exc:
-        return redirect_with_message("/accounts", str(exc), is_error=True)
-
-    return redirect_with_message("/accounts", "Account added")
+        return redirect_with_message("/accounts/new", str(exc), is_error=True)
+    if chosen is None:
+        return RedirectResponse(f"/templates/new?account_id={account_id}", status_code=303)
+    it.set_default_template(user["id"], account_id, int(chosen["id"]))
+    return redirect_with_message("/accounts", f"{name.strip()} added")
 
 
 @router.get("/accounts/{account_id}/edit", response_class=HTMLResponse)
@@ -154,6 +169,7 @@ def edit_account_page(request: Request, user: CurrentUser, account_id: int, msg:
         err,
         account=account,
         suggested_pattern=suggest_payment_pattern(account["name"]),
+        templates=it.load_templates(user["id"]),
     )
 
 
@@ -168,6 +184,7 @@ def edit_account(
     payment_pattern: str = Form(""),
     statement_eom: str = Form(""),
     due_eom: str = Form(""),
+    default_template_id: Optional[str] = Form(None),
 ):
     if not load_account_by_id(user["id"], account_id):
         return redirect_with_message("/accounts", "Account not found", is_error=True)
@@ -199,6 +216,9 @@ def edit_account(
                 "UPDATE imported_transactions SET account = ? WHERE user_id = ? AND account_id = ?",
                 [cleaned_name, user["id"], account_id],
             )
+        if default_template_id is not None:
+            it.set_default_template(user["id"], account_id,
+                                    int(default_template_id) if default_template_id.strip().isdigit() else None)
     except ValueError as exc:
         return redirect_with_message(f"/accounts/{account_id}/edit", str(exc), is_error=True)
 

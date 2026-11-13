@@ -21,6 +21,7 @@ from services import (
     SESSION_COOKIE,
     any_user_has_password,
     format_currency,
+    close_database,
     init_db,
     load_session_user,
     purge_expired_sessions,
@@ -37,6 +38,11 @@ templates.env.globals["base_path"] = configured_base_path
 def startup_event() -> None:
     init_db()
     purge_expired_sessions()
+
+
+@app.on_event("shutdown")
+def shutdown_event() -> None:
+    close_database()
 
 
 # Paths reachable without a session. Everything else — all 50-odd routes — is

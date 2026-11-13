@@ -14,7 +14,6 @@ from services import (
     delete_match_rule,
     detect_recurring_suggestions,
     dismiss_suggestion,
-    ensure_seed_accounts,
     find_amount_suggestions,
     get_connection,
     load_accounts,
@@ -57,8 +56,6 @@ def expected_page(request: Request):
 
 @router.get("/budget", response_class=HTMLResponse)
 def budget_page(request: Request, user: CurrentUser, start: str = "", end: str = "", msg: str = "", err: int = 0):
-    ensure_seed_accounts(user["id"])
-
     window_start, window_end, invalid_filter = resolve_forecast_window(user["id"], start, end)
     if invalid_filter:
         msg = "Invalid date filter. Using saved/default range."

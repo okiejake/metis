@@ -1,9 +1,9 @@
-"""An export's label is the bank's wording for an account, and wording changes:
-a bank renames a product, a user moves from a built-in format to a template of
-their own, a built-in format is given a new name. None of that makes a
-transaction a different transaction. If the label were part of what makes a row
-"already imported", every such change would add an account's whole history a
-second time.
+"""A row's stored label is whatever named the account when it was imported, and
+that changes: rows imported by the old built-in formats carry the format's label,
+while rows imported through a template carry the account's own name. None of
+that makes a transaction a different transaction. If the label were part of what
+makes a row "already imported", moving to templates would add an account's whole
+history a second time.
 
 All data here is synthetic.
 """
@@ -13,10 +13,11 @@ from datetime import date
 EXPORT = "export.csv"
 
 
-def row(label, when, description, amount):
-    """One parsed row, in the shape every parser hands to the importer."""
+def row(account_id, label, when, description, amount):
+    """One parsed row, in the shape the parser hands to the importer."""
     return {
         "account": label,
+        "account_id": account_id,
         "tx_date": when,
         "description": description,
         "merchant": description,
@@ -27,28 +28,25 @@ def row(label, when, description, amount):
     }
 
 
-def history(label):
+def history(account_id, label):
     return [
-        row(label, date(2026, 7, 10), "ACME HARDWARE", -40.00),
-        row(label, date(2026, 7, 12), "ACME GROCER", -25.50),
+        row(account_id, label, date(2026, 7, 10), "ACME HARDWARE", -40.00),
+        row(account_id, label, date(2026, 7, 12), "ACME GROCER", -25.50),
     ]
 
 
 def stored(db, user_id):
     return db.query_all(
-        "SELECT account_id, description FROM imported_transactions "
-        "WHERE user_id = ? ORDER BY tx_date, id",
+        "SELECT account_id, description FROM imported_transactions WHERE user_id = ? ORDER BY tx_date, id",
         [user_id],
     )
 
 
 def test_history_is_not_added_again_when_the_label_changes(db, user_id, accounts):
-    card_id = accounts["Example Card"]
-    db.save_import_account_link(user_id, "Old Label", card_id)
-    db.save_import_account_link(user_id, "New Label", card_id)
-    db.upsert_imported_transactions(user_id, history("Old Label"), EXPORT)
+    card = accounts["Example Card"]
+    db.upsert_imported_transactions(user_id, history(card, "Old Label"), EXPORT)
 
-    result = db.upsert_imported_transactions(user_id, history("New Label"), EXPORT)
+    result = db.upsert_imported_transactions(user_id, history(card, "Example Card"), EXPORT)
 
     assert result["inserted"] == 0
     assert len(stored(db, user_id)) == 2
@@ -57,102 +55,22 @@ def test_history_is_not_added_again_when_the_label_changes(db, user_id, accounts
 def test_a_genuine_second_identical_charge_is_still_added(db, user_id, accounts):
     """Two identical purchases on one day are two charges. Recognizing the first
     as already imported must not swallow the second."""
-    card_id = accounts["Example Card"]
-    db.save_import_account_link(user_id, "Old Label", card_id)
-    db.save_import_account_link(user_id, "New Label", card_id)
+    card = accounts["Example Card"]
     coffee = (date(2026, 7, 10), "ACME COFFEE", -4.50)
-    db.upsert_imported_transactions(user_id, [row("Old Label", *coffee)], EXPORT)
+    db.upsert_imported_transactions(user_id, [row(card, "Old Label", *coffee)], EXPORT)
 
     result = db.upsert_imported_transactions(
-        user_id, [row("New Label", *coffee), row("New Label", *coffee)], EXPORT
+        user_id, [row(card, "Example Card", *coffee), row(card, "Example Card", *coffee)], EXPORT
     )
 
     assert result["inserted"] == 1
     assert len(stored(db, user_id)) == 2
 
 
-def test_an_unplaced_export_is_recognized_by_the_history_it_shares(db, user_id, accounts):
-    """An export whose label matches nothing still says which account it is: it
-    carries transactions that account already holds. Only the new one is added,
-    and it lands on that account rather than on no account at all."""
-    card_id = accounts["Example Card"]
-    db.save_import_account_link(user_id, "Old Label", card_id)
-    db.upsert_imported_transactions(user_id, history("Old Label"), EXPORT)
+def test_rows_land_on_the_account_they_carry_in_its_own_name(db, user_id, accounts):
+    card = accounts["Example Card"]
 
-    result = db.upsert_imported_transactions(
-        user_id,
-        history("Unplaced Label") + [row("Unplaced Label", date(2026, 7, 20), "ACME BOOKS", -15.00)],
-        EXPORT,
-    )
+    db.upsert_imported_transactions(user_id, history(card, "Whatever The File Said"), EXPORT)
 
-    assert result["inserted"] == 1
-    assert stored(db, user_id) == [
-        {"account_id": card_id, "description": "ACME HARDWARE"},
-        {"account_id": card_id, "description": "ACME GROCER"},
-        {"account_id": card_id, "description": "ACME BOOKS"},
-    ]
-
-
-def test_a_recognized_label_is_remembered(db, user_id, accounts):
-    """Next month's export shares nothing with what is stored. Having placed the
-    label once, Metis must not need the overlap again."""
-    card_id = accounts["Example Card"]
-    db.save_import_account_link(user_id, "Old Label", card_id)
-    db.upsert_imported_transactions(user_id, history("Old Label"), EXPORT)
-    db.upsert_imported_transactions(user_id, history("Unplaced Label"), EXPORT)
-
-    db.upsert_imported_transactions(
-        user_id, [row("Unplaced Label", date(2026, 8, 3), "ACME BOOKS", -15.00)], EXPORT
-    )
-
-    assert stored(db, user_id)[-1] == {"account_id": card_id, "description": "ACME BOOKS"}
-
-
-def unanchored(db, user_id):
-    return db.query_all(
-        "SELECT description FROM imported_transactions "
-        "WHERE user_id = ? AND account_id IS NULL ORDER BY tx_date, id",
-        [user_id],
-    )
-
-
-def test_history_held_by_two_accounts_is_not_guessed_between(db, user_id, accounts):
-    """When two accounts hold the same transactions the overlap says nothing
-    about which one the export is. Picking one would hand it the other's history,
-    so the rows wait for the user to place them."""
-    db.save_import_account_link(user_id, "Card Label", accounts["Example Card"])
-    db.save_import_account_link(user_id, "Checking Label", accounts["Example Checking"])
-    db.upsert_imported_transactions(user_id, history("Card Label"), EXPORT)
-    db.upsert_imported_transactions(user_id, history("Checking Label"), EXPORT)
-
-    db.upsert_imported_transactions(
-        user_id, [row("Unplaced Label", date(2026, 7, 10), "ACME HARDWARE", -40.00)], EXPORT
-    )
-
-    assert unanchored(db, user_id) == [{"description": "ACME HARDWARE"}]
-
-
-def test_one_coincidence_does_not_claim_a_whole_export(db, user_id, accounts):
-    """A single matching row among several is as likely chance as history — the
-    same subscription price on the same day on two cards. That is not enough to
-    put a whole export on an account."""
-    db.save_import_account_link(user_id, "Old Label", accounts["Example Card"])
-    db.upsert_imported_transactions(
-        user_id, [row("Old Label", date(2026, 7, 10), "ACME STREAMING", -9.99)], EXPORT
-    )
-
-    db.upsert_imported_transactions(
-        user_id,
-        [
-            row("Unplaced Label", date(2026, 7, 10), "ACME STREAMING", -9.99),
-            row("Unplaced Label", date(2026, 7, 11), "ACME BOOKS", -15.00),
-            row("Unplaced Label", date(2026, 7, 12), "ACME GROCER", -25.50),
-        ],
-        EXPORT,
-    )
-
-    assert unanchored(db, user_id) == [
-        {"description": "ACME STREAMING"},
-        {"description": "ACME BOOKS"},
-        {"description": "ACME GROCER"},
-    ]
+    assert {r["account_id"] for r in stored(db, user_id)} == {card}
+    assert db.fetch_one("SELECT DISTINCT account FROM imported_transactions")[0] == "Example Card"

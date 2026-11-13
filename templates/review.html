@@ -14,7 +14,7 @@
 {% macro list_head(title, rows, total) -%}
 <div class="panel-head review-list-head">
   <h2>{{ title }}</h2>
-  <p class="review-list-figures">{{ rows|length }} · ${{ total|currency }}</p>
+  <p class="review-list-figures">{{ rows|length }}{% if total is not none %} · ${{ total|currency }}{% endif %}</p>
   <p class="review-position" data-review-position aria-live="polite"></p>
 </div>
 {%- endmacro %}
@@ -27,12 +27,13 @@
 {% else %}
 
 {% set totals = {
+  'imports': none,
   'transfers': r.transfers|sum(attribute='total'),
   'categories': r.categories|sum(attribute='total'),
   'budgets': r.budgets|sum(attribute='actual'),
   'recurring': r.recurring|sum(attribute='amount'),
 } %}
-{% set titles = [('transfers', 'Transfers'), ('categories', 'Categories'), ('budgets', 'Budgets'), ('recurring', 'Recurring')] %}
+{% set titles = [('imports', 'Imports'), ('transfers', 'Transfers'), ('categories', 'Categories'), ('budgets', 'Budgets'), ('recurring', 'Recurring')] %}
 
 <section class="panel review-summary">
   {% if r.meter.percent is not none %}
@@ -48,12 +49,33 @@
     {% for name, title in titles %}{% if r[name] %}
     <a class="card compact-card review-tile" href="#{{ name }}">
       <h3>{{ title }}</h3>
+      {% if totals[name] is none %}
+      <p class="amount-value">{{ r[name]|length }}</p>
+      {% else %}
       <p class="amount-value">${{ totals[name]|currency }}</p>
       <p class="card-note">{{ r[name]|length }}</p>
+      {% endif %}
     </a>
     {% endif %}{% endfor %}
   </div>
 </section>
+
+{% if r.imports %}
+<section class="panel" id="imports">
+  {{ list_head('Imports', r.imports, none) }}
+  <ol class="review-list">
+    {% for row in r.imports %}
+    {% call parts.review_row(row.name, ('Last ' ~ row.last_date ~ ' · ' ~ row.days_since ~ ' days ago · usually every ' ~ '%g'|format(row.usual_gap) ~ ' days') if row.last_date else 'No imports yet', row.key) %}
+    {{ parts.import_button({'id': row.account_id, 'name': row.name, 'default_template_id': row.default_template_id}) }}
+    <form method="post" action="{{ base_path() }}/review/imports/dismiss" class="inline-form">
+      <input type="hidden" name="key" value="{{ row.key }}" />
+      <button type="submit" class="button-link">Dismiss</button>
+    </form>
+    {% endcall %}
+    {% endfor %}
+  </ol>
+</section>
+{% endif %}
 
 {% if r.transfers %}
 <section class="panel" id="transfers">
@@ -157,6 +179,7 @@
 {% endif %}
 
 {{ restore() }}
+{{ parts.import_dialog(templates, '/review#imports') }}
 {% endif %}
 
 <script>

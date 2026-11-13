@@ -1,0 +1,23 @@
+{# How Metis will record the uploaded file with the mapping as it stands. #}
+{% if preview.error %}
+<p class="preview-error">{{ preview.error }}</p>
+{% else %}
+<p class="card-note">{{ preview.count }} rows{% if preview.count > preview.rows|length %}, first {{ preview.rows|length }} shown{% endif %}</p>
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Date</th><th>Description</th><th>Merchant</th><th>Amount</th></tr>
+    </thead>
+    <tbody>
+      {% for row in preview.rows %}
+      <tr>
+        <td>{{ row.tx_date.isoformat() }}</td>
+        <td>{{ row.description }}</td>
+        <td>{{ row.merchant }}</td>
+        <td class="amount-value {{ 'positive' if row.amount > 0 else 'negative' }}">{{ '+' if row.amount > 0 else '-' }}${{ (row.amount|abs)|currency }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}

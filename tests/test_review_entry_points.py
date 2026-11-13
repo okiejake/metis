@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app as app_module
-from conftest import add_imported
+from conftest import add_imported, quiet_imports
 from services import SESSION_COOKIE
 
 TODAY = date.today()
@@ -29,6 +29,7 @@ def client(db, user_id):
 
 
 def test_nav_shows_review_with_a_count_only_when_something_waits(client, db, user_id, accounts):
+    quiet_imports(user_id)
     quiet = NAV_REVIEW.search(client.get("/budget").text)
     assert quiet and quiet.group(1) is None
 
