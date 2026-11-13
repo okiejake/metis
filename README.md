@@ -20,10 +20,10 @@ Local Python finance tracker with recurring income/expenses and a running-balanc
 
 ## Run
 
-One-time setup:
+One-time setup, with Python 3.12 or newer:
 
 ```bash
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
