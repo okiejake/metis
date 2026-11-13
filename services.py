@@ -219,15 +219,15 @@ LEGACY_TEMPLATE_FIELDS = ("name", "date_field", "date_fallback_field", "descript
 
 
 def migrate_legacy_import_templates(conn: duckdb.DuckDBPyConnection) -> None:
-    """Once per user who imported before templates replaced the built-in formats:
-    give them those layouts as templates, and set each account's default where
-    its rows show which layout it used. Recorded in settings so a template the
-    user deletes stays deleted."""
+    """On a database's first start with templates, give each user who already
+    imported the old built-in layouts as templates, and set each account's
+    default where its rows show which layout it used. Runs once per database, so
+    a later user never gets them and a template the user deletes stays deleted."""
+    if conn.execute("SELECT 1 FROM applied_migrations WHERE name = 'legacy_templates'").fetchone():
+        return
+    conn.execute("INSERT INTO applied_migrations (name) VALUES ('legacy_templates')")
     users = conn.execute("SELECT DISTINCT user_id FROM imported_transactions").fetchall()
     for (user_id,) in users:
-        flag = f"user:{user_id}:legacy_templates"
-        if conn.execute("SELECT 1 FROM settings WHERE key = ?", [flag]).fetchone():
-            continue
         ids = {}
         for template in LEGACY_TEMPLATES:
             if conn.execute("SELECT 1 FROM import_templates WHERE user_id = ? AND LOWER(name) = LOWER(?)",
@@ -251,7 +251,6 @@ def migrate_legacy_import_templates(conn: duckdb.DuckDBPyConnection) -> None:
             default = cleared if account_type == "credit_card" and types - {"Credit", "Debit", ""} else shared
             if default:
                 conn.execute("UPDATE accounts SET default_template_id = ? WHERE id = ?", [default, account_id])
-        conn.execute("INSERT INTO settings (key, value) VALUES (?, '1')", [flag])
 
 
 def migrate_categories_to_user_scoped_uniqueness(
@@ -618,6 +617,11 @@ def init_db() -> None:
                 created_at TIMESTAMP NOT NULL DEFAULT NOW()
             )
             """
+        )
+        # One-time data steps already taken on this database.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS applied_migrations "
+            "(name TEXT PRIMARY KEY, applied_at TIMESTAMP NOT NULL DEFAULT NOW())"
         )
         # A file uploaded while its template is being mapped. Deleted when the
         # template is saved, or a day later.

@@ -22,6 +22,12 @@ def restart(db):
     db.init_db()
 
 
+def upgrade(db):
+    """Start as a database from before templates replaced the built-in formats."""
+    db.execute("DELETE FROM applied_migrations WHERE name = 'legacy_templates'")
+    db.init_db()
+
+
 def names(user_id):
     return [t["name"] for t in it.load_templates(user_id)]
 
@@ -30,7 +36,7 @@ def test_users_with_imports_get_the_old_layouts_as_templates(db, user_id, accoun
     imported(db, user_id, accounts["Example Checking"], "Debit")
     imported(db, user_id, accounts["Example Card"], "Purchase")
 
-    restart(db)
+    upgrade(db)
 
     assert names(user_id) == list(LEGACY)
     by_name = {t["name"]: t["id"] for t in it.load_templates(user_id)}
@@ -42,7 +48,7 @@ def test_users_with_imports_get_the_old_layouts_as_templates(db, user_id, accoun
 def test_a_card_imported_with_credit_and_debit_rows_uses_the_shared_layout(db, user_id, accounts):
     imported(db, user_id, accounts["Example Card"], "Debit")
 
-    restart(db)
+    upgrade(db)
 
     default = db.load_account_by_id(user_id, accounts["Example Card"])["default_template_id"]
     assert it.load_template(user_id, default)["name"] == "Checking and Visa export"
@@ -50,7 +56,7 @@ def test_a_card_imported_with_credit_and_debit_rows_uses_the_shared_layout(db, u
 
 def test_it_happens_once_even_after_the_user_deletes_them(db, user_id, accounts):
     imported(db, user_id, accounts["Example Checking"], "Debit")
-    restart(db)
+    upgrade(db)
     restart(db)
     assert names(user_id) == list(LEGACY)
 
@@ -62,14 +68,14 @@ def test_it_happens_once_even_after_the_user_deletes_them(db, user_id, accounts)
 
 
 def test_users_without_imports_get_none(db, user_id, accounts):
-    restart(db)
+    upgrade(db)
 
     assert names(user_id) == []
 
 
 def test_the_legacy_layouts_read_their_old_files(db, user_id, accounts):
     imported(db, user_id, accounts["Example Checking"], "Debit")
-    restart(db)
+    upgrade(db)
     by_name = {t["name"]: t for t in it.load_templates(user_id)}
     checking = db.load_account_by_id(user_id, accounts["Example Checking"])
     card = db.load_account_by_id(user_id, accounts["Example Card"])
@@ -83,3 +89,12 @@ def test_the_legacy_layouts_read_their_old_files(db, user_id, accounts):
 
     assert (shared[0]["amount"], shared[0]["merchant"]) == (-40.0, "ACME UTILITIES")
     assert (cleared[0]["amount"], cleared[0]["tx_date"]) == (-20.0, date(2026, 7, 30))
+
+
+def test_a_user_who_imports_after_the_change_gets_none(db, user_id, accounts):
+    restart(db)  # the first start with templates; nothing imported yet
+    imported(db, user_id, accounts["Example Checking"], "Debit")
+
+    restart(db)
+
+    assert names(user_id) == []

@@ -23,7 +23,7 @@
   </div>
 </section>
 
-<form method="post" action="{{ base_path() }}/templates" id="template-form"
+<form method="post" action="{{ base_path() }}/templates" id="template-form" class="flow"
       data-preview-url="{{ base_path() }}/templates/preview">
   <input type="hidden" name="upload_id" value="{{ upload_id }}" />
   {% if account %}<input type="hidden" name="account_id" value="{{ account.id }}" />{% endif %}

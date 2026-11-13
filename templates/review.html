@@ -65,7 +65,7 @@
   {{ list_head('Imports', r.imports, none) }}
   <ol class="review-list">
     {% for row in r.imports %}
-    {% call parts.review_row(row.name, ('Last ' ~ row.last_date ~ ' · ' ~ row.days_since ~ ' days · usually ' ~ row.usual_gap) if row.last_date else 'No imports yet', row.key) %}
+    {% call parts.review_row(row.name, ('Last ' ~ row.last_date ~ ' · ' ~ row.days_since ~ ' days ago · usually every ' ~ '%g'|format(row.usual_gap) ~ ' days') if row.last_date else 'No imports yet', row.key) %}
     {{ parts.import_button({'id': row.account_id, 'name': row.name, 'default_template_id': row.default_template_id}) }}
     <form method="post" action="{{ base_path() }}/review/imports/dismiss" class="inline-form">
       <input type="hidden" name="key" value="{{ row.key }}" />

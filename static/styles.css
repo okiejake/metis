@@ -2215,9 +2215,15 @@ body.amounts-hidden .amount-sensitive {
   flex-direction: column;
   gap: 0.35rem;
 }
+.eom-toggle input[type="checkbox"] {
+  width: auto;
+}
+
 .eom-toggle {
   display: inline-flex;
   align-items: center;
+  align-self: end;
+  justify-self: start;
   gap: 0.35rem;
   font-size: 0.78rem;
   font-weight: 600;

@@ -86,10 +86,12 @@ account the user created.
   default and imports the uploaded file into the account.
 - **Uploaded file between steps** is held in the database for the mapping step,
   then deleted when the template is saved, or after a day.
-- **Existing users:** for each user who already has imported rows, the old
-  built-in layouts become three templates they own ("Checking export", "Visa
-  export", "Card export"). Each existing account's default is set from the rows
-  it holds where that is unambiguous; otherwise it is left unset.
+- **Existing users:** on a database's first start with this change, each user
+  who already has imported rows gets the old built-in layouts as templates they
+  own: "Checking and Visa export" (those two exports shared one layout) and
+  "Card export". Each existing account's default is set from the rows it holds.
+  This runs once per database, so later users never get them and a deleted
+  template stays deleted.
 - **Rows with no account** (left over from label guessing) are listed on Accounts
   with an account picker, only while any exist.
 - **Stale rule details:** an account needs at least 5 transactions for a
