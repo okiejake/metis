@@ -1,6 +1,39 @@
 # Visual style: Neumorphism
 
-Metis's UI work follows this style. It is the owner's brief, kept as given.
+Metis's UI work follows this style. The owner's brief is kept as given below. Metis
+is a data-heavy app, which the brief warns about, so the owner decided (2026-11-13)
+how it applies here. Where the two differ, **How Metis applies it** wins.
+
+## How Metis applies it
+
+**Soft frame, flat data.**
+
+- **Neumorphic:** the frame and the controls. That means the header, cards and
+  panels, buttons, inputs and selects, chips and badges, the profile menu, dialogs
+  and popups (such as the date range picker).
+- **Flat and high-contrast:** the data. Tables, lists of transactions, figures,
+  charts, and the date preview's day cells sit flat inside their neumorphic card.
+  Rows are divided by plain lines, not shadows. Amounts keep full-contrast text.
+- **Control edges stay visible.** Inputs, selects and buttons keep an edge with at
+  least 3:1 contrast against the page, either a hairline border or a shadow strong
+  enough to reach it. A soft shadow alone is not enough.
+- **Focus:** every focusable control shows the `--neu-accent` outline from the brief.
+- **Motion:** the 150ms press. Nothing moves under `prefers-reduced-motion: reduce`.
+- **Dark mode:** the same tokens, re-valued for a dark base. A dark grey base, a
+  highlight a little lighter than the base (top-left) and a shade a little darker
+  (bottom-right), with the pastel tints muted. Token names don't change, so
+  components carry no dark-only rules beyond the token values.
+- **Map, don't add.** The brief's classes (`card`, `inset`, `button`, `chip`,
+  `progress`) map onto Metis's existing components and tokens. They don't get a
+  second, parallel set of components.
+- **Header type size.** The brief's large `h1` is for landing pages. The header
+  wordmark keeps its current size.
+
+**Rollout.** New UI is built in this style as it lands. Restyling existing screens
+is its own piece of work, tracked in its own issue, not done on the side of other
+changes.
+
+## The brief
 
 ---
 
