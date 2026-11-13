@@ -2051,7 +2051,7 @@ body.amounts-hidden .amount-sensitive {
 }
 
 /* Expected Transactions + reconcile ------------------------------------- */
-.expected-type-toggle {
+.segmented {
   display: inline-flex;
   gap: 0.25rem;
   padding: 0.25rem;

@@ -3836,9 +3836,20 @@ def load_all_manual_transactions(user_id: int) -> List[Dict[str, Any]]:
     return rows
 
 
+def recurring_status(item: Dict[str, Any], today: Optional[date] = None) -> str:
+    """"completed" once the end date has passed, whether or not the item was
+    paused, since it will not occur again; otherwise "paused" or "active"."""
+    today = today or date.today()
+    end_date = item.get("end_date")
+    if end_date is not None and _as_date(end_date) < today:
+        return "completed"
+    return "active" if item.get("active") else "paused"
+
+
 def load_expected_items(user_id: int) -> List[Dict[str, Any]]:
     """Unified expected-transaction list: recurring items + one-time items."""
     accounts = load_accounts_map(user_id)
+    today = date.today()
 
     def account_name(account_id: Any) -> str:
         account = accounts.get(int(account_id)) if account_id else None
@@ -3857,6 +3868,7 @@ def load_expected_items(user_id: int) -> List[Dict[str, Any]]:
                 "category_color": safe_hex_color(item.get("category_color")),
                 "account_name": account_name(item.get("account_id")),
                 "active": bool(item["active"]),
+                "status": recurring_status(item, today),
                 "cadence": summarize_frequency(item),
                 "date": item["start_date"].date() if isinstance(item.get("start_date"), datetime) else item.get("start_date"),
             }
