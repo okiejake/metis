@@ -10,7 +10,7 @@ This module reads and writes through services; services never imports it.
 """
 
 import json
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Set, Union
 
 import services as db
@@ -164,6 +164,134 @@ def set_charge(user_id: int, tx_id: int, choice: Choice) -> Optional[int]:
     return record_action(user_id, "charge", before)
 
 
+# --- Transfers --------------------------------------------------------------
+
+
+def _rows(user_id: int, where: str, params: List[Any]) -> List[Dict[str, Any]]:
+    rows = db.query_all(
+        f"""
+        SELECT id, account_id, tx_date, amount, is_transfer, decision_id,
+               COALESCE(NULLIF(merchant, ''), description) AS merchant
+        FROM imported_transactions
+        WHERE user_id = ? AND account_id IS NOT NULL AND {where}
+        ORDER BY tx_date, id
+        """,
+        [user_id, *params],
+    )
+    for row in rows:
+        row["tx_date"] = db._as_date(row["tx_date"])
+        row["amount"] = float(row["amount"])
+    return rows
+
+
+def _card_ids(user_id: int) -> Set[int]:
+    return {aid for aid, a in db.load_accounts_map(user_id).items() if a.get("account_type") == "credit_card"}
+
+
+def _pair(outflows: List[Dict[str, Any]], inflows: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
+    """Pair each outflow with an equal amount arriving in a different account
+    within the card-payment matching window, one to one, closest date first."""
+    window = db.PAYMENT_MATCH_WINDOW_DAYS
+    used: Set[int] = set()
+    pairs: Dict[int, Dict[str, Any]] = {}
+    for out in outflows:
+        best = None
+        for arrival in inflows:
+            if arrival["id"] in used or arrival["account_id"] == out["account_id"]:
+                continue
+            if abs(arrival["amount"] + out["amount"]) > 0.005:
+                continue
+            gap = abs((arrival["tx_date"] - out["tx_date"]).days)
+            if gap <= window and (best is None or gap < best[0]):
+                best = (gap, arrival)
+        if best:
+            used.add(best[1]["id"])
+            pairs[out["id"]] = best[1]
+    return pairs
+
+
+def _inflows_near(user_id: int, outflows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not outflows:
+        return []
+    window = timedelta(days=db.PAYMENT_MATCH_WINDOW_DAYS)
+    first = min(o["tx_date"] for o in outflows) - window
+    last = max(o["tx_date"] for o in outflows) + window
+    return _rows(user_id, "amount > 0 AND tx_date >= ? AND tx_date <= ?", [first, last])
+
+
+def paired_outflows(user_id: int, window_start: date, window_end: date) -> Dict[int, Dict[str, Any]]:
+    """Debits in the window, not yet transfers and not on a card, that an equal
+    amount arriving in another account answers. Maps the debit's id to its
+    arrival: tx_id, account_id, account_name, account_type. Card charges are
+    never candidates, so card statements are never touched."""
+    cards = _card_ids(user_id)
+    outflows = [
+        row for row in _rows(
+            user_id, "NOT is_transfer AND amount < 0 AND tx_date >= ? AND tx_date <= ?", [window_start, window_end]
+        )
+        if row["account_id"] not in cards
+    ]
+    accounts = db.load_accounts_map(user_id)
+    result: Dict[int, Dict[str, Any]] = {}
+    for out_id, arrival in _pair(outflows, _inflows_near(user_id, outflows)).items():
+        account = accounts.get(int(arrival["account_id"]), {})
+        result[out_id] = {
+            "tx_id": arrival["id"],
+            "account_id": int(arrival["account_id"]),
+            "account_name": account.get("name", ""),
+            "account_type": account.get("account_type", ""),
+        }
+    return result
+
+
+def _mark_transfers(user_id: int, tx_ids: Set[int], decision_id: int) -> int:
+    if not tx_ids:
+        return 0
+    ids = sorted(tx_ids)
+    placeholders = ", ".join("?" for _ in ids)
+    db.execute(
+        f"UPDATE imported_transactions SET is_transfer = TRUE, decision_id = ? "
+        f"WHERE user_id = ? AND id IN ({placeholders})",
+        [decision_id, user_id, *ids],
+    )
+    return len(ids)
+
+
+def _apply_transfer(user_id: int, key: str, decision_id: int, cards: Set[int]) -> int:
+    """Mark the merchant's debits outside cards as transfers, then the arrival
+    of each when it landed outside a card and is not one already."""
+    outflows = [
+        row for row in _rows(user_id, "amount < 0", [])
+        if row["account_id"] not in cards and merchant_key(row["merchant"]) == key
+    ]
+    changed = _mark_transfers(
+        user_id, {row["id"] for row in outflows if not row["is_transfer"]}, decision_id
+    )
+    decided = [row for row in outflows if not row["is_transfer"] or row["decision_id"] == decision_id]
+    arrivals = {
+        arrival["id"]
+        for arrival in _pair(decided, _inflows_near(user_id, decided)).values()
+        if arrival["account_id"] not in cards and not arrival["is_transfer"]
+    }
+    return changed + _mark_transfers(user_id, arrivals, decision_id)
+
+
+def confirm_transfer(user_id: int, key: str) -> Optional[int]:
+    """Every debit from this merchant outside a card is a transfer between the
+    owner's accounts, now and on every later import. Returns the action id, or
+    None when nothing was left to change."""
+    cards = _card_ids(user_id)
+    pending = [
+        row for row in _rows(user_id, "NOT is_transfer AND amount < 0", [])
+        if row["account_id"] not in cards and merchant_key(row["merchant"]) == key
+    ]
+    if not pending:
+        return None
+    decision_id = _save_decision(user_id, key, "transfer", None)
+    _apply_transfer(user_id, key, decision_id, cards)
+    return record_action(user_id, "decision", {"decision_id": decision_id})
+
+
 def load_decisions(user_id: int) -> List[Dict[str, Any]]:
     return db.query_all(
         "SELECT id, merchant_key, kind, category_id FROM merchant_decisions WHERE user_id = ? ORDER BY id",
@@ -179,10 +307,13 @@ def apply_review_decisions(user_id: int) -> int:
         return 0
     changed = 0
     by_key = _uncategorized_ids_by_key(user_id)
+    cards = _card_ids(user_id)
     for decision in decisions:
         if decision["kind"] == "category":
             changed += _categorize(
                 user_id, by_key.get(decision["merchant_key"], set()),
                 int(decision["category_id"]), int(decision["id"]),
             )
+        elif decision["kind"] == "transfer":
+            changed += _apply_transfer(user_id, decision["merchant_key"], int(decision["id"]), cards)
     return changed
