@@ -31,7 +31,7 @@
         document.documentElement.setAttribute('data-theme', preferredTheme);
       })();
     </script>
-    <link rel="stylesheet" href="{{ base_path() }}/static/styles.css?v=20260924a" />
+    <link rel="stylesheet" href="{{ base_path() }}/static/styles.css?v=20261113a" />
   </head>
   <body>
     <div class="app-glow app-glow-one" aria-hidden="true"></div>
@@ -43,25 +43,19 @@
     {% set active_path = request.url.path %}
     <header class="site-header">
       <div class="site-header-main">
-        <div class="brand-block">
-          <p class="brand-kicker">Financial Clarity OS</p>
-          <div class="brand-row">
-            <h1>metis</h1>
-          </div>
-          <nav class="site-nav" aria-label="Primary">
-            <a href="{{ base_path() }}/dashboard" class="{{ 'active' if active_path.startswith('/dashboard') else '' }}">Dashboard</a>
-            <a href="{{ base_path() }}/review" class="{{ 'active' if active_path.startswith('/review') else '' }}">Review{% if review_waiting %} <span class="nav-badge">{{ review_waiting }}</span>{% endif %}</a>
-            <a href="{{ base_path() }}/ledger" class="{{ 'active' if active_path.startswith('/ledger') else '' }}">Ledger</a>
-            <a href="{{ base_path() }}/statements" class="{{ 'active' if active_path.startswith('/statements') else '' }}">Statements</a>
-            <a href="{{ base_path() }}/budget" class="{{ 'active' if active_path.startswith('/budget') or active_path.startswith('/expected') or active_path.startswith('/recurring') or active_path.startswith('/categories') else '' }}">Budget</a>
-            <a href="{{ base_path() }}/accounts" class="{{ 'active' if active_path.startswith('/accounts') else '' }}">Accounts</a>
-          </nav>
-        </div>
+        <h1>metis</h1>
+        <nav class="site-nav" aria-label="Primary">
+          <a href="{{ base_path() }}/dashboard" class="{{ 'active' if active_path.startswith('/dashboard') else '' }}">Dashboard</a>
+          <a href="{{ base_path() }}/review" class="{{ 'active' if active_path.startswith('/review') else '' }}">Review{% if review_waiting %} <span class="nav-badge">{{ review_waiting }}</span>{% endif %}</a>
+          <a href="{{ base_path() }}/ledger" class="{{ 'active' if active_path.startswith('/ledger') else '' }}">Ledger</a>
+          <a href="{{ base_path() }}/statements" class="{{ 'active' if active_path.startswith('/statements') else '' }}">Statements</a>
+          <a href="{{ base_path() }}/budget" class="{{ 'active' if active_path.startswith('/budget') or active_path.startswith('/expected') or active_path.startswith('/recurring') or active_path.startswith('/categories') else '' }}">Budget</a>
+          <a href="{{ base_path() }}/accounts" class="{{ 'active' if active_path.startswith('/accounts') else '' }}">Accounts</a>
+        </nav>
 
         <div class="header-actions">
-          <button type="button" class="button-link" id="amount-toggle-button">
+          <button type="button" class="icon-button" id="amount-toggle-button" aria-label="Hide amounts" title="Hide amounts">
             <i data-lucide="eye-off" class="menu-icon" aria-hidden="true"></i>
-            Hide Amounts
           </button>
 
           <details class="user-menu">
@@ -538,9 +532,10 @@
             return;
           }
           document.body.classList.toggle('amounts-hidden', amountsHidden);
-          amountToggleButton.innerHTML = amountsHidden
-            ? '<i data-lucide="eye" class="menu-icon" aria-hidden="true"></i>Show Amounts'
-            : '<i data-lucide="eye-off" class="menu-icon" aria-hidden="true"></i>Hide Amounts';
+          const label = amountsHidden ? 'Show amounts' : 'Hide amounts';
+          amountToggleButton.setAttribute('aria-label', label);
+          amountToggleButton.setAttribute('title', label);
+          amountToggleButton.innerHTML = `<i data-lucide="${amountsHidden ? 'eye' : 'eye-off'}" class="menu-icon" aria-hidden="true"></i>`;
         }
 
         if (amountToggleButton) {
