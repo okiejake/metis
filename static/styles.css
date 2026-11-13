@@ -126,7 +126,7 @@ body.is-ready .container > *:nth-child(4) {
 }
 
 .site-header {
-  position: static;
+  position: relative;
   z-index: 30;
   display: grid;
   gap: 0.95rem;
