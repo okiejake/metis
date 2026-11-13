@@ -16,6 +16,7 @@ from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
 
 from base_path import configured_base_path
+from merchants import legacy_merchant_key, merchant_key
 
 DB_PATH = os.getenv("FINANCE_DB_PATH", "finance.duckdb")
 VALID_KINDS = {"income", "expense"}
@@ -350,6 +351,8 @@ def init_db() -> None:
         conn.execute("CREATE SEQUENCE IF NOT EXISTS transaction_splits_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS sessions_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS card_statements_id_seq START 1")
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS merchant_decisions_id_seq START 1")
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS review_actions_id_seq START 1")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -598,6 +601,37 @@ def init_db() -> None:
             )
             """
         )
+        # Review's per-merchant decisions (see review.py). kind is 'category' or
+        # 'transfer'; a merchant can hold one of each (a card part categorized,
+        # a checking part a transfer). Rows a category decision changed carry
+        # its id in imported_transactions.decision_id, and rows a transfer
+        # decision marked carry it in transfer_decision_id, so Undo finds every
+        # one of them.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS merchant_decisions (
+                id BIGINT PRIMARY KEY DEFAULT nextval('merchant_decisions_id_seq'),
+                user_id BIGINT NOT NULL,
+                merchant_key TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                category_id BIGINT,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                UNIQUE (user_id, merchant_key, kind)
+            )
+            """
+        )
+        # Every Review action, with what Undo needs to reverse it (JSON).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS review_actions (
+                id BIGINT PRIMARY KEY DEFAULT nextval('review_actions_id_seq'),
+                user_id BIGINT NOT NULL,
+                kind TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+            """
+        )
 
         conn.execute(
             """
@@ -646,6 +680,10 @@ def init_db() -> None:
         # Import labels are matched case-insensitively but shown back as written.
         if not table_has_column(conn, "import_account_links", "display_label"):
             conn.execute("ALTER TABLE import_account_links ADD COLUMN display_label TEXT")
+        if not table_has_column(conn, "imported_transactions", "decision_id"):
+            conn.execute("ALTER TABLE imported_transactions ADD COLUMN decision_id BIGINT")
+        if not table_has_column(conn, "imported_transactions", "transfer_decision_id"):
+            conn.execute("ALTER TABLE imported_transactions ADD COLUMN transfer_decision_id BIGINT")
         # Credentials. NULL password_hash means "not set yet", which puts the app
         # into first-run setup rather than letting anyone in.
         if not table_has_column(conn, "users", "password_hash"):
@@ -1121,10 +1159,18 @@ def parse_form_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def redirect_with_message(path: str, message: str, is_error: bool = False) -> RedirectResponse:
-    path = resolve_safe_redirect_target(path)
+def redirect_with_message(
+    path: str, message: str, is_error: bool = False, undo: Optional[int] = None
+) -> RedirectResponse:
+    """Redirect within this site with a message, and an Undo when an action id
+    is given. A #fragment stays at the end, so the page opens at that place."""
+    path, has_fragment, fragment = resolve_safe_redirect_target(path).partition("#")
     separator = "&" if "?" in path else "?"
     url = f"{path}{separator}msg={quote_plus(message)}&err={1 if is_error else 0}"
+    if undo is not None:
+        url += f"&undo={int(undo)}"
+    if has_fragment:
+        url += f"#{fragment}"
     return RedirectResponse(url=url, status_code=303)
 
 
@@ -1249,6 +1295,25 @@ def load_categories_with_usage(user_id: int) -> List[Dict[str, Any]]:
     for row in rows:
         row["color"] = safe_hex_color(row.get("color"))
     return rows
+
+
+def create_category(user_id: int, name: str, color: str = DEFAULT_CATEGORY_COLOR) -> int:
+    """Add a category and return its id. Names are unique per user, ignoring case."""
+    cleaned_name = (name or "").strip()
+    if not cleaned_name:
+        raise ValueError("Category name is required")
+    normalized_color = normalize_hex_color(color)
+    with get_connection() as conn:
+        existing = conn.execute(
+            "SELECT id FROM categories WHERE user_id = ? AND LOWER(name) = LOWER(?) LIMIT 1",
+            [user_id, cleaned_name],
+        ).fetchone()
+        if existing:
+            raise ValueError("A category with this name already exists")
+        return int(conn.execute(
+            "INSERT INTO categories (name, color, user_id) VALUES (?, ?, ?) RETURNING id",
+            [cleaned_name, normalized_color, user_id],
+        ).fetchone()[0])
 
 
 def load_category_by_id(user_id: int, category_id: int) -> Optional[Dict[str, Any]]:
@@ -2410,20 +2475,30 @@ def card_balance_summary(
     }
 
 
-def _budget_actuals_by_category(
-    user_id: int, window_start: date, window_end: date
-) -> Dict[str, Dict[str, Any]]:
-    """Actual imported spend/income in the window grouped by *effective* category
-    (COALESCE reconciled item's category, import category). Transfers excluded so
-    card payments never count as spending. Split transactions contribute each part
-    to its own category and only the remainder to their effective category.
-    Returns keyed by lower(name) ('' = none)."""
-    rows = fetch_all("""
+def spending_parts(user_id: int, window_start: date, window_end: date) -> List[Dict[str, Any]]:
+    """Every piece of spending in the window: one row per transaction remainder
+    and one per split part. This is the one definition of spending that Budget
+    and Review both read.
+
+    Spending is money going out that is not a transfer. Money coming in on a
+    card is a refund and reduces spending in its category; money coming in on
+    any other account is income and is not here at all. A row's category is its
+    effective one (the reconciled expected item's, else its own); a split part
+    has its own, and only what is left after splitting keeps the row's.
+
+    Each dict: tx_id, tx_date, account_id, merchant, category_id (None when
+    uncategorized), category_name, category_color, spent (> 0 spending,
+    < 0 refund)."""
+    rows = query_all("""
             WITH tx AS (
-                SELECT i.id, i.amount,
+                SELECT i.id, i.tx_date, i.account_id, i.amount,
+                       COALESCE(NULLIF(i.merchant, ''), i.description) AS merchant,
+                       COALESCE(ec.id, ic.id) AS cat_id,
                        COALESCE(ec.name, ic.name) AS cat_name,
                        COALESCE(ec.color, ic.color) AS cat_color
                 FROM imported_transactions i
+                LEFT JOIN accounts acct
+                       ON acct.id = i.account_id AND acct.user_id = i.user_id
                 LEFT JOIN expected_reconciliations r
                        ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
                 LEFT JOIN recurring_items ri
@@ -2436,40 +2511,66 @@ def _budget_actuals_by_category(
                        ON ic.id = i.category_id AND ic.user_id = i.user_id
                 WHERE i.user_id = ? AND NOT i.is_transfer
                   AND i.tx_date >= ? AND i.tx_date <= ?
+                  AND (i.amount < 0 OR COALESCE(acct.account_type = 'credit_card', FALSE))
             ),
             allocated AS (
                 SELECT imported_transaction_id AS tx_id, COALESCE(SUM(amount), 0) AS part_total
                 FROM transaction_splits WHERE user_id = ? GROUP BY 1
             ),
             parts AS (
-                -- What is left after splitting, on the transaction's own category.
-                SELECT tx.cat_name, tx.cat_color,
-                       SIGN(tx.amount) * (ABS(tx.amount) - COALESCE(a.part_total, 0)) AS total
+                SELECT tx.id AS tx_id, tx.tx_date, tx.account_id, tx.merchant,
+                       tx.cat_id AS category_id, tx.cat_name AS category_name,
+                       tx.cat_color AS category_color,
+                       -SIGN(tx.amount) * (ABS(tx.amount) - COALESCE(a.part_total, 0)) AS spent
                 FROM tx LEFT JOIN allocated a ON a.tx_id = tx.id
                 UNION ALL
-                -- Each split part, on the category it was assigned to.
-                SELECT sc.name, sc.color, SIGN(tx.amount) * ts.amount
+                SELECT tx.id, tx.tx_date, tx.account_id, tx.merchant,
+                       sc.id, sc.name, sc.color, -SIGN(tx.amount) * ts.amount
                 FROM tx
                 JOIN transaction_splits ts
                        ON ts.imported_transaction_id = tx.id AND ts.user_id = ?
                 JOIN categories sc ON sc.id = ts.category_id AND sc.user_id = ?
             )
-            SELECT cat_name, cat_color, COALESCE(SUM(total), 0) AS total
-            FROM parts
-            GROUP BY 1, 2
+            SELECT * FROM parts WHERE ABS(spent) > 0.005
+            ORDER BY tx_date, tx_id
             """, [user_id, window_start, window_end, user_id, user_id, user_id])
+    for row in rows:
+        row["tx_date"] = _as_date(row["tx_date"])
+        row["spent"] = round(float(row["spent"]), 2)
+        row["category_id"] = int(row["category_id"]) if row["category_id"] is not None else None
+    return rows
 
+
+def income_total(user_id: int, window_start: date, window_end: date) -> float:
+    """Money arriving in a non-card account that is not a transfer."""
+    row = fetch_one("""
+            SELECT COALESCE(SUM(i.amount), 0)
+            FROM imported_transactions i
+            LEFT JOIN accounts acct ON acct.id = i.account_id AND acct.user_id = i.user_id
+            WHERE i.user_id = ? AND NOT i.is_transfer AND i.amount > 0
+              AND i.tx_date >= ? AND i.tx_date <= ?
+              AND NOT COALESCE(acct.account_type = 'credit_card', FALSE)
+            """, [user_id, window_start, window_end])
+    return round(float(row[0] if row else 0.0), 2)
+
+
+def _budget_actuals_by_category(
+    user_id: int, window_start: date, window_end: date
+) -> Dict[str, Dict[str, Any]]:
+    """Actual spending in the window by effective category, from spending_parts.
+    Returns keyed by lower(name) ('' = none); income is reported separately by
+    income_total, so each bucket's income is 0."""
     result: Dict[str, Dict[str, Any]] = {}
-    for cat_name, cat_color, total in rows:
-        key = (cat_name or "").strip().lower()
+    for part in spending_parts(user_id, window_start, window_end):
+        name = part["category_name"]
+        key = (name or "").strip().lower()
         bucket = result.setdefault(
-            key, {"name": cat_name or "Uncategorized", "color": safe_hex_color(cat_color), "expense": 0.0, "income": 0.0}
+            key,
+            {"name": name or "Uncategorized", "color": safe_hex_color(part["category_color"]), "expense": 0.0, "income": 0.0},
         )
-        total = float(total)
-        if total < 0:
-            bucket["expense"] += -total
-        else:
-            bucket["income"] += total
+        bucket["expense"] += part["spent"]
+    for bucket in result.values():
+        bucket["expense"] = round(bucket["expense"], 2)
     return result
 
 
@@ -2584,7 +2685,7 @@ def build_budget_summary(user_id: int, window_start: date, window_end: date) -> 
     # --- Actuals, grouped by effective category and by reconciled line item ---
     actuals = _budget_actuals_by_category(user_id, window_start, window_end)
     item_actuals = _budget_actuals_by_item(user_id, window_start, window_end)
-    actual_income = sum(bucket["income"] for bucket in actuals.values())
+    actual_income = income_total(user_id, window_start, window_end)
 
     # --- Explicit per-category budgets, prorated to the window ---
     # A category with its own monthly budget uses it instead of the sum of its
@@ -3953,8 +4054,6 @@ def load_expected_item(user_id: int, source_type: str, source_id: int) -> Option
 # dismiss. Dismissed/added keys are remembered so they don't reappear.
 # ---------------------------------------------------------------------------
 
-_SUGGEST_STATE_RE = re.compile(r"\b[A-Z]{2}\b")
-
 # Map a median day-gap between occurrences to a human cadence and the Metis
 # frequency parameters that reproduce it. (lo, hi) is the inclusive gap window.
 _SUGGEST_CADENCES = [
@@ -3967,18 +4066,6 @@ _SUGGEST_CADENCES = [
     ("Every 6 months", (136, 285), "every_x_months", 6),
     ("Yearly", (286, 430), "yearly", 12),
 ]
-
-
-def _suggest_norm_key(text: Any) -> str:
-    """Collapse a merchant/description to a stable grouping key (drop store #s,
-    trailing city/state, ' * ' / '_' suffixes, and long digit runs)."""
-    value = str(text or "").upper()
-    value = re.sub(r"#\s*\d+", "", value)          # store numbers
-    value = re.sub(r"\b\d{3,}\b", "", value)        # long digit runs / phone tails
-    value = re.sub(r"[*_].*$", "", value)           # SQ * / TST* / FOO_BAR suffixes
-    value = _SUGGEST_STATE_RE.sub("", value)
-    value = re.sub(r"\s+", " ", value).strip()
-    return value or str(text or "").upper().strip()
 
 
 def _suggest_clean_name(text: Any) -> str:
@@ -4098,8 +4185,9 @@ def detect_recurring_suggestions(
         if isinstance(tx_date, datetime):
             tx_date = tx_date.date()
         row["tx_date"] = tx_date
-        key = _suggest_norm_key(row.get("merchant") or row.get("description"))
-        if not key or key in dismissed:
+        text = row.get("merchant") or row.get("description")
+        key = merchant_key(text)
+        if not key or key in dismissed or legacy_merchant_key(text) in dismissed:
             continue
         groups.setdefault(key, []).append(row)
 

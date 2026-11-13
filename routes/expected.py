@@ -10,7 +10,6 @@ from services import (
     VALID_KINDS,
     build_budget_summary,
     confirm_reconciliation,
-    count_dismissed_suggestions,
     create_match_rule,
     delete_match_rule,
     detect_recurring_suggestions,
@@ -73,8 +72,7 @@ def budget_page(request: Request, user: CurrentUser, start: str = "", end: str =
 
     recurring_items = [item for item in items if item["source_type"] == "recurring"]
     one_time_items = [item for item in items if item["source_type"] == "one_time"]
-    suggestions = detect_recurring_suggestions(user["id"])
-    dismissed_count = count_dismissed_suggestions(user["id"])
+    suggestion_count = len(detect_recurring_suggestions(user["id"]))
 
     return render(
         request,
@@ -84,8 +82,7 @@ def budget_page(request: Request, user: CurrentUser, start: str = "", end: str =
         budget_summary=budget_summary,
         recurring_items=recurring_items,
         one_time_items=one_time_items,
-        suggestions=suggestions,
-        dismissed_count=dismissed_count,
+        suggestion_count=suggestion_count,
         categories=load_categories(user["id"]),
         accounts=load_accounts(user["id"]),
         default_color=DEFAULT_CATEGORY_COLOR,

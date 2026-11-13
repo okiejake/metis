@@ -20,7 +20,7 @@ def _split_path(tx_id: int) -> str:
 
 
 @router.get("/transactions/{tx_id}/split", response_class=HTMLResponse)
-def split_page(request: Request, user: CurrentUser, tx_id: int, msg: str = "", err: int = 0):
+def split_page(request: Request, user: CurrentUser, tx_id: int, msg: str = "", err: int = 0, next: str = ""):
     transaction = load_imported_transaction_by_id(user["id"], tx_id)
     if not transaction:
         return redirect_with_message("/ledger", "Transaction not found", is_error=True)
@@ -34,6 +34,7 @@ def split_page(request: Request, user: CurrentUser, tx_id: int, msg: str = "", e
         splits=load_transaction_splits(user["id"], tx_id),
         remainder=split_remainder(user["id"], tx_id),
         categories=load_categories(user["id"]),
+        next_path=next,
     )
 
 
@@ -42,6 +43,7 @@ async def save_splits(request: Request, user: CurrentUser, tx_id: int):
     """Save the whole set at once. The editor posts parallel category_id/amount/
     note fields, so a blank amount simply drops that row."""
     form = await request.form()
+    back = str(form.get("next") or "") or _split_path(tx_id)
     category_ids = form.getlist("category_id")
     amounts = form.getlist("amount")
     notes = form.getlist("note")
@@ -71,10 +73,10 @@ async def save_splits(request: Request, user: CurrentUser, tx_id: int):
     message = f"Split saved — {len(parts)} part{'s' if len(parts) != 1 else ''}"
     if remainder > 0.005:
         message += f", remainder stays on the transaction's category"
-    return redirect_with_message(_split_path(tx_id), message)
+    return redirect_with_message(back, message)
 
 
 @router.post("/transactions/{tx_id}/split/clear")
-def clear_splits(request: Request, user: CurrentUser, tx_id: int):
+def clear_splits(request: Request, user: CurrentUser, tx_id: int, next: str = Form("")):
     clear_transaction_splits(user["id"], tx_id)
-    return redirect_with_message(_split_path(tx_id), "Split removed")
+    return redirect_with_message(next or _split_path(tx_id), "Split removed")

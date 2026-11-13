@@ -1,0 +1,101 @@
+{# Parts used in more than one place. Import with {% import "_parts.html" as parts %}. #}
+
+{% macro category_pill(name, color) -%}
+<span class="category-pill"><span class="category-dot" style="background: {{ color if color else 'var(--muted)' }};"></span>{{ name }}</span>
+{%- endmacro %}
+
+{# A horizontal bar on Budget's shared scale; also Review's meter. #}
+{% macro bar(fill_pct=0, over_pct=0, neutral_pct=0, title="") -%}
+<div class="budget-bar-track"{% if title %} title="{{ title }}"{% endif %}>
+  {% if neutral_pct > 0 %}
+  <span class="budget-bar-neutral" style="width: {{ [neutral_pct, 100]|min }}%;"></span>
+  {% else %}
+  <span class="budget-bar-fill" style="width: {{ [fill_pct, 100]|min }}%;"></span>
+  {% if over_pct > 0 %}
+  <span class="budget-bar-overflow" style="width: {{ over_pct }}%;"></span>
+  {% endif %}
+  {% endif %}
+</div>
+{%- endmacro %}
+
+{# With extras, also offers "New category" (choosing it reveals the name
+   field; see the page's picker script) and, unless transfer is false,
+   "Transfer". #}
+{% macro category_picker(field, categories, selected=None, extras=False, transfer=True) -%}
+<select name="{{ field }}" class="category-picker"{% if extras %} data-category-picker{% endif %}>
+  <option value="">No category</option>
+  {% for category in categories %}
+  <option value="{{ category.id }}" {{ 'selected' if category.id == selected else '' }}>{{ category.name }}</option>
+  {% endfor %}
+  {% if extras and transfer %}
+  <option value="transfer">Transfer</option>
+  {% endif %}
+  {% if extras %}
+  <option value="new">New category</option>
+  {% endif %}
+</select>
+{% if extras %}
+<input type="text" name="new_category_name" class="category-new-name hidden" placeholder="Name" aria-label="New category name" data-new-category />
+{% endif %}
+{%- endmacro %}
+
+{# One row in a Review list: a name, one line of facts, and what the caller
+   puts after them (the input and Confirm / Dismiss). Skip shows on phones. #}
+{% macro review_row(name, facts, key) -%}
+<li class="review-row" data-key="{{ key }}">
+  <div class="review-row-text">
+    <strong class="review-row-name">{{ name }}</strong>
+    <span class="review-row-facts">{{ facts }}</span>
+  </div>
+  <div class="review-row-body">
+    {{ caller() }}
+    <button type="button" class="button-link review-skip" data-review-skip>Skip</button>
+  </div>
+</li>
+{%- endmacro %}
+
+{# The fields that turn a detected recurring suggestion into a recurring item. #}
+{% macro recurring_fields(s, accounts, categories) -%}
+<input type="hidden" name="kind" value="{{ s.kind }}" />
+<input type="hidden" name="suggestion_key" value="{{ s.key }}" />
+<input type="hidden" name="start_date" value="{{ s.start_date }}" />
+<input type="hidden" name="end_date" value="" />
+<input type="hidden" name="day_of_month" value="{{ s.day_of_month }}" />
+<input type="hidden" name="day_of_month_touched" value="1" />
+<input type="hidden" name="interval_months" value="{{ s.interval_months }}" />
+<input type="hidden" name="semimonthly_day1" value="{{ s.semimonthly_day1 }}" />
+<input type="hidden" name="semimonthly_day2" value="{{ s.semimonthly_day2 }}" />
+
+<label class="suggestion-field suggestion-field-name">
+  Name
+  <input type="text" name="name" value="{{ s.name }}" required />
+</label>
+<label class="suggestion-field suggestion-field-amount">
+  Amount
+  <input type="number" step="0.01" min="0.01" name="amount" value="{{ '%.2f'|format(s.amount) }}" required />
+</label>
+<label class="suggestion-field">
+  Frequency
+  <select name="frequency_type">
+    <option value="weekly" {{ 'selected' if s.frequency_type == 'weekly' else '' }}>Weekly</option>
+    <option value="biweekly" {{ 'selected' if s.frequency_type == 'biweekly' else '' }}>Bi-weekly</option>
+    <option value="semimonthly" {{ 'selected' if s.frequency_type == 'semimonthly' else '' }}>Semi-monthly</option>
+    <option value="monthly" {{ 'selected' if s.frequency_type == 'monthly' else '' }}>Monthly</option>
+    <option value="yearly" {{ 'selected' if s.frequency_type == 'yearly' else '' }}>Yearly</option>
+    <option value="every_x_months" {{ 'selected' if s.frequency_type == 'every_x_months' else '' }}>Every {{ s.interval_months }} months</option>
+  </select>
+</label>
+<label class="suggestion-field">
+  Account
+  <select name="account_id">
+    <option value="">Unassigned (immediate)</option>
+    {% for account in accounts %}
+    <option value="{{ account.id }}" {{ 'selected' if account.id == s.account_id else '' }}>{{ account.name }}{{ ' (card)' if account.account_type == 'credit_card' else '' }}</option>
+    {% endfor %}
+  </select>
+</label>
+<label class="suggestion-field">
+  Category
+  {{ category_picker("category_id", categories, s.category_id) }}
+</label>
+{%- endmacro %}

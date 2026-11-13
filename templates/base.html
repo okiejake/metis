@@ -50,6 +50,7 @@
           </div>
           <nav class="site-nav" aria-label="Primary">
             <a href="{{ base_path() }}/dashboard" class="{{ 'active' if active_path.startswith('/dashboard') else '' }}">Dashboard</a>
+            <a href="{{ base_path() }}/review" class="{{ 'active' if active_path.startswith('/review') else '' }}">Review{% if review_waiting %} <span class="nav-badge">{{ review_waiting }}</span>{% endif %}</a>
             <a href="{{ base_path() }}/ledger" class="{{ 'active' if active_path.startswith('/ledger') else '' }}">Ledger</a>
             <a href="{{ base_path() }}/statements" class="{{ 'active' if active_path.startswith('/statements') else '' }}">Statements</a>
             <a href="{{ base_path() }}/budget" class="{{ 'active' if active_path.startswith('/budget') or active_path.startswith('/expected') or active_path.startswith('/recurring') or active_path.startswith('/categories') else '' }}">Budget</a>
@@ -141,7 +142,15 @@
 
     <main class="container">
       {% if message %}
-      <div class="flash {{ 'error' if is_error else 'success' }}">{{ message }}</div>
+      {% set undo_id = request.query_params.get('undo', '')|int(0) %}
+      <div class="flash {{ 'error' if is_error else 'success' }}">
+        {{ message }}
+        {% if undo_id and not is_error %}
+        <form method="post" action="{{ base_path() }}/review/undo/{{ undo_id }}" class="inline-form flash-undo">
+          <button type="submit" class="button-link">Undo</button>
+        </form>
+        {% endif %}
+      </div>
       {% endif %}
 
       {% block content %}{% endblock %}
