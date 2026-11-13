@@ -1,7 +1,8 @@
-# Two Metis environments on one machine, each with its own database.
+# Two Metis environments on one machine, each with its own database. One runs
+# at a time; metis.sh switches between them.
 #
-#   prod  follows the latest GitHub release. Always running.
-#   qa    follows main. Started only for testing (see metis.sh).
+#   prod  follows the latest GitHub release.
+#   qa    follows main, with a copy of prod's data.
 #
 # Settings come from .env next to this file, which stays on the server.
 # Copy .env.example to .env to start.
@@ -30,9 +31,10 @@ services:
     volumes:
       - ./prod:/data
 
+  # The qa profile keeps a plain `docker compose up` from starting it. Once
+  # started, it restarts with the server like prod does.
   qa:
     <<: *metis
-    restart: "no"
     profiles: [qa]
     image: ${METIS_IMAGE:-ghcr.io/okiejake/metis}:${QA_TAG:-main}
     environment:

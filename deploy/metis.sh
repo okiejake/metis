@@ -1,13 +1,13 @@
 #!/bin/sh
-# Run Metis's two environments. Lives next to compose.yml and .env.
+# Run Metis's two environments, one at a time. Lives next to compose.yml and .env.
 #
-#   metis.sh update     Download new images. Back up and restart prod when its
-#                       image changed; restart qa when it is running and changed.
-#                       Quiet when there is nothing new, so it suits a schedule.
-#   metis.sh qa-start   Start qa with a fresh copy of prod's data.
-#   metis.sh qa-stop    Stop qa.
-#   metis.sh backup     Back up prod's database now.
-#   metis.sh status     Show what is running.
+#   metis.sh qa       Switch to qa: stop prod, copy prod's data to qa, start qa.
+#   metis.sh prod     Switch to prod: stop qa, back up prod, start prod.
+#   metis.sh update   Download new images and restart whichever environment is
+#                     running if its image changed (backing up prod first).
+#                     Quiet when there is nothing new, so it suits a schedule.
+#   metis.sh backup   Back up prod's database now.
+#   metis.sh status   Show what is running.
 set -eu
 
 cd "$(dirname "$0")"
@@ -27,6 +27,7 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*"; }
 configured_image() { compose config --images "$1" 2>/dev/null | head -n 1; }
 image_id() { "$DOCKER" image inspect --format '{{.Id}}' "$1" 2>/dev/null || true; }
 running() { [ -n "$(compose ps --status running --quiet "$1" 2>/dev/null)" ]; }
+stop() { compose stop "$1" >/dev/null 2>&1 || true; }
 
 # Copy a stopped environment's database, including any write-ahead log.
 copy_db() {
@@ -48,11 +49,12 @@ backup_stopped_prod() {
   done
 }
 
-# Wait for an environment to answer, so a broken release is noticed.
+# Wait for an environment to answer, so a broken release is noticed. The first
+# start on a small server can take a few minutes.
 wait_healthy() {
-  service=$1 port=$2 tries=30
+  service=$1 port=$2 tries=90
   while [ "$tries" -gt 0 ]; do
-    if curl -fs -o /dev/null "http://127.0.0.1:$port/login"; then
+    if curl -fs -m 10 -o /dev/null "http://127.0.0.1:$port/login"; then
       log "$service is up"
       return 0
     fi
@@ -71,50 +73,60 @@ pull_changed() {
   [ "$before" != "$(image_id "$image")" ]
 }
 
+start_prod() {
+  stop qa
+  stop prod
+  backup_stopped_prod
+  compose up -d prod >/dev/null 2>&1
+  wait_healthy prod "$PROD_PORT"
+}
+
+start_qa() {
+  pull_changed qa || true
+  stop qa
+  stop prod
+  if [ -f "prod/$DB" ]; then
+    copy_db prod "qa/$DB"
+    log "copied prod's data to qa"
+  fi
+  compose up -d qa >/dev/null 2>&1
+  wait_healthy qa "$QA_PORT"
+}
+
 update() {
-  if pull_changed prod; then
+  # A stopped environment only downloads; it starts on the new image next time.
+  if pull_changed prod && running prod; then
     log "new prod image"
-    compose stop prod >/dev/null 2>&1 || true
-    backup_stopped_prod
-    compose up -d prod >/dev/null
-    wait_healthy prod "$PROD_PORT"
+    start_prod
   fi
   if pull_changed qa && running qa; then
     log "new qa image"
-    compose up -d qa >/dev/null
+    compose up -d qa >/dev/null 2>&1
     wait_healthy qa "$QA_PORT"
   fi
   # Remove superseded Metis images only, never another app's.
   "$DOCKER" image prune -f --filter "label=org.opencontainers.image.title=metis" >/dev/null 2>&1 || true
 }
 
-qa_start() {
-  pull_changed qa || true
-  compose stop qa >/dev/null 2>&1 || true
-  if [ -f "prod/$DB" ]; then
-    # Prod stops for a few seconds so the copy is consistent.
-    compose stop prod >/dev/null
-    copy_db prod "qa/$DB"
-    compose up -d prod >/dev/null
-    log "copied prod's data to qa"
+backup() {
+  if running prod; then
+    stop prod
+    backup_stopped_prod
+    compose up -d prod >/dev/null 2>&1
+    wait_healthy prod "$PROD_PORT"
+  else
+    backup_stopped_prod
   fi
-  compose up -d qa >/dev/null
-  wait_healthy qa "$QA_PORT"
 }
 
 case "${1:-}" in
+  qa) start_qa ;;
+  prod) start_prod ;;
   update) update ;;
-  qa-start) qa_start ;;
-  qa-stop) compose stop qa >/dev/null && log "qa stopped" ;;
-  backup)
-    compose stop prod >/dev/null
-    backup_stopped_prod
-    compose up -d prod >/dev/null
-    wait_healthy prod "$PROD_PORT"
-    ;;
+  backup) backup ;;
   status) compose ps ;;
   *)
-    echo "usage: $0 update | qa-start | qa-stop | backup | status" >&2
+    echo "usage: $0 qa | prod | update | backup | status" >&2
     exit 2
     ;;
 esac
