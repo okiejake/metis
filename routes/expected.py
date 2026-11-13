@@ -44,7 +44,10 @@ router = APIRouter()
 
 
 def _reconcile_path(source_type: str, source_id: int) -> str:
-    return f"/expected/{source_type}/{source_id}/reconcile"
+    """Built only from a known item type, so form input never shapes a redirect."""
+    if source_type not in EXPECTED_SOURCE_TYPES:
+        return "/budget"
+    return f"/expected/{source_type}/{int(source_id)}/reconcile"
 
 
 @router.get("/expected")
@@ -200,12 +203,9 @@ def confirm_match(
         return redirect_with_message(target, "That transaction is already reconciled", is_error=True)
 
     seed = suggest_rule_pattern(description)
-    separator = "&" if "?" in target else "?"
-    url = (
-        f"{target}{separator}rule_seed={quote_plus(seed)}"
-        f"&msg={quote_plus('Match confirmed — review the auto-match rule below')}&err=0"
+    return redirect_with_message(
+        f"{target}?rule_seed={quote_plus(seed)}", "Match confirmed — review the auto-match rule below"
     )
-    return RedirectResponse(url=url, status_code=303)
 
 
 def _parse_rule_amount(value: str, label: str) -> float:
