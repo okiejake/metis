@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_parts.html" as parts %}
 {% block content %}
 <section class="page-intro">
   <div>
@@ -7,7 +8,7 @@
     <p>
       {{ item.kind|capitalize }} · ${{ item.amount|currency }} · {{ item.cadence }}
       {% if item.category_name %}
-      · <span class="category-pill"><span class="category-dot" style="background: {{ item.category_color }};"></span>{{ item.category_name }}</span>
+      · {{ parts.category_pill(item.category_name, item.category_color) }}
       {% endif %}
     </p>
   </div>

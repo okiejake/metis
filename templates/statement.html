@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_parts.html" as parts %}
 {% import "_statement_macros.html" as stmt %}
 {% block content %}
 <section class="page-intro">
@@ -80,10 +81,7 @@
           <td>{{ line.description or '—' }}</td>
           <td>
             {% if line.category_name %}
-            <span class="category-pill">
-              <span class="category-dot" style="background: {{ line.category_color if line.category_color else 'var(--muted)' }};"></span>
-              {{ line.category_name }}
-            </span>
+            {{ parts.category_pill(line.category_name, line.category_color) }}
             {% else %}-{% endif %}
           </td>
           <td>

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_parts.html" as parts %}
 {% block content %}
 <section class="page-intro">
   <div>
@@ -77,10 +78,7 @@
           <button type="button" class="card-expand-toggle js-budget-toggle"
                   data-target="budget-detail-{{ loop.index }}" aria-expanded="false"
                   aria-label="Show the budget detail for {{ cat.name }}">›</button>
-          <span class="category-pill">
-            <span class="category-dot" style="background: {{ cat.color if cat.color else 'var(--muted)' }};"></span>
-            {{ cat.name }}
-          </span>
+          {{ parts.category_pill(cat.name, cat.color) }}
         </span>
         <span class="budget-bar-figures">
           <span class="budget-bar-actual">${{ cat.actual|currency }}</span>
@@ -98,17 +96,8 @@
         </span>
       </div>
 
-      <div class="budget-bar-track"
-           title="{{ cat.name }} — actual ${{ cat.actual|currency }}{% if cat.has_target %}, budget ${{ cat.budgeted|currency }}{% if cat.over > 0 %}, over by ${{ cat.over|currency }}{% else %}, ${{ cat.difference|currency }} left{% endif %}{% else %}, no budget set{% endif %}">
-        {% if cat.neutral_pct > 0 %}
-        <span class="budget-bar-neutral" style="width: {{ cat.neutral_pct }}%;"></span>
-        {% else %}
-        <span class="budget-bar-fill" style="width: {{ cat.fill_pct }}%;"></span>
-        {% if cat.over_pct > 0 %}
-        <span class="budget-bar-overflow" style="width: {{ cat.over_pct }}%;"></span>
-        {% endif %}
-        {% endif %}
-      </div>
+      {% set bar_title %}{{ cat.name }} — actual ${{ cat.actual|currency }}{% if cat.has_target %}, budget ${{ cat.budgeted|currency }}{% if cat.over > 0 %}, over by ${{ cat.over|currency }}{% else %}, ${{ cat.difference|currency }} left{% endif %}{% else %}, no budget set{% endif %}{% endset %}
+      {{ parts.bar(cat.fill_pct, cat.over_pct, cat.neutral_pct, bar_title) }}
 
       <div class="budget-bar-detail hidden" id="budget-detail-{{ loop.index }}">
         {% if cat.line_items %}
@@ -194,53 +183,7 @@
       </p>
 
       <form method="post" action="{{ base_path() }}/recurring" class="suggestion-form">
-        <input type="hidden" name="kind" value="{{ s.kind }}" />
-        <input type="hidden" name="suggestion_key" value="{{ s.key }}" />
-        <input type="hidden" name="start_date" value="{{ s.start_date }}" />
-        <input type="hidden" name="end_date" value="" />
-        <input type="hidden" name="day_of_month" value="{{ s.day_of_month }}" />
-        <input type="hidden" name="day_of_month_touched" value="1" />
-        <input type="hidden" name="interval_months" value="{{ s.interval_months }}" />
-        <input type="hidden" name="semimonthly_day1" value="{{ s.semimonthly_day1 }}" />
-        <input type="hidden" name="semimonthly_day2" value="{{ s.semimonthly_day2 }}" />
-
-        <label class="suggestion-field suggestion-field-name">
-          Name
-          <input type="text" name="name" value="{{ s.name }}" required />
-        </label>
-        <label class="suggestion-field suggestion-field-amount">
-          Amount
-          <input type="number" step="0.01" min="0.01" name="amount" value="{{ '%.2f'|format(s.amount) }}" required />
-        </label>
-        <label class="suggestion-field">
-          Frequency
-          <select name="frequency_type">
-            <option value="weekly" {{ 'selected' if s.frequency_type == 'weekly' else '' }}>Weekly</option>
-            <option value="biweekly" {{ 'selected' if s.frequency_type == 'biweekly' else '' }}>Bi-weekly</option>
-            <option value="semimonthly" {{ 'selected' if s.frequency_type == 'semimonthly' else '' }}>Semi-monthly</option>
-            <option value="monthly" {{ 'selected' if s.frequency_type == 'monthly' else '' }}>Monthly</option>
-            <option value="yearly" {{ 'selected' if s.frequency_type == 'yearly' else '' }}>Yearly</option>
-            <option value="every_x_months" {{ 'selected' if s.frequency_type == 'every_x_months' else '' }}>Every {{ s.interval_months }} months</option>
-          </select>
-        </label>
-        <label class="suggestion-field">
-          Account
-          <select name="account_id">
-            <option value="">Unassigned (immediate)</option>
-            {% for account in accounts %}
-            <option value="{{ account.id }}" {{ 'selected' if account.id == s.account_id else '' }}>{{ account.name }}{{ ' (card)' if account.account_type == 'credit_card' else '' }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <label class="suggestion-field">
-          Category
-          <select name="category_id">
-            <option value="">No category</option>
-            {% for category in categories %}
-            <option value="{{ category.id }}" {{ 'selected' if category.id == s.category_id else '' }}>{{ category.name }}</option>
-            {% endfor %}
-          </select>
-        </label>
+        {{ parts.recurring_fields(s, accounts, categories) }}
 
         <div class="suggestion-actions">
           <button type="submit" class="button-link">Add to Recurring</button>
@@ -427,10 +370,7 @@
           <td>{{ item.name }}</td>
           <td>
             {% if item.category_name %}
-            <span class="category-pill">
-              <span class="category-dot" style="background: {{ item.category_color }};"></span>
-              {{ item.category_name }}
-            </span>
+            {{ parts.category_pill(item.category_name, item.category_color) }}
             {% else %}-{% endif %}
           </td>
           <td>{{ item.kind }}</td>
@@ -505,10 +445,7 @@
           <td>{{ item.name }}</td>
           <td>
             {% if item.category_name %}
-            <span class="category-pill">
-              <span class="category-dot" style="background: {{ item.category_color }};"></span>
-              {{ item.category_name }}
-            </span>
+            {{ parts.category_pill(item.category_name, item.category_color) }}
             {% else %}-{% endif %}
           </td>
           <td>{{ item.kind }}</td>
