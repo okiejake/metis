@@ -2561,3 +2561,20 @@ body.amounts-hidden .amount-sensitive {
   display: inline-flex;
   margin-left: 0.6rem;
 }
+
+.nav-badge {
+  display: inline-block;
+  min-width: 1.3rem;
+  margin-left: 0.25rem;
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  background: var(--primary);
+  color: var(--surface);
+  font-size: 0.75rem;
+  line-height: 1.3rem;
+  text-align: center;
+}
+
+.review-line {
+  margin: 0 0 1rem;
+}

@@ -9,7 +9,7 @@
   </div>
   <div class="intro-badge-stack">
     <span class="stat-chip">Today {{ today_iso }}</span>
-    {% if suggestions %}<span class="stat-chip success">{{ suggestions|length }} suggested</span>{% endif %}
+    {% if suggestion_count %}<a class="stat-chip success" href="{{ base_path() }}/review#recurring">{{ suggestion_count }} suggested</a>{% endif %}
     <span class="stat-chip">{{ recurring_items|selectattr("status", "equalto", "active")|list|length }} recurring</span>
     <span class="stat-chip">{{ one_time_items|length }} one-time</span>
   </div>
@@ -155,55 +155,6 @@
   </p>
   {% else %}
   <p class="empty-state">No budgeted or actual expenses in this period yet.</p>
-  {% endif %}
-</section>
-{% endif %}
-
-{% if suggestions or dismissed_count %}
-<section class="panel">
-  <div class="panel-head">
-    <h2>Suggested Recurring</h2>
-    <p>
-      Detected from your imported transactions. Check the account, tweak if needed, then confirm —
-      or dismiss ones you don't want tracked.
-    </p>
-  </div>
-  {% if suggestions %}
-  <div class="suggestions-grid">
-    {% for s in suggestions %}
-    <article class="suggestion-card">
-      <div class="suggestion-head">
-        <span class="table-pill {{ 'success' if s.kind == 'income' else 'neutral' }}">{{ s.kind }}</span>
-        <span class="suggestion-confidence" title="Detection confidence">{{ (s.confidence * 100)|round|int }}% match</span>
-      </div>
-
-      <p class="suggestion-evidence">
-        {{ s.frequency_label }} · {{ s.count }} seen since {{ s.first_date }}
-        {% if s.account_name %}· from <strong>{{ s.account_name }}</strong>{% endif %}
-      </p>
-
-      <form method="post" action="{{ base_path() }}/recurring" class="suggestion-form">
-        {{ parts.recurring_fields(s, accounts, categories) }}
-
-        <div class="suggestion-actions">
-          <button type="submit" class="button-link">Add to Recurring</button>
-        </div>
-      </form>
-
-      <form method="post" action="{{ base_path() }}/expected/suggestions/dismiss" class="suggestion-dismiss-form">
-        <input type="hidden" name="suggestion_key" value="{{ s.key }}" />
-        <button type="submit" class="button-link danger">Dismiss</button>
-      </form>
-    </article>
-    {% endfor %}
-  </div>
-  {% else %}
-  <p class="empty-state">No new suggestions right now — you've reviewed everything detected in your imports.</p>
-  {% endif %}
-  {% if dismissed_count %}
-  <form method="post" action="{{ base_path() }}/expected/suggestions/reset" class="suggestions-reset-form">
-    <button type="submit" class="button-link">Restore {{ dismissed_count }} dismissed suggestion{{ '' if dismissed_count == 1 else 's' }}</button>
-  </form>
   {% endif %}
 </section>
 {% endif %}

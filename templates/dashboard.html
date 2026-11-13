@@ -15,6 +15,12 @@
   </div>
 </section>
 
+{% if review_line.waiting %}
+<p class="review-line">
+  <a href="{{ base_path() }}/review" class="button-link">{% if review_line.percent is not none %}Categorized {{ review_line.percent }}%{% else %}Review{% endif %}</a>
+</p>
+{% endif %}
+
 <section class="summary-grid">
   <article class="card metric-card">
     <h3>Starting Balance</h3>

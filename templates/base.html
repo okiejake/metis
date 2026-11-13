@@ -50,6 +50,7 @@
           </div>
           <nav class="site-nav" aria-label="Primary">
             <a href="{{ base_path() }}/dashboard" class="{{ 'active' if active_path.startswith('/dashboard') else '' }}">Dashboard</a>
+            <a href="{{ base_path() }}/review" class="{{ 'active' if active_path.startswith('/review') else '' }}">Review{% if review_waiting %} <span class="nav-badge">{{ review_waiting }}</span>{% endif %}</a>
             <a href="{{ base_path() }}/ledger" class="{{ 'active' if active_path.startswith('/ledger') else '' }}">Ledger</a>
             <a href="{{ base_path() }}/statements" class="{{ 'active' if active_path.startswith('/statements') else '' }}">Statements</a>
             <a href="{{ base_path() }}/budget" class="{{ 'active' if active_path.startswith('/budget') or active_path.startswith('/expected') or active_path.startswith('/recurring') or active_path.startswith('/categories') else '' }}">Budget</a>
