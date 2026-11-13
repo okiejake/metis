@@ -2411,20 +2411,30 @@ def card_balance_summary(
     }
 
 
-def _budget_actuals_by_category(
-    user_id: int, window_start: date, window_end: date
-) -> Dict[str, Dict[str, Any]]:
-    """Actual imported spend/income in the window grouped by *effective* category
-    (COALESCE reconciled item's category, import category). Transfers excluded so
-    card payments never count as spending. Split transactions contribute each part
-    to its own category and only the remainder to their effective category.
-    Returns keyed by lower(name) ('' = none)."""
-    rows = fetch_all("""
+def spending_parts(user_id: int, window_start: date, window_end: date) -> List[Dict[str, Any]]:
+    """Every piece of spending in the window: one row per transaction remainder
+    and one per split part. This is the one definition of spending that Budget
+    and Review both read.
+
+    Spending is money going out that is not a transfer. Money coming in on a
+    card is a refund and reduces spending in its category; money coming in on
+    any other account is income and is not here at all. A row's category is its
+    effective one (the reconciled expected item's, else its own); a split part
+    has its own, and only what is left after splitting keeps the row's.
+
+    Each dict: tx_id, tx_date, account_id, merchant, category_id (None when
+    uncategorized), category_name, category_color, spent (> 0 spending,
+    < 0 refund)."""
+    rows = query_all("""
             WITH tx AS (
-                SELECT i.id, i.amount,
+                SELECT i.id, i.tx_date, i.account_id, i.amount,
+                       COALESCE(NULLIF(i.merchant, ''), i.description) AS merchant,
+                       COALESCE(ec.id, ic.id) AS cat_id,
                        COALESCE(ec.name, ic.name) AS cat_name,
                        COALESCE(ec.color, ic.color) AS cat_color
                 FROM imported_transactions i
+                LEFT JOIN accounts acct
+                       ON acct.id = i.account_id AND acct.user_id = i.user_id
                 LEFT JOIN expected_reconciliations r
                        ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
                 LEFT JOIN recurring_items ri
@@ -2437,40 +2447,66 @@ def _budget_actuals_by_category(
                        ON ic.id = i.category_id AND ic.user_id = i.user_id
                 WHERE i.user_id = ? AND NOT i.is_transfer
                   AND i.tx_date >= ? AND i.tx_date <= ?
+                  AND (i.amount < 0 OR COALESCE(acct.account_type = 'credit_card', FALSE))
             ),
             allocated AS (
                 SELECT imported_transaction_id AS tx_id, COALESCE(SUM(amount), 0) AS part_total
                 FROM transaction_splits WHERE user_id = ? GROUP BY 1
             ),
             parts AS (
-                -- What is left after splitting, on the transaction's own category.
-                SELECT tx.cat_name, tx.cat_color,
-                       SIGN(tx.amount) * (ABS(tx.amount) - COALESCE(a.part_total, 0)) AS total
+                SELECT tx.id AS tx_id, tx.tx_date, tx.account_id, tx.merchant,
+                       tx.cat_id AS category_id, tx.cat_name AS category_name,
+                       tx.cat_color AS category_color,
+                       -SIGN(tx.amount) * (ABS(tx.amount) - COALESCE(a.part_total, 0)) AS spent
                 FROM tx LEFT JOIN allocated a ON a.tx_id = tx.id
                 UNION ALL
-                -- Each split part, on the category it was assigned to.
-                SELECT sc.name, sc.color, SIGN(tx.amount) * ts.amount
+                SELECT tx.id, tx.tx_date, tx.account_id, tx.merchant,
+                       sc.id, sc.name, sc.color, -SIGN(tx.amount) * ts.amount
                 FROM tx
                 JOIN transaction_splits ts
                        ON ts.imported_transaction_id = tx.id AND ts.user_id = ?
                 JOIN categories sc ON sc.id = ts.category_id AND sc.user_id = ?
             )
-            SELECT cat_name, cat_color, COALESCE(SUM(total), 0) AS total
-            FROM parts
-            GROUP BY 1, 2
+            SELECT * FROM parts WHERE ABS(spent) > 0.005
+            ORDER BY tx_date, tx_id
             """, [user_id, window_start, window_end, user_id, user_id, user_id])
+    for row in rows:
+        row["tx_date"] = _as_date(row["tx_date"])
+        row["spent"] = round(float(row["spent"]), 2)
+        row["category_id"] = int(row["category_id"]) if row["category_id"] is not None else None
+    return rows
 
+
+def income_total(user_id: int, window_start: date, window_end: date) -> float:
+    """Money arriving in a non-card account that is not a transfer."""
+    row = fetch_one("""
+            SELECT COALESCE(SUM(i.amount), 0)
+            FROM imported_transactions i
+            LEFT JOIN accounts acct ON acct.id = i.account_id AND acct.user_id = i.user_id
+            WHERE i.user_id = ? AND NOT i.is_transfer AND i.amount > 0
+              AND i.tx_date >= ? AND i.tx_date <= ?
+              AND NOT COALESCE(acct.account_type = 'credit_card', FALSE)
+            """, [user_id, window_start, window_end])
+    return round(float(row[0] if row else 0.0), 2)
+
+
+def _budget_actuals_by_category(
+    user_id: int, window_start: date, window_end: date
+) -> Dict[str, Dict[str, Any]]:
+    """Actual spending in the window by effective category, from spending_parts.
+    Returns keyed by lower(name) ('' = none); income is reported separately by
+    income_total, so each bucket's income is 0."""
     result: Dict[str, Dict[str, Any]] = {}
-    for cat_name, cat_color, total in rows:
-        key = (cat_name or "").strip().lower()
+    for part in spending_parts(user_id, window_start, window_end):
+        name = part["category_name"]
+        key = (name or "").strip().lower()
         bucket = result.setdefault(
-            key, {"name": cat_name or "Uncategorized", "color": safe_hex_color(cat_color), "expense": 0.0, "income": 0.0}
+            key,
+            {"name": name or "Uncategorized", "color": safe_hex_color(part["category_color"]), "expense": 0.0, "income": 0.0},
         )
-        total = float(total)
-        if total < 0:
-            bucket["expense"] += -total
-        else:
-            bucket["income"] += total
+        bucket["expense"] += part["spent"]
+    for bucket in result.values():
+        bucket["expense"] = round(bucket["expense"], 2)
     return result
 
 
@@ -2585,7 +2621,7 @@ def build_budget_summary(user_id: int, window_start: date, window_end: date) -> 
     # --- Actuals, grouped by effective category and by reconciled line item ---
     actuals = _budget_actuals_by_category(user_id, window_start, window_end)
     item_actuals = _budget_actuals_by_item(user_id, window_start, window_end)
-    actual_income = sum(bucket["income"] for bucket in actuals.values())
+    actual_income = income_total(user_id, window_start, window_end)
 
     # --- Explicit per-category budgets, prorated to the window ---
     # A category with its own monthly budget uses it instead of the sum of its
