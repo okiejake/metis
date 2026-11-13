@@ -4,6 +4,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 
 from services import (
+    create_category,
     DEFAULT_CATEGORY_COLOR,
     create_category_rule,
     delete_category_rule,
@@ -28,24 +29,9 @@ def categories_page(request: Request, user: CurrentUser):
 
 
 @router.post("/categories")
-def create_category(request: Request, user: CurrentUser, name: str = Form(...), color: str = Form(DEFAULT_CATEGORY_COLOR)):
+def create_category_route(request: Request, user: CurrentUser, name: str = Form(...), color: str = Form(DEFAULT_CATEGORY_COLOR)):
     try:
-        cleaned_name = name.strip()
-        if not cleaned_name:
-            raise ValueError("Category name is required")
-        normalized_color = normalize_hex_color(color)
-
-        with get_connection() as conn:
-            existing = conn.execute(
-                "SELECT id FROM categories WHERE user_id = ? AND LOWER(name) = LOWER(?) LIMIT 1",
-                [user["id"], cleaned_name],
-            ).fetchone()
-            if existing:
-                raise ValueError("A category with this name already exists")
-            conn.execute(
-                "INSERT INTO categories (name, color, user_id) VALUES (?, ?, ?)",
-                [cleaned_name, normalized_color, user["id"]],
-            )
+        create_category(user["id"], name, color)
     except ValueError as exc:
         return redirect_with_message("/budget", str(exc), is_error=True)
 
@@ -166,6 +152,14 @@ def delete_category(request: Request, user: CurrentUser, category_id: int):
         )
         conn.execute("DELETE FROM category_rules WHERE category_id = ? AND user_id = ?", [category_id, user["id"]])
         conn.execute("DELETE FROM transaction_splits WHERE category_id = ? AND user_id = ?", [category_id, user["id"]])
+        # Review's decisions for this category go too, so a later import from
+        # those merchants is not pointed at a category that no longer exists.
+        conn.execute(
+            "UPDATE imported_transactions SET decision_id = NULL WHERE user_id = ? AND decision_id IN "
+            "(SELECT id FROM merchant_decisions WHERE user_id = ? AND category_id = ?)",
+            [user["id"], user["id"], category_id],
+        )
+        conn.execute("DELETE FROM merchant_decisions WHERE category_id = ? AND user_id = ?", [category_id, user["id"]])
         conn.execute("DELETE FROM categories WHERE id = ? AND user_id = ?", [category_id, user["id"]])
 
     return redirect_with_message("/budget", "Category deleted")

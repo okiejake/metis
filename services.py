@@ -351,6 +351,8 @@ def init_db() -> None:
         conn.execute("CREATE SEQUENCE IF NOT EXISTS transaction_splits_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS sessions_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS card_statements_id_seq START 1")
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS merchant_decisions_id_seq START 1")
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS review_actions_id_seq START 1")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -599,6 +601,34 @@ def init_db() -> None:
             )
             """
         )
+        # Review's per-merchant decisions (see review.py). kind is 'category' or
+        # 'transfer'. Rows a decision changed carry its id in
+        # imported_transactions.decision_id, so Undo can find every one of them.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS merchant_decisions (
+                id BIGINT PRIMARY KEY DEFAULT nextval('merchant_decisions_id_seq'),
+                user_id BIGINT NOT NULL,
+                merchant_key TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                category_id BIGINT,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                UNIQUE (user_id, merchant_key)
+            )
+            """
+        )
+        # Every Review action, with what Undo needs to reverse it (JSON).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS review_actions (
+                id BIGINT PRIMARY KEY DEFAULT nextval('review_actions_id_seq'),
+                user_id BIGINT NOT NULL,
+                kind TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+            """
+        )
 
         conn.execute(
             """
@@ -647,6 +677,8 @@ def init_db() -> None:
         # Import labels are matched case-insensitively but shown back as written.
         if not table_has_column(conn, "import_account_links", "display_label"):
             conn.execute("ALTER TABLE import_account_links ADD COLUMN display_label TEXT")
+        if not table_has_column(conn, "imported_transactions", "decision_id"):
+            conn.execute("ALTER TABLE imported_transactions ADD COLUMN decision_id BIGINT")
         # Credentials. NULL password_hash means "not set yet", which puts the app
         # into first-run setup rather than letting anyone in.
         if not table_has_column(conn, "users", "password_hash"):
@@ -1250,6 +1282,25 @@ def load_categories_with_usage(user_id: int) -> List[Dict[str, Any]]:
     for row in rows:
         row["color"] = safe_hex_color(row.get("color"))
     return rows
+
+
+def create_category(user_id: int, name: str, color: str = DEFAULT_CATEGORY_COLOR) -> int:
+    """Add a category and return its id. Names are unique per user, ignoring case."""
+    cleaned_name = (name or "").strip()
+    if not cleaned_name:
+        raise ValueError("Category name is required")
+    normalized_color = normalize_hex_color(color)
+    with get_connection() as conn:
+        existing = conn.execute(
+            "SELECT id FROM categories WHERE user_id = ? AND LOWER(name) = LOWER(?) LIMIT 1",
+            [user_id, cleaned_name],
+        ).fetchone()
+        if existing:
+            raise ValueError("A category with this name already exists")
+        return int(conn.execute(
+            "INSERT INTO categories (name, color, user_id) VALUES (?, ?, ?) RETURNING id",
+            [cleaned_name, normalized_color, user_id],
+        ).fetchone()[0])
 
 
 def load_category_by_id(user_id: int, category_id: int) -> Optional[Dict[str, Any]]:

@@ -24,6 +24,7 @@ from services import (
     summarize_imported,
     upsert_imported_transactions,
 )
+from review import apply_review_decisions
 from web import CurrentUser, render
 
 router = APIRouter()
@@ -119,7 +120,11 @@ async def upload_import(
     # Auto-reconcile, then categorize: apply the user's match rules and category
     # rules to any newly imported actuals.
     auto_matched = apply_match_rules(user["id"]) if result["inserted"] else 0
-    auto_categorized = apply_category_rules(user["id"]) if result["inserted"] else 0
+    # Review's merchant decisions first, so they win over rules for their rows;
+    # rules never touch a row a decision set.
+    auto_categorized = (
+        apply_review_decisions(user["id"]) + apply_category_rules(user["id"]) if result["inserted"] else 0
+    )
 
     message = (
         f"{account_label}: imported {result['inserted']} new, "
