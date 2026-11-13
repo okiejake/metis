@@ -87,6 +87,7 @@ where possible, and raise it immediately if it is already public.
 - **Unclear in use is the owner's call.** When something is not intuitive, the owner
   flags it and directs the change. Don't pre-empt that with extra text or special
   cases.
+- **Visual style is Neumorphism.** UI work follows `docs/design/neumorphism.md`.
 
 ## Long-term goals to build toward
 
