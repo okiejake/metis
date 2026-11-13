@@ -7,6 +7,7 @@ from services import (
     suggest_payment_pattern,
     account_cycle_status,
     card_balance_summary,
+    card_cycle_configured,
     ensure_seed_accounts,
     first_checking_actual_date,
     forecast_card_payments,
@@ -75,7 +76,7 @@ def accounts_page(request: Request, user: CurrentUser, msg: str = "", err: int =
     today = date.today()
     for account in accounts:
         account["assigned_count"] = usage.get(int(account["id"]), 0)
-        if account["account_type"] == "credit_card" and account.get("statement_day") and account.get("due_day"):
+        if card_cycle_configured(account):
             account["cycle"] = account_cycle_status(account, today)
             account["projected"] = projected.get(int(account["id"]))
             account["balance"] = card_balance_summary(user["id"], account)
