@@ -11,50 +11,54 @@ All data here is synthetic.
 
 from datetime import date
 
+import import_templates as it
 from conftest import add_imported
 
 
+CARD = {"id": 2, "name": "Example Card", "account_type": "credit_card"}
+# A card export with a transaction date and a clearing date, purchases positive.
+CLEARED = it.build_template({
+    "name": "Example cleared export", "date_field": "Clearing Date", "date_fallback_field": "Transaction Date",
+    "description_field": "Description", "merchant_field": "Merchant", "type_field": "Type",
+    "amount_layout": "signed", "amount_field": "Amount (USD)", "amount_sign": "inverted"})
+
+
 def cleared_row(txn_date, clearing_date, amount="20.00", row_type="Purchase", merchant="Acme Store"):
-    return {
+    return it.parse_row({
         "Transaction Date": txn_date,
         "Clearing Date": clearing_date,
         "Description": merchant,
         "Merchant": merchant,
-        "Category": "Shopping",
         "Type": row_type,
         "Amount (USD)": amount,
-    }
+    }, CLEARED, CARD)
 
 
-def test_charge_is_filed_on_the_date_it_cleared(db):
+def test_charge_is_filed_on_the_date_it_cleared():
     """A month-end purchase that clears in the next month belongs to the next
     statement — the whole point of the clearing date."""
-    parsed = db._parse_cleared_card_row(cleared_row("07/31/2026", "08/02/2026"))
-
-    assert parsed["tx_date"] == date(2026, 8, 2)
+    assert cleared_row("07/31/2026", "08/02/2026")["tx_date"] == date(2026, 8, 2)
 
 
-def test_pending_charge_falls_back_to_the_transaction_date(db):
+def test_pending_charge_falls_back_to_the_transaction_date():
     """A charge that has not cleared yet has no clearing date; it still has to
     land somewhere rather than blowing up the import."""
-    parsed = db._parse_cleared_card_row(cleared_row("09/14/2026", ""))
-
-    assert parsed["tx_date"] == date(2026, 9, 14)
+    assert cleared_row("09/14/2026", "")["tx_date"] == date(2026, 9, 14)
 
 
-def test_adjustment_that_increases_the_balance_is_not_a_payment(db):
-    """A 'Debit'/'Other' adjustment that adds to what is owed is a charge. Calling
-    it a transfer would let it count against a statement as a negative payment."""
-    parsed = db._parse_cleared_card_row(cleared_row("08/19/2026", "08/19/2026", "0.16", "Other"))
+def test_adjustment_that_increases_the_balance_is_not_a_payment():
+    """An adjustment that adds to what is owed is a charge. Calling it a transfer
+    would let it count against a statement as a negative payment."""
+    parsed = cleared_row("08/19/2026", "08/19/2026", "0.16", "Other")
 
     assert parsed["amount"] == -0.16, "adds to the balance, so it is signed like a charge"
     assert parsed["is_transfer"] is False
 
 
-def test_adjustment_that_reduces_the_balance_still_counts_as_a_payment(db):
-    parsed = db._parse_cleared_card_row(cleared_row("08/19/2026", "08/19/2026", "-0.16", "Other"))
+def test_a_payment_row_is_a_transfer_by_its_type():
+    parsed = cleared_row("08/19/2026", "08/19/2026", "-500.00", "Payment", merchant="Online")
 
-    assert parsed["amount"] == 0.16
+    assert parsed["amount"] == 500.0
     assert parsed["is_transfer"] is True
 
 

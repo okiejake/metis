@@ -15,69 +15,35 @@ from datetime import date
 
 from conftest import add_imported
 
-def visa_row(description, credit_or_debit, amount="250.00"):
-    return {
-        "Processed Date": "2026-07-15",
-        "Description": description,
-        "Credit or Debit": credit_or_debit,
-        "Amount": amount,
-    }
+import import_templates as it
+
+CARD = {"id": 2, "name": "Example Card", "account_type": "credit_card"}
+TYPED = it.build_template({"name": "Example card export", "date_field": "Date", "description_field": "Description",
+                           "amount_layout": "typed", "amount_field": "Amount", "type_field": "Type",
+                           "credit_value": "Credit"})
 
 
-def card_template(accounts):
-    return {
-        "account_name": "Example Card",
-        "account_id": accounts["Example Card"],
-        "account_type": "credit_card",
-        "date_field": "Date",
-        "date_format": "%Y-%m-%d",
-        "amount_field": "Amount",
-        "amount_sign": "standard",
-        "type_field": "Type",
-        "credit_value": "Credit",
-        "description_field": "Description",
-        "merchant_field": None,
-    }
+def card_row(description, row_type, amount="250.00"):
+    return it.parse_row({"Date": "2026-07-15", "Description": description, "Type": row_type, "Amount": amount},
+                        TYPED, CARD)
 
 
-def template_row(description, row_type, amount="250.00"):
-    return {
-        "Date": "2026-07-15",
-        "Description": description,
-        "Type": row_type,
-        "Amount": amount,
-    }
-
-
-def test_visa_payment_is_stored_positive(db):
-    parsed = db._parse_visa_row(visa_row("PAYMENT - THANK YOU", "Credit"))
+def test_a_payment_to_a_card_is_stored_positive():
+    parsed = card_row("AUTOMATIC PAYMENT - THANK YOU", "Credit")
 
     assert parsed["amount"] == 250.00, "a payment pays the balance down, so it is money in"
-    assert parsed["is_transfer"] is True
-
-
-def test_visa_refund_and_purchase_keep_their_signs(db):
-    refund = db._parse_visa_row(visa_row("ACME STORE REFUND", "Credit"))
-    purchase = db._parse_visa_row(visa_row("ACME STORE", "Debit"))
-
-    assert refund["amount"] == 250.00
-    assert refund["is_transfer"] is False
-    assert purchase["amount"] == -250.00
-
-
-def test_template_payment_to_a_card_is_stored_positive(db, accounts):
-    parsed = db._parse_template_row(template_row("AUTOMATIC PAYMENT - THANK YOU", "Credit"), card_template(accounts))
-
-    assert parsed["amount"] == 250.00
     assert parsed["is_transfer"] is True
     assert parsed["flow"] == "transfer"
 
 
-def test_template_purchase_on_a_card_stays_negative(db, accounts):
-    parsed = db._parse_template_row(template_row("ACME HARDWARE", "Debit"), card_template(accounts))
+def test_a_card_refund_and_purchase_keep_their_signs():
+    refund = card_row("ACME STORE REFUND", "Credit")
+    purchase = card_row("ACME STORE", "Debit")
 
-    assert parsed["amount"] == -250.00
-    assert parsed["is_transfer"] is False
+    assert refund["amount"] == 250.00
+    assert refund["is_transfer"] is False
+    assert purchase["amount"] == -250.00
+    assert purchase["is_transfer"] is False
 
 
 def test_a_run_of_payments_reduces_the_balance(db, user_id, accounts):
@@ -85,7 +51,7 @@ def test_a_run_of_payments_reduces_the_balance(db, user_id, accounts):
     card = [a for a in db.load_accounts(user_id) if a["name"] == "Example Card"][0]
     # Charged in the cycle closing Jul 5, paid in the one closing Aug 5.
     add_imported(db, user_id, card["id"], "Example Card", date(2026, 7, 1), "Acme Hardware", -300.00)
-    payment = db._parse_visa_row(visa_row("PAYMENT - THANK YOU", "Credit", "100.00"))
+    payment = card_row("PAYMENT - THANK YOU", "Credit", "100.00")
     add_imported(db, user_id, card["id"], "Example Card", date(2026, 7, 15),
                  payment["description"], payment["amount"], flow=payment["flow"], is_transfer=True)
 

@@ -8,7 +8,6 @@ from services import (
     account_cycle_status,
     card_balance_summary,
     card_cycle_configured,
-    ensure_seed_accounts,
     first_checking_actual_date,
     forecast_card_payments,
     latest_checking_actual_date,
@@ -68,8 +67,6 @@ def _projected_card_payments(user_id: int, horizon_days: int = 150):
 
 @router.get("/accounts", response_class=HTMLResponse)
 def accounts_page(request: Request, user: CurrentUser, msg: str = "", err: int = 0):
-    ensure_seed_accounts(user["id"])
-
     accounts = load_accounts(user["id"])
     usage = _load_account_usage(user["id"])
     projected = _projected_card_payments(user["id"])
