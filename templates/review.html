@@ -15,6 +15,7 @@
 <div class="panel-head review-list-head">
   <h2>{{ title }}</h2>
   <p class="review-list-figures">{{ rows|length }} · ${{ total|currency }}</p>
+  <p class="review-position" data-review-position aria-live="polite"></p>
 </div>
 {%- endmacro %}
 
@@ -168,6 +169,28 @@
         const showing = target.classList.toggle('hidden') === false;
         button.setAttribute('aria-expanded', String(showing));
       });
+    });
+
+    // On a phone each list shows one row at a time (see the 640px rule in
+    // styles.css). Skip moves on and saves nothing; wider screens ignore it.
+    document.querySelectorAll('.review-list').forEach((list) => {
+      const rows = Array.from(list.querySelectorAll(':scope > .review-row'));
+      const position = list.closest('section').querySelector('[data-review-position]');
+      let current = 0;
+      const show = () => {
+        rows.forEach((row, index) => row.classList.toggle('is-current', index === current));
+        if (position) { position.textContent = `${current + 1} of ${rows.length}`; }
+      };
+      rows.forEach((row) => {
+        const skip = row.querySelector('[data-review-skip]');
+        if (skip) {
+          skip.addEventListener('click', () => {
+            current = (current + 1) % rows.length;
+            show();
+          });
+        }
+      });
+      if (rows.length) { show(); }
     });
 
     // "New category" in a picker reveals its name field.

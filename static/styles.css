@@ -2578,3 +2578,32 @@ body.amounts-hidden .amount-sensitive {
 .review-line {
   margin: 0 0 1rem;
 }
+
+/* Review on a phone: one row at a time, as a card, with Skip. */
+@media (max-width: 640px) {
+  .review-list .review-row:not(.is-current) {
+    display: none;
+  }
+
+  .review-row {
+    grid-template-columns: 1fr;
+    padding: 0.9rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+  }
+
+  .review-row-body {
+    justify-content: flex-start;
+  }
+
+  .review-skip {
+    display: inline-flex;
+  }
+
+  .review-position {
+    display: block;
+    margin: 0;
+    color: var(--muted);
+  }
+}
