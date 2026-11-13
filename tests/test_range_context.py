@@ -61,3 +61,23 @@ def test_first_year_reaches_back_to_the_earliest_transaction(db, user_id, accoun
 
 def test_first_year_defaults_to_ten_years_back(db, user_id):
     assert db.range_first_year(user_id, date(2026, 11, 13)) == 2016
+
+
+@pytest.mark.parametrize("path", ["/dashboard", "/statements", "/accounts", "/settings"])
+def test_the_picker_renders_on_every_page(client, path):
+    html = client.get(path).text
+
+    assert 'id="range-button"' in html
+    assert 'id="range-dialog"' in html
+    assert "data-window-preset" not in html
+    assert "calendar-nav" not in html
+
+
+def test_the_header_button_shows_the_range_in_words(client, db, user_id):
+    db.save_forecast_window(user_id, date(2026, 1, 1), date(2026, 12, 31))
+
+    assert "Jan 1, 2026 – Dec 31, 2026" in client.get("/statements").text
+
+
+def test_the_popup_carries_the_server_date(client):
+    assert f'data-today="{date.today().isoformat()}"' in client.get("/dashboard").text

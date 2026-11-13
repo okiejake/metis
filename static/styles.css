@@ -146,7 +146,6 @@ body.is-ready .container > *:nth-child(4) {
 }
 
 .header-actions {
-  margin-left: auto;
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
@@ -157,6 +156,132 @@ body.is-ready .container > *:nth-child(4) {
   width: 2.35rem;
   height: 2.35rem;
   padding: 0;
+}
+
+/* ---- Date range picker (header button + popup) ---- */
+
+.range-button {
+  margin-left: auto;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.range-dialog {
+  width: min(1040px, calc(100vw - 2rem));
+  height: min(720px, calc(100vh - 2rem));
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+}
+
+.range-form {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100%;
+}
+
+.range-top {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.8rem 1rem;
+}
+
+.range-label {
+  flex: 1;
+  margin: 0;
+  font-size: 1rem;
+}
+
+.range-body {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  min-height: 0;
+}
+
+.range-dialog.panel-hidden .range-body {
+  grid-template-columns: 1fr;
+}
+
+.range-panel {
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+.range-panel[hidden] {
+  display: none;
+}
+
+.range-fieldset {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.range-fieldset legend,
+.range-legend {
+  padding: 0;
+  margin-bottom: 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.range-segments {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.range-segment {
+  padding: 0.4rem 0.2rem;
+  font-size: 0.78rem;
+}
+
+.range-modes {
+  display: flex;
+  gap: 1rem;
+}
+
+.range-modes label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.range-date,
+.range-select {
+  width: 100%;
+}
+
+.range-stepper {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.range-step {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+}
+
+.range-step-value {
+  min-width: 2.2rem;
+  text-align: center;
+  font-weight: 700;
+}
+
+.range-preview {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .brand-kicker {
@@ -297,186 +422,6 @@ body.is-ready .container > *:nth-child(4) {
   stroke-width: 1.9;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-.header-window-form {
-  display: grid;
-  gap: 0.32rem;
-  justify-items: center;
-  width: 100%;
-  padding: 0.7rem 0.76rem;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: linear-gradient(150deg, color-mix(in srgb, var(--surface) 95%, transparent) 0%, color-mix(in srgb, var(--bg-soft) 95%, transparent) 100%);
-}
-
-.window-range-trigger {
-  border: 0;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  padding: 0.15rem 0.35rem;
-  border-radius: 0.5rem;
-  transition: background-color 150ms ease;
-}
-
-.window-range-trigger:hover {
-  background: color-mix(in srgb, var(--primary) 10%, transparent);
-}
-
-.window-range-label {
-  margin: 0;
-  color: var(--text);
-  font-weight: 800;
-  white-space: nowrap;
-  letter-spacing: 0.004em;
-  font-size: 1.24rem;
-  text-align: center;
-}
-
-.window-presets {
-  margin: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.42rem;
-  flex-wrap: wrap;
-  justify-content: center;
-  font-size: 0.73rem;
-}
-
-.header-window-form button {
-  flex: 0 0 auto;
-  white-space: nowrap;
-}
-
-.header-fallback-wrap {
-  display: inline-flex;
-  gap: 0.55rem;
-}
-
-.header-fallback-date {
-  width: 145px;
-  min-width: 145px;
-}
-
-.calendar-dialog {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-xl);
-  padding: 0;
-  width: min(820px, 95vw);
-  background: var(--surface);
-  backdrop-filter: blur(10px);
-  color: var(--text);
-  box-shadow: var(--shadow-lg);
-}
-
-.calendar-dialog::backdrop {
-  background: color-mix(in srgb, var(--text) 42%, transparent);
-}
-
-.calendar-dialog-shell {
-  padding: 1rem;
-  display: grid;
-  gap: 0.82rem;
-}
-
-.calendar-dialog-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-}
-
-.calendar-dialog-head h3 {
-  margin: 0;
-  font-family: "Manrope", sans-serif;
-  font-size: 1.01rem;
-}
-
-.calendar-nav {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.6rem;
-}
-
-.calendar-nav p,
-.calendar-selected-range {
-  margin: 0;
-  color: var(--primary-ink);
-  font-weight: 700;
-}
-
-.calendar-months {
-  display: grid;
-  gap: 0.85rem;
-  grid-template-columns: repeat(2, minmax(260px, 1fr));
-}
-
-.calendar-month {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  padding: 0.65rem;
-  background: linear-gradient(180deg, var(--surface-solid) 0%, var(--warning-soft) 100%);
-}
-
-.calendar-month h4 {
-  margin: 0 0 0.5rem;
-  font-size: 0.93rem;
-  font-weight: 800;
-}
-
-.calendar-weekdays,
-.calendar-grid {
-  display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 0.25rem;
-}
-
-.calendar-weekdays span {
-  text-align: center;
-  color: var(--muted);
-  font-size: 0.73rem;
-}
-
-.calendar-spacer {
-  display: block;
-  min-height: 2rem;
-}
-
-.calendar-day {
-  border: 1px solid transparent;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--text);
-  padding: 0.35rem 0;
-  font-weight: 600;
-  transition: all 150ms ease;
-}
-
-.calendar-day:hover {
-  border-color: var(--line-strong);
-  background: var(--primary-soft);
-  color: var(--text);
-}
-
-.calendar-day.in-range {
-  background: var(--primary-soft);
-  border-color: var(--line);
-  color: var(--text);
-}
-
-.calendar-day.is-start,
-.calendar-day.is-end {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: var(--on-primary);
-}
-
-.calendar-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.52rem;
 }
 
 .container {
@@ -846,21 +791,6 @@ button.danger,
 .row-action-item.danger {
   color: var(--danger);
 }
-
-.header-window-form .window-range-trigger {
-  color: var(--text);
-  padding: 0.2rem 0.4rem;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
-.header-window-form .window-range-trigger:hover {
-  background: color-mix(in srgb, var(--primary) 10%, transparent);
-  transform: none;
-  box-shadow: none;
-}
-
 
 .full-row {
   grid-column: 1 / -1;
@@ -1565,18 +1495,6 @@ body.amounts-hidden .amount-sensitive {
     font-size: 0.8rem;
   }
 
-  .header-window-form {
-    gap: 0.45rem;
-  }
-
-  .window-range-label {
-    font-size: 1rem;
-  }
-
-  .calendar-months {
-    grid-template-columns: 1fr;
-  }
-
   .container {
     width: min(1200px, 96vw);
   }
@@ -1777,37 +1695,6 @@ body.amounts-hidden .amount-sensitive {
 
 :root[data-theme="dark"] .menu-icon {
   color: var(--muted);
-}
-
-:root[data-theme="dark"] .header-window-form {
-  border-color: var(--line-strong);
-  background: linear-gradient(150deg, color-mix(in srgb, var(--surface) 95%, transparent) 0%, color-mix(in srgb, var(--bg-soft) 95%, transparent) 100%);
-}
-:root[data-theme="dark"] .window-range-trigger:hover,
-:root[data-theme="dark"] .header-window-form .window-range-trigger:hover {
-  background: color-mix(in srgb, var(--primary) 20%, transparent);
-}
-:root[data-theme="dark"] .calendar-dialog::backdrop {
-  background: color-mix(in srgb, var(--bg) 56%, transparent);
-}
-
-:root[data-theme="dark"] .calendar-nav p,
-:root[data-theme="dark"] .calendar-selected-range {
-  color: var(--primary-ink);
-}
-
-:root[data-theme="dark"] .calendar-month {
-  background: linear-gradient(180deg, var(--surface-muted) 0%, var(--surface) 100%);
-}
-
-:root[data-theme="dark"] .calendar-day:hover {
-  border-color: var(--primary);
-  background: var(--line-strong);
-}
-
-:root[data-theme="dark"] .calendar-day.in-range {
-  background: var(--line);
-  border-color: var(--primary);
 }
 
 :root[data-theme="dark"] .flash.success {
@@ -2677,6 +2564,19 @@ body.amounts-hidden .amount-sensitive {
 }
 
 @media (max-width: 640px) {
+  .range-dialog {
+    width: 100vw;
+    height: 100dvh;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+  }
+
+  .range-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
   .review-list .review-row:not(.is-current) {
     display: none;
   }

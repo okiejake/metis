@@ -145,3 +145,9 @@ def rule_from_saved(value: object) -> Optional[RangeRule]:
 
 def rule_to_saved(rule: RangeRule) -> dict:
     return {"grain": rule.grain, "mode": rule.mode, "start": rule.start, "end": rule.end}
+
+
+def format_range(start: date, end: date) -> str:
+    """`Jan 1, 2026 – Dec 31, 2026`, as the header shows it. formatRange in
+    static/date-range.js writes the same text while the popup is open."""
+    return f"{start:%b} {start.day}, {start.year} – {end:%b} {end.day}, {end.year}"

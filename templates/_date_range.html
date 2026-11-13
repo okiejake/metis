@@ -1,0 +1,53 @@
+{# The header date range popup. static/date-range.js drives it; POST /window saves it. #}
+<dialog id="range-dialog" class="range-dialog" aria-labelledby="range-label"
+        data-rule='{{ range_rule|tojson }}' data-today="{{ range_today }}"
+        data-first-year="{{ range_first_year }}" data-start="{{ range_start }}" data-end="{{ range_end }}">
+  <form method="post" action="{{ base_path() }}/window" class="range-form">
+    <input type="hidden" name="grain" value="{{ range_rule.grain }}" />
+    <input type="hidden" name="start" value="{{ range_rule.start }}" />
+    <input type="hidden" name="end" value="{{ range_rule.end }}" />
+    <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}" />
+
+    <div class="range-top">
+      <button type="button" class="icon-button range-panel-toggle" id="range-panel-toggle"
+              aria-controls="range-panel" aria-expanded="true" aria-label="Hide filters" title="Hide filters">
+        <i data-lucide="filter" class="menu-icon" aria-hidden="true"></i>
+      </button>
+      <h2 class="range-label" id="range-label">{{ range_label }}</h2>
+      <button type="button" class="button-link" id="range-cancel">Cancel</button>
+      <button type="submit" class="button-link range-apply">Apply</button>
+    </div>
+
+    <div class="range-body">
+      <div class="range-panel" id="range-panel">
+        <fieldset class="range-fieldset">
+          <legend>Grain</legend>
+          <div class="range-segments" role="group" aria-label="Grain">
+            {% for grain in ["day", "month", "year", "decade"] %}
+            <button type="button" class="range-segment" data-grain="{{ grain }}" aria-pressed="false">{{ grain|capitalize }}</button>
+            {% endfor %}
+          </div>
+        </fieldset>
+
+        <fieldset class="range-fieldset">
+          <legend>Mode</legend>
+          <div class="range-modes">
+            <label><input type="radio" name="mode" value="absolute"{% if range_rule.mode == "absolute" %} checked{% endif %} /> Absolute</label>
+            <label><input type="radio" name="mode" value="relative"{% if range_rule.mode == "relative" %} checked{% endif %} /> Relative</label>
+          </div>
+        </fieldset>
+
+        <div class="range-fieldset">
+          <span class="range-legend">Start</span>
+          <div id="range-start-control"></div>
+        </div>
+        <div class="range-fieldset">
+          <span class="range-legend">End</span>
+          <div id="range-end-control"></div>
+        </div>
+      </div>
+
+      <div class="range-preview" id="range-preview" aria-hidden="true"></div>
+    </div>
+  </form>
+</dialog>
