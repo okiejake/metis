@@ -91,6 +91,9 @@ old default was today −90 days to +90 days, which this approximates in whole m
 
 Dashboard, Ledger, Budget and Review still accept `?start=&end=`. Those dates show
 on that page view only and are **not saved**, so they never replace the saved rule.
+A page reached through a dated link stays on the link's dates until the user applies
+a range from the picker; then that page shows the applied range too (confirmed by
+the owner).
 Today `resolve_forecast_window` saves whatever it is given; that stops. The manual
 item edit round-trip (`routes/manual.py`, `ledger.html`, `manual_edit.html`) keeps
 passing `start`/`end` and keeps working as a one-off view.
