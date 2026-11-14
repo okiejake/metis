@@ -7,8 +7,8 @@
 (function () {
   'use strict';
 
-  const GRAINS = ['day', 'month', 'year', 'decade'];
-  const RELATIVE_LIMITS = { day: 3650, month: 240, year: 50, decade: 10 };
+  const GRAINS = ['day', 'month', 'quarter', 'year', 'decade'];
+  const RELATIVE_LIMITS = { day: 3650, month: 240, quarter: 80, year: 50, decade: 10 };
   const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
   function pad(value) {
@@ -46,6 +46,12 @@
       const [y, m] = String(value).split('-').map(Number);
       return [new Date(y, m - 1, 1), monthEnd(y, m - 1)];
     }
+    if (grain === 'quarter') {
+      const [yText, qText] = String(value).split('-Q');
+      const y = Number(yText);
+      const q = Number(qText);
+      return [new Date(y, q * 3 - 3, 1), monthEnd(y, q * 3 - 1)];
+    }
     const y = Number(value);
     if (grain === 'year') {
       return [new Date(y, 0, 1), new Date(y, 11, 31)];
@@ -62,6 +68,10 @@
     if (grain === 'month') {
       const first = new Date(today.getFullYear(), today.getMonth() + offset, 1);
       return [first, monthEnd(first.getFullYear(), first.getMonth())];
+    }
+    if (grain === 'quarter') {
+      const first = new Date(today.getFullYear(), Math.floor(today.getMonth() / 3) * 3 + offset * 3, 1);
+      return [first, monthEnd(first.getFullYear(), first.getMonth() + 2)];
     }
     if (grain === 'year') {
       const y = today.getFullYear() + offset;
@@ -86,6 +96,7 @@
   function absoluteValue(grain, d) {
     if (grain === 'day') return toIso(d);
     if (grain === 'month') return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+    if (grain === 'quarter') return `${d.getFullYear()}-Q${Math.floor(d.getMonth() / 3) + 1}`;
     if (grain === 'year') return String(d.getFullYear());
     return String(Math.floor(d.getFullYear() / 10) * 10);
   }
@@ -99,6 +110,10 @@
     }
     if (grain === 'month') {
       return clampOffset(grain, (d.getFullYear() * 12 + d.getMonth()) - (today.getFullYear() * 12 + today.getMonth()));
+    }
+    if (grain === 'quarter') {
+      const quarterIndex = (x) => x.getFullYear() * 4 + Math.floor(x.getMonth() / 3);
+      return clampOffset(grain, quarterIndex(d) - quarterIndex(today));
     }
     if (grain === 'year') return clampOffset(grain, d.getFullYear() - today.getFullYear());
     return clampOffset(grain, Math.floor(d.getFullYear() / 10) - Math.floor(today.getFullYear() / 10));
@@ -133,6 +148,7 @@
     const [first] = relativeUnit(grain, offset, today);
     if (grain === 'day') return fmtDay(first);
     if (grain === 'month') return `${MONTH_SHORT[first.getMonth()]} ${first.getFullYear()}`;
+    if (grain === 'quarter') return `Q${Math.floor(first.getMonth() / 3) + 1} ${first.getFullYear()}`;
     if (grain === 'year') return String(first.getFullYear());
     return `${first.getFullYear()}s`;
   }
@@ -403,6 +419,12 @@
           MONTH_SHORT.forEach((name, i) => {
             group.appendChild(el('option', { value: `${y}-${pad(i + 1)}`, text: `${name} ${y}` }));
           });
+          groups.push(group);
+        }
+      } else if (grain === 'quarter') {
+        for (let y = firstYear; y <= lastYear; y += 1) {
+          const group = el('optgroup', { label: String(y) });
+          [1, 2, 3, 4].forEach((q) => group.appendChild(el('option', { value: `${y}-Q${q}`, text: `Q${q} ${y}` })));
           groups.push(group);
         }
       } else if (grain === 'year') {

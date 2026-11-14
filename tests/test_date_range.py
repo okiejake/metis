@@ -66,6 +66,9 @@ def test_saved_round_trip():
         (("month", "relative", "-241", "0"), "too far"),
         (("month", "absolute", "2026-13", "2026-12"), "month"),
         (("decade", "absolute", "2025", "2030"), "decade"),
+        (("quarter", "absolute", "2026-Q5", "2026-Q5"), "quarter"),
+        (("quarter", "absolute", "2026-4", "2026-Q4"), "quarter"),
+        (("quarter", "relative", "-81", "0"), "too far"),
         (("month", "relative", "2", "1"), "after"),
         (("day", "absolute", "2027-01-20", "2026-11-10"), "after"),
     ],
@@ -78,6 +81,7 @@ def test_rule_from_form_rejects(args, message):
 def test_rule_from_form_accepts_and_types_values():
     assert rule_from_form("month", "relative", "-3", "6") == RangeRule("month", "relative", -3, 6)
     assert rule_from_form("decade", "absolute", "2020", "2030") == RangeRule("decade", "absolute", "2020", "2030")
+    assert rule_from_form("quarter", "relative", "-1", "2") == RangeRule("quarter", "relative", -1, 2)
 
 
 @pytest.mark.parametrize("value", ["20261110", "2026-W45-1", "2026-11-10T00:00"])

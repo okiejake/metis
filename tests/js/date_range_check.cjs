@@ -74,6 +74,18 @@ check('sameRule string vs number offsets', dr.sameRule(rel, { grain: 'month', mo
 check('sameRule different mode', dr.sameRule(rel, { grain: 'month', mode: 'absolute', start: '2026-08', end: '2027-02' }), false);
 check('sameRule different end', dr.sameRule(rel, { grain: 'month', mode: 'relative', start: -3, end: 4 }), false);
 
+check('stepLabel quarter', dr.stepLabel('quarter', -1, today), 'Q3 2026');
+check(
+  'convertRule month/absolute -> quarter/absolute',
+  dr.convertRule({ grain: 'month', mode: 'absolute', start: '2026-08', end: '2027-05' }, 'quarter', 'absolute', today),
+  { grain: 'quarter', mode: 'absolute', start: '2026-Q3', end: '2027-Q2' },
+);
+check(
+  'convertRule quarter/absolute -> quarter/relative',
+  dr.convertRule({ grain: 'quarter', mode: 'absolute', start: '2026-Q3', end: '2027-Q2' }, 'quarter', 'relative', today),
+  { grain: 'quarter', mode: 'relative', start: -1, end: 2 },
+);
+
 if (failures) {
   process.exit(1);
 }

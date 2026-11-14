@@ -207,7 +207,7 @@ body.is-ready .container > *:nth-child(4) {
 
 .range-body {
   display: grid;
-  grid-template-columns: 220px 1fr;
+  grid-template-columns: 300px 1fr;
   min-height: 0;
 }
 
@@ -248,7 +248,7 @@ body.is-ready .container > *:nth-child(4) {
 
 .range-segments {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
 }
 
 .range-segment {
@@ -413,7 +413,7 @@ body.is-ready .container > *:nth-child(4) {
 }
 
 .range-segments {
-  gap: 0.45rem;
+  gap: 0.35rem;
 }
 
 .range-segment {
@@ -422,6 +422,12 @@ body.is-ready .container > *:nth-child(4) {
 
 .range-modes input {
   accent-color: var(--neu-accent);
+}
+
+/* The chosen mode reads purple, like the chosen grain and saved filter. */
+.range-modes label:has(input:checked) {
+  color: var(--neu-accent);
+  font-weight: 700;
 }
 
 .range-date,

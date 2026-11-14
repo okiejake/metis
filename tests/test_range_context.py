@@ -4,6 +4,7 @@ header picker, without each route passing them.
 All data here is synthetic.
 """
 
+import re
 from datetime import date
 
 import pytest
@@ -91,3 +92,10 @@ def test_a_malformed_link_date_falls_back_to_the_saved_range(db, user_id):
     context = range_context(user_id, {"start": "bad", "end": "2026-13-45"})
 
     assert (context["range_start"], context["range_end"]) == ("2026-01-01", "2026-12-31")
+
+
+def test_the_picker_offers_quarter_between_month_and_year(client):
+    html = client.get("/dashboard").text
+    grains = re.findall(r'data-grain="([a-z]+)"', html)
+
+    assert grains == ["day", "month", "quarter", "year", "decade"]

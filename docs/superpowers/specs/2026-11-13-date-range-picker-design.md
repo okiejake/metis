@@ -16,7 +16,7 @@ range at a glance before applying it.
 
 - One range picker in the header row, between the nav and the hide-amounts button,
   on every signed-in page.
-- Pick a range by **grain** (day, month, year, decade) in **absolute** or
+- Pick a range by **grain** (day, month, quarter, year, decade) in **absolute** or
   **relative** mode.
 - Relative ranges **slide forward**: Metis saves the rule, not two dates, and works
   out the dates from today on every page load.
@@ -60,6 +60,7 @@ One setting per user, under the existing `forecast_window` key, as JSON:
 |--------|-------------------------------|---------------------------------------------|
 | day    | ISO date, `2026-11-10`        | days from today                             |
 | month  | `2026-11`                     | months from this month                      |
+| quarter | `2026-Q4`                    | quarters from this quarter                  |
 | year   | `2026`                        | years from this year                        |
 | decade | first year, `2020` (= 2020s)  | decades from this decade                    |
 
@@ -67,6 +68,8 @@ Resolving to dates (start of the first unit to end of the last):
 
 - day: the dates themselves.
 - month: the 1st of the start month to the last day of the end month.
+- quarter: the 1st of the start quarter's first month to the last day of the end
+  quarter's last month (Q1 = Jan–Mar).
 - year: Jan 1 of the start year to Dec 31 of the end year.
 - decade: Jan 1 of the start decade's first year to Dec 31 of the end decade's last
   year.
@@ -109,7 +112,7 @@ and leaves the saved rule unchanged. Validation:
 - Absolute values parse for their grain; relative values are integers.
 - Start is not after end (compared after resolving).
 - Relative offsets are bounded to a sane span (*builder's call*: ±3650 days,
-  ±240 months, ±50 years, ±10 decades).
+  ±240 months, ±80 quarters, ±50 years, ±10 decades).
 
 ### Shared header context
 
@@ -139,7 +142,8 @@ until Apply.
 
 **Left panel:**
 
-- **Grain:** segmented control, Day · Month · Year · Decade. Month is the default
+- **Grain:** segmented control, day · month · quarter · year · decade (quarter added
+  by the owner). Month is the default
   for a new rule.
 - **Mode:** radio buttons, Absolute · Relative.
 - **Start** and **End**, one control each, by grain and mode:
@@ -148,6 +152,7 @@ until Apply.
 |--------|---------------------------------------------------|--------------------------------|
 | day    | standard date field (`<input type="date">`)       | −/+ stepper, days from today   |
 | month  | dropdown of months, grouped by year (`<optgroup>`) | −/+ stepper, months            |
+| quarter | dropdown of quarters, grouped by year            | −/+ stepper, quarters          |
 | year   | dropdown of years                                 | −/+ stepper, years             |
 | decade | dropdown of decades (2020s…)                      | −/+ stepper, decades           |
 

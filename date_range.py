@@ -1,8 +1,8 @@
 """The saved date range: a rule that resolves to dates for a given today.
 
-A rule has a grain (day, month, year, decade), a mode (absolute or relative) and
-a start and end. Absolute values name a unit (`2026-11-10`, `2026-11`, `2026`,
-`2020` for the 2020s). Relative values count units from the current one, so a
+A rule has a grain (day, month, quarter, year, decade), a mode (absolute or
+relative) and a start and end. Absolute values name a unit (`2026-11-10`,
+`2026-11`, `2026-Q4`, `2026`, `2020` for the 2020s). Relative values count units from the current one, so a
 relative rule slides forward with the calendar. Every page reads its range
 through resolve_rule; `static/date-range.js` mirrors it for the live popup, and
 both are pinned to `tests/fixtures/date_range_cases.json`.
@@ -14,9 +14,9 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Optional, Tuple, Union
 
-GRAINS = ("day", "month", "year", "decade")
+GRAINS = ("day", "month", "quarter", "year", "decade")
 MODES = ("absolute", "relative")
-RELATIVE_LIMITS = {"day": 3650, "month": 240, "year": 50, "decade": 10}
+RELATIVE_LIMITS = {"day": 3650, "month": 240, "quarter": 80, "year": 50, "decade": 10}
 MAX_SPAN_DAYS = 36525  # 100 years
 
 
@@ -57,6 +57,12 @@ def _parse_absolute(grain: str, value: str) -> Tuple[date, date]:
         if not 1 <= month <= 12:
             raise ValueError("Choose a month like 2026-11")
         return date(year, month, 1), _month_end(year, month)
+    if grain == "quarter":
+        match = re.fullmatch(r"(\d{4})-Q([1-4])", value)
+        if not match:
+            raise ValueError("Choose a quarter like 2026-Q4")
+        year, quarter = int(match.group(1)), int(match.group(2))
+        return date(year, quarter * 3 - 2, 1), _month_end(year, quarter * 3)
     year = int(value)
     if not 1 <= year <= 9989:
         raise ValueError("Choose a year like 2026")
@@ -75,6 +81,10 @@ def _relative_unit(grain: str, offset: int, today: date) -> Tuple[date, date]:
     if grain == "month":
         year, month = _shift_month(today.year, today.month, offset)
         return date(year, month, 1), _month_end(year, month)
+    if grain == "quarter":
+        first_month = (today.month - 1) // 3 * 3 + 1
+        year, month = _shift_month(today.year, first_month, offset * 3)
+        return date(year, month, 1), _month_end(year, month + 2)
     if grain == "year":
         year = today.year + offset
         return date(year, 1, 1), date(year, 12, 31)
@@ -95,7 +105,7 @@ def resolve_rule(rule: RangeRule, today: date) -> Tuple[date, date]:
 def _build(grain: str, mode: str, start: object, end: object) -> RangeRule:
     """A checked rule, or ValueError with a message fit to show the user."""
     if grain not in GRAINS:
-        raise ValueError("Choose a grain: day, month, year or decade")
+        raise ValueError("Choose a grain: day, month, quarter, year or decade")
     if mode not in MODES:
         raise ValueError("Choose a mode: absolute or relative")
     if mode == "relative":

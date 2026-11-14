@@ -28,7 +28,7 @@
         <fieldset class="range-fieldset">
           <legend>grain</legend>
           <div class="range-segments" role="group" aria-label="grain">
-            {% for grain in ["day", "month", "year", "decade"] %}
+            {% for grain in ["day", "month", "quarter", "year", "decade"] %}
             <button type="button" class="range-segment neu-press" data-grain="{{ grain }}" aria-pressed="false">{{ grain }}</button>
             {% endfor %}
           </div>
