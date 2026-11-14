@@ -1,4 +1,4 @@
-"""Findings from the whole-branch review, each pinned by a test.
+"""Findings from the whole-branch code check, each pinned by a test.
 
 All data here is synthetic.
 """
@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app as app_module
-import review
+import inbox
 from conftest import add_imported
 from merchants import merchant_key
 from services import SESSION_COOKIE
@@ -56,15 +56,16 @@ def mixed_merchant(db, user_id, accounts, savings):
 def test_a_category_for_the_card_part_keeps_the_transfer_decision(db, user_id, accounts, savings):
     out, card = mixed_merchant(db, user_id, accounts, savings)
     fees = db.create_category(user_id, "Fees")
-    transfer_action = review.confirm_transfer(user_id, MIXED)
-    review.confirm_category(user_id, MIXED, fees)
+    transfer_action = inbox.confirm_transfer(user_id, MIXED)
+    inbox.confirm_category(user_id, MIXED, fees)
 
     later = add_imported(db, user_id, accounts["Example Checking"], "Example Checking", TODAY - timedelta(days=1), "EXAMPLE MOVE", -300.0)
-    review.apply_review_decisions(user_id)
+    inbox.apply_transfer_rules(user_id)
+    db.resync_category_rules(user_id)
     assert row(db, later)[0] is True
     assert row(db, card) == (False, fees)
 
-    review.undo(user_id, transfer_action)
+    inbox.undo(user_id, transfer_action)
     assert row(db, out)[0] is False and row(db, later)[0] is False
     assert row(db, card) == (False, fees)
 
@@ -72,10 +73,10 @@ def test_a_category_for_the_card_part_keeps_the_transfer_decision(db, user_id, a
 def test_undoing_a_category_reaches_rows_later_marked_as_transfers(db, user_id, accounts, savings):
     out, card = mixed_merchant(db, user_id, accounts, savings)
     fees = db.create_category(user_id, "Fees")
-    category_action = review.confirm_category(user_id, MIXED, fees)
-    review.confirm_transfer(user_id, MIXED)
+    category_action = inbox.confirm_category(user_id, MIXED, fees)
+    inbox.confirm_transfer(user_id, MIXED)
 
-    review.undo(user_id, category_action)
+    inbox.undo(user_id, category_action)
 
     assert row(db, out)[1] is None and row(db, card)[1] is None
 
@@ -86,7 +87,7 @@ def test_a_card_charge_cannot_be_marked_a_transfer(db, user_id, accounts):
     tx = add_imported(db, user_id, accounts["Example Card"], "Example Card", TODAY, "ACME CASH", -40.0)
 
     with pytest.raises(ValueError):
-        review.set_charge(user_id, tx, "transfer")
+        inbox.set_charge(user_id, tx, "transfer")
     assert row(db, tx)[0] is False
 
 
@@ -106,40 +107,28 @@ def test_an_uncategorized_refund_is_listed_and_the_meter_stays_in_range(db, user
     db.execute("UPDATE imported_transactions SET category_id = ? WHERE id = ?", [dining, tx])
     add_imported(db, user_id, accounts["Example Card"], "Example Card", TODAY, "ACME DINER REFUND", 30.0, flow="refund")
 
-    lists = review.build_review(user_id, *WINDOW)
+    lists = inbox.build_inbox(user_id, *WINDOW)
 
     assert 0 <= lists["meter"]["percent"] <= 100
     assert [r["total"] for r in lists["categories"]] == [-30.0]
 
 
-# Important 4: a repeated budget Confirm records nothing.
+# Important 5: a repeated bill Confirm creates nothing.
 
-def test_a_repeated_budget_confirm_records_nothing(db, user_id):
-    dining = db.create_category(user_id, "Dining")
-    first = review.confirm_budget(user_id, dining, 100.0)
-
-    assert review.confirm_budget(user_id, dining, 100.0) is None
-    review.undo(user_id, first)
-    assert db.load_category_by_id(user_id, dining)["budget_amount"] is None
-
-
-# Important 5: a repeated recurring Confirm creates nothing.
-
-def test_a_repeated_recurring_confirm_creates_nothing(client, db, user_id, accounts):
+def test_a_repeated_bill_confirm_creates_nothing(client, db, user_id, accounts):
     for months in (4, 3, 2, 1):
         add_imported(db, user_id, accounts["Example Card"], "Example Card", TODAY - timedelta(days=30 * months),
                      "ACME STREAMING", -10.0)
-    s = review.build_review(user_id, *WINDOW)["recurring"][0]
+    s = inbox.build_inbox(user_id, *WINDOW)["bills"][0]
     form = {
-        "name": s["name"], "kind": "expense", "amount": "10.00", "start_date": s["start_date"],
-        "frequency_type": "monthly", "interval_months": "1", "day_of_month": str(s["day_of_month"]),
-        "day_of_month_touched": "1", "suggestion_key": s["key"], "next_path": "/inbox#recurring",
+        "name": s["name"], "kind": "expense", "amount": "10.00", "first_due_date": s["first_due_date"],
+        "repeats": "monthly", "from_suggestion": s["token"], "next": "/inbox#bills",
     }
-    client.post("/recurring", data=form, follow_redirects=False)
+    client.post("/bills", data=form, follow_redirects=False)
 
-    again = client.post("/recurring", data=form, follow_redirects=False)
+    again = client.post("/bills", data=form, follow_redirects=False)
 
-    assert db.fetch_one("SELECT COUNT(*) FROM recurring_items")[0] == 1
+    assert db.fetch_one("SELECT COUNT(*) FROM bills")[0] == 1
     assert "Nothing+left+to+change" in again.headers["location"]
 
 

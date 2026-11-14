@@ -1,4 +1,4 @@
-"""Review flags an account that looks stale: the days since its last imported
+"""The inbox flags an account that looks stale: the days since its last imported
 transaction are more than 20% above the average gap between its transactions.
 An account needs five transaction days for a baseline; one with nothing
 imported is listed as having no imports yet. Dismiss lasts until the next import.
@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app as app_module
-import review
+import inbox
 from conftest import add_imported
 from services import SESSION_COOKIE
 
@@ -26,7 +26,7 @@ def every_five_days(db, user_id, account_id, last, days=5):
 
 
 def flagged(user_id, today=TODAY):
-    return {row["account_id"]: row for row in review.stale_accounts(user_id, today)}
+    return {row["account_id"]: row for row in inbox.stale_accounts(user_id, today)}
 
 
 def test_an_account_past_its_usual_gap_by_more_than_a_fifth_is_flagged(db, user_id, accounts):
@@ -70,7 +70,7 @@ def test_an_account_with_nothing_imported_is_listed(db, user_id, accounts):
 def test_dismiss_lasts_until_the_next_import(db, user_id, accounts):
     checking = accounts["Example Checking"]
     every_five_days(db, user_id, checking, TODAY - timedelta(days=30))
-    review.dismiss(user_id, flagged(user_id)[checking]["key"])
+    inbox.dismiss(user_id, flagged(user_id)[checking]["key"])
     assert checking not in flagged(user_id)
 
     add_imported(db, user_id, checking, "Example Checking", TODAY - timedelta(days=20), "ACME LATER", -1.0)
@@ -97,7 +97,7 @@ def test_the_imports_list_comes_first_with_an_import_button(client, db, user_id,
     assert page.count('id="import-dialog"') == 1
 
 
-def test_dismissing_from_review_hides_the_account(client, db, user_id, accounts):
+def test_dismissing_from_inbox_hides_the_account(client, db, user_id, accounts):
     key = flagged(user_id, date.today())[accounts["Example Card"]]["key"]
 
     response = client.post("/inbox/imports/dismiss", data={"key": key}, follow_redirects=False)
@@ -106,5 +106,5 @@ def test_dismissing_from_review_hides_the_account(client, db, user_id, accounts)
     assert accounts["Example Card"] not in flagged(user_id, date.today())
 
 
-def test_stale_accounts_count_toward_the_review_badge(db, user_id, accounts):
-    assert review.build_review(user_id, date(2026, 7, 1), date(2026, 7, 31))["waiting"] == 2
+def test_stale_accounts_count_toward_the_inbox_badge(db, user_id, accounts):
+    assert inbox.build_inbox(user_id, date(2026, 7, 1), date(2026, 7, 31))["waiting"] == 2

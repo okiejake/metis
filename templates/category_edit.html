@@ -7,9 +7,6 @@
   <div class="intro-badge-stack">
     <span class="stat-chip">current {{ category.name }}</span>
     <span class="stat-chip">color {{ category.color }}</span>
-    {% if category.budget_amount is not none %}
-    <span class="stat-chip">${{ category.budget_amount|currency }}/mo</span>
-    {% endif %}
   </div>
 </div>
 
@@ -26,23 +23,20 @@
       color
       <input type="color" name="color" value="{{ category.color }}" required />
     </label>
+    {% if not has_children %}
+    <label>
+      parent
+      <select name="parent_id">
+        <option value="">none</option>
+        {% for parent in parents %}
+        <option value="{{ parent.id }}" {{ 'selected' if parent.id == category.parent_id else '' }}>{% filter lower %}{{ parent.name }}{% endfilter %}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% endif %}
     <button type="submit" class="button-link">save changes</button>
     <a class="button-link" href="{{ base_path() }}/budget">cancel</a>
   </form>
-
-  <form method="post" action="{{ base_path() }}/categories/{{ category.id }}/budget" class="inline-form">
-    <label>
-      monthly budget
-      <input type="number" name="budget_amount" step="0.01" min="0"
-             value="{{ '%.2f'|format(category.budget_amount) if category.budget_amount is not none else '' }}"
-             placeholder="leave blank to use expected items" />
-    </label>
-    <button type="submit" class="button-link">save budget</button>
-  </form>
-  <p class="card-note">
-    with a monthly budget set, this category's bar uses it (prorated across the window you're viewing).
-    leave it blank and the budget is the sum of this category's recurring and one-time expected items.
-  </p>
 </section>
 
 <section class="panel">
@@ -55,21 +49,29 @@
     <table>
       <thead>
         <tr>
-          <th>description contains</th>
+          <th>matches</th>
           <th>amount</th>
+          <th>dates</th>
           <th></th>
         </tr>
       </thead>
       <tbody>
         {% for rule in rules %}
         <tr class="ledger-row">
-          <td><code>{{ rule.pattern }}</code></td>
+          <td>{{ 'merchant' if rule.match_on == 'merchant' else 'description contains' }} <code>{{ rule.pattern }}</code></td>
           <td class="amount-value">
             {% if rule.amount_min is not none and rule.amount_max is not none and rule.amount_min == rule.amount_max %}
               exactly ${{ rule.amount_min|currency }}
             {% elif rule.amount_min is not none or rule.amount_max is not none %}
               {{ '≥ $' ~ rule.amount_min|currency if rule.amount_min is not none else '' }}
               {{ '≤ $' ~ rule.amount_max|currency if rule.amount_max is not none else '' }}
+            {% else %}
+              <span class="card-note">any</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if rule.date_from or rule.date_to %}
+              {{ rule.date_from or '…' }} – {{ rule.date_to or '…' }}
             {% else %}
               <span class="card-note">any</span>
             {% endif %}
@@ -85,7 +87,7 @@
     </table>
   </div>
   {% else %}
-  <p class="empty-state">no rules yet. add one to categorize things like atm withdrawals or card payments automatically.</p>
+  <p class="empty-state">no rules yet.</p>
   {% endif %}
 
   <form method="post" action="{{ base_path() }}/categories/{{ category.id }}/rules" class="inline-form">
@@ -101,6 +103,14 @@
       max amount
       <input type="number" name="amount_max" step="0.01" min="0" placeholder="optional" />
     </label>
+    <label>
+      from
+      <input type="date" name="date_from" />
+    </label>
+    <label>
+      to
+      <input type="date" name="date_to" />
+    </label>
     <button type="submit" class="button-link">add rule</button>
   </form>
 </section>
@@ -108,10 +118,16 @@
 <section class="panel">
   <div class="panel-head">
     <h2>delete category</h2>
-    <p>removes the category, its match rules, and any splits assigned to it. items and transactions keep their history but lose this label.</p>
   </div>
   <form method="post" action="{{ base_path() }}/categories/{{ category.id }}/delete" class="inline-form">
-    <button type="submit" class="button-link">delete category</button>
+    {% if has_children %}
+    <fieldset class="choice-row">
+      <legend>sub-categories</legend>
+      <label><input type="radio" name="children" value="move" required /> move to top-level</label>
+      <label><input type="radio" name="children" value="delete" required /> delete them too</label>
+    </fieldset>
+    {% endif %}
+    <button type="submit" class="button-link danger">delete category</button>
   </form>
 </section>
 {% endblock %}

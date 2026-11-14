@@ -29,9 +29,10 @@
         }
 
         document.documentElement.setAttribute('data-theme', preferredTheme);
+        document.documentElement.classList.add('has-script');
       })();
     </script>
-    <link rel="stylesheet" href="{{ base_path() }}/static/styles.css?v=20261113n" />
+    <link rel="stylesheet" href="{{ base_path() }}/static/styles.css?v=20261114a" />
   </head>
   <body>
     <div class="app-glow app-glow-one" aria-hidden="true"></div>
@@ -69,11 +70,11 @@
       </div>
 
       <nav class="site-nav" aria-label="primary">
-        <a href="{{ base_path() }}/inbox" class="{{ 'active' if active_path.startswith('/inbox') else '' }}">inbox{% if review_waiting %} <span class="nav-badge">{{ review_waiting }}</span>{% endif %}</a>
+        <a href="{{ base_path() }}/inbox" class="{{ 'active' if active_path.startswith('/inbox') else '' }}">inbox{% if inbox_waiting %} <span class="nav-badge">{{ inbox_waiting }}</span>{% endif %}</a>
         <a href="{{ base_path() }}/dashboard" class="{{ 'active' if active_path.startswith('/dashboard') else '' }}">dashboard</a>
         <a href="{{ base_path() }}/ledger" class="{{ 'active' if active_path.startswith('/ledger') else '' }}">ledger</a>
         <a href="{{ base_path() }}/statements" class="{{ 'active' if active_path.startswith('/statements') else '' }}">statements</a>
-        <a href="{{ base_path() }}/budget" class="{{ 'active' if active_path.startswith('/budget') or active_path.startswith('/expected') or active_path.startswith('/recurring') or active_path.startswith('/categories') else '' }}">budget</a>
+        <a href="{{ base_path() }}/budget" class="{{ 'active' if active_path.startswith('/budget') or active_path.startswith('/expected') or active_path.startswith('/bills') or active_path.startswith('/one-time') or active_path.startswith('/categories') else '' }}">budget</a>
         <a href="{{ base_path() }}/accounts" class="{{ 'active' if active_path.startswith('/accounts') else '' }}">accounts</a>
       </nav>
 
@@ -103,6 +104,7 @@
         {{ message }}
         {% if undo_id and not is_error %}
         <form method="post" action="{{ base_path() }}/inbox/undo/{{ undo_id }}" class="inline-form flash-undo">
+          <input type="hidden" name="next" value="{{ page_address(request) }}" />
           <button type="submit" class="button-link">undo</button>
         </form>
         {% endif %}
@@ -116,6 +118,8 @@
     {% if chrome %}
     <script src="{{ base_path() }}/static/date-range.js?v=20261113h" defer></script>
     <script src="{{ base_path() }}/static/theme.js?v=20261113a" defer></script>
+    <script src="{{ base_path() }}/static/category-picker.js?v=20261114a" defer></script>
+    <script src="{{ base_path() }}/static/partial.js?v=20261114a" defer></script>
     {% endif %}
     <script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js"></script>
     <script>

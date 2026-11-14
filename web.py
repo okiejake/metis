@@ -1,10 +1,11 @@
 from datetime import date
 from typing import Annotated, Any, Dict
+from urllib.parse import quote_plus
 
 from fastapi import Depends, Request
 from fastapi.templating import Jinja2Templates
 
-from review import review_waiting_count
+from inbox import inbox_waiting_count
 from date_range import format_range, resolve_rule, rule_to_saved
 from services import parse_iso_date
 from services import get_current_user, load_range_rule, load_saved_ranges, range_first_year, template_context
@@ -18,11 +19,29 @@ CurrentUser = Annotated[Dict[str, Any], Depends(get_current_user)]
 def render(request: Request, template_name: str, message: str = "", err: int = 0, **context: Any):
     """Render a template with the shared base context (current user, users, message/error)."""
     signed_in = getattr(request.state, "current_user", None)
-    if signed_in and "review_waiting" not in context:
-        context["review_waiting"] = review_waiting_count(int(signed_in["id"]))
+    if signed_in and "inbox_waiting" not in context:
+        context["inbox_waiting"] = inbox_waiting_count(int(signed_in["id"]))
     if signed_in:
         context.update(range_context(int(signed_in["id"]), context))
     return templates.TemplateResponse(request, template_name, template_context(request, message, err, **context))
+
+
+def render_part(request: Request, template_name: str, message: str = "", err: int = 0, **context: Any):
+    """Render one section on its own, for a background action to replace (see
+    static/partial.js): no page around it, no header."""
+    return templates.TemplateResponse(request, template_name, template_context(request, message, err, **context))
+
+
+def page_address(request: Request) -> str:
+    """This page's address without the single-use message, Undo and prompt in its
+    query, for a form's next and Undo's way back."""
+    kept = [(key, value) for key, value in request.query_params.multi_items()
+            if key not in ("msg", "err", "undo", "rule_tx", "rule_kind")]
+    query = "&".join(f"{quote_plus(key)}={quote_plus(value)}" for key, value in kept)
+    return request.url.path + (f"?{query}" if query else "")
+
+
+templates.env.globals["page_address"] = page_address
 
 
 def range_context(user_id: int, context: Dict[str, Any]) -> Dict[str, Any]:

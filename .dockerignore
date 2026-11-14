@@ -20,3 +20,4 @@ docs/
 tests/
 *.command
 *.md
+tools/

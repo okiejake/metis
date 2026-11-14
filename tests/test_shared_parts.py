@@ -59,12 +59,12 @@ def test_budget_draws_one_shared_bar_per_category_with_its_title(db, user_id, ac
 
     from fastapi.testclient import TestClient
 
-    from conftest import add_imported
+    from conftest import add_bill, add_imported
     from services import SESSION_COOKIE
 
     dining = db.create_category(user_id, "Dining")
-    db.set_category_budget(user_id, dining, 100.0)
     today = date.today()
+    add_bill(db, user_id, "Diner club", 100.0, today.replace(day=1), category_id=dining)
     tx = add_imported(db, user_id, accounts["Example Card"], "Example Card", today, "ACME DINER", -40.0)
     db.execute("UPDATE imported_transactions SET category_id = ? WHERE id = ?", [dining, tx])
     db.save_forecast_window(user_id, today.replace(day=1), today)
@@ -73,5 +73,6 @@ def test_budget_draws_one_shared_bar_per_category_with_its_title(db, user_id, ac
         client.cookies.set(SESSION_COOKIE, db.create_session(user_id))
         page = client.get("/budget").text
 
-    assert page.count('class="budget-bar-track"') == page.count('class="budget-bar-row') >= 1
+    # Every row but income, which has no budget to fill toward a share of.
+    assert page.count('class="budget-bar-track"') == page.count('class="budget-bar-row') - 1 >= 2
     assert 'title="Dining — actual $40.00, budget $' in page

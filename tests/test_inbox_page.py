@@ -1,4 +1,4 @@
-"""The Review page: four lists in working order, one decision per row, and an
+"""The inbox page: four lists in working order, one decision per row, and an
 Undo on the message after every action. After an action the owner lands back
 on the same list.
 
@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app as app_module
-import review
+import inbox
 import services
 from conftest import add_imported
 from merchants import merchant_key
@@ -67,11 +67,11 @@ def test_the_page_lists_in_working_order_and_hides_empty_lists(client, db, user_
     page = client.get("/inbox").text
 
     assert page.index('id="transfers"') < page.index('id="categories"')
-    assert 'id="budgets"' not in page and 'id="recurring"' not in page
+    assert 'id="budgets"' not in page and 'id="bills"' not in page
     assert "categorized 0%" in page
 
 
-def test_nothing_to_review_when_everything_is_settled(client):
+def test_nothing_to_inbox_when_everything_is_settled(client):
     page = client.get("/inbox").text
 
     assert "inbox is empty." in page
@@ -133,13 +133,13 @@ def test_dismiss_holds_across_reloads_and_restore_brings_rows_back(client, db, u
     assert 'id="transfers"' in client.get("/inbox").text
 
 
-def test_budget_confirm_and_dismiss(client, db, user_id, accounts):
+def test_the_budgets_list_and_its_routes_are_gone(client, db, user_id, accounts):
     dining = db.create_category(user_id, "Dining")
     tx = add_imported(db, user_id, accounts["Example Card"], "Example Card", TODAY, "ACME DINER", -40.0)
     db.execute("UPDATE imported_transactions SET category_id = ? WHERE id = ?", [dining, tx])
 
-    client.post("/inbox/budgets/confirm", data={"category_id": dining, "amount": "60"}, follow_redirects=False)
-    assert db.load_category_by_id(user_id, dining)["budget_amount"] == 60.0
+    assert 'id="budgets"' not in client.get("/inbox").text
+    assert client.post("/inbox/budgets/confirm", data={"category_id": dining, "amount": "60"}).status_code in (404, 405)
 
 
 def test_undo_from_the_message_returns_totals_and_categories(client, db, user_id, accounts):
@@ -157,27 +157,27 @@ def test_undo_from_the_message_returns_totals_and_categories(client, db, user_id
     assert "categorized 0%" in client.get("/inbox").text
 
 
-def test_recurring_confirm_returns_to_review_and_can_be_undone(client, db, user_id, accounts):
+def test_a_bill_confirm_returns_to_inbox_and_can_be_undone(client, db, user_id, accounts):
     for months in (4, 3, 2, 1):
         add_imported(db, user_id, accounts["Example Card"], "Example Card", TODAY - timedelta(days=30 * months),
                      "ACME STREAMING", -10.0)
-    suggestion = review.build_review(user_id, TODAY.replace(day=1), TODAY)["recurring"][0]
+    suggestion = inbox.build_inbox(user_id, TODAY.replace(day=1), TODAY)["bills"][0]
 
-    response = client.post("/recurring", data={
-        "name": suggestion["name"], "kind": "expense", "amount": "10.00", "start_date": suggestion["start_date"],
-        "frequency_type": "monthly", "interval_months": "1", "day_of_month": str(suggestion["day_of_month"]),
-        "day_of_month_touched": "1", "suggestion_key": suggestion["key"], "next_path": "/inbox#recurring",
+    response = client.post("/bills", data={
+        "name": suggestion["name"], "kind": "expense", "amount": "10.00",
+        "first_due_date": suggestion["first_due_date"], "repeats": "monthly",
+        "from_suggestion": suggestion["token"], "next": "/inbox#bills",
     }, follow_redirects=False)
 
-    assert response.headers["location"].startswith("/inbox?") and response.headers["location"].endswith("#recurring")
-    assert db.fetch_one("SELECT COUNT(*) FROM recurring_items")[0] == 1
+    assert response.headers["location"].startswith("/inbox?") and response.headers["location"].endswith("#bills")
+    assert db.fetch_one("SELECT COUNT(*) FROM bills")[0] == 1
 
     client.post(f"/inbox/undo/{undo_id(response)}", follow_redirects=False)
-    assert db.fetch_one("SELECT COUNT(*) FROM recurring_items")[0] == 0
-    assert review.build_review(user_id, TODAY.replace(day=1), TODAY)["recurring"]
+    assert db.fetch_one("SELECT COUNT(*) FROM bills")[0] == 0
+    assert inbox.build_inbox(user_id, TODAY.replace(day=1), TODAY)["bills"]
 
 
-def test_a_split_returns_to_review(client, db, user_id, accounts):
+def test_a_split_returns_to_inbox(client, db, user_id, accounts):
     category = db.create_category(user_id, "Fuel")
     tx = fuel(db, user_id, accounts, amount=-100.0)
 

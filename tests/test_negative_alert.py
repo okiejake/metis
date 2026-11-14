@@ -11,8 +11,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app as app_module
-import review
-from conftest import add_recurring, quiet_imports
+import inbox
+from conftest import add_bill, quiet_imports
 from date_range import RangeRule
 from services import SESSION_COOKIE
 
@@ -33,7 +33,7 @@ def client(db, user_id, accounts):
 def a_big_bill(db, user_id, accounts):
     """A monthly bill larger than the balance, starting next week."""
     starts = TODAY + timedelta(days=7)
-    add_recurring(db, user_id, "Acme Rent", 500.0, starts.day, starts, account_id=accounts["Example Checking"])
+    add_bill(db, user_id, "Acme Rent", 500.0, starts, account_id=accounts["Example Checking"])
     return starts
 
 
@@ -49,10 +49,10 @@ def test_a_projected_negative_day_is_a_red_inbox_alert(client, db, user_id, acco
 
 
 def test_the_alert_counts_toward_the_inbox_badge(client, db, user_id, accounts):
-    before = review.review_waiting_count(user_id)
+    before = inbox.inbox_waiting_count(user_id)
     a_big_bill(db, user_id, accounts)
 
-    assert review.review_waiting_count(user_id) == before + 1
+    assert inbox.inbox_waiting_count(user_id) == before + 1
 
 
 def test_no_alert_while_the_balance_stays_positive(client):

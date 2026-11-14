@@ -1,5 +1,5 @@
-"""A recurring item's status comes from two fields. Pausing is a choice; an end
-date in the past means the item is over. Budget shows Active only for items
+"""A bill's status comes from two fields. Pausing is a choice; an end
+date in the past means the bill is over. Budget shows Active only for bills
 that will still occur.
 
 All data here is synthetic.
@@ -12,8 +12,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app as app_module
-from services import SESSION_COOKIE, recurring_status
-from conftest import add_recurring
+from services import SESSION_COOKIE, bill_status
+from conftest import add_bill
 
 TODAY = date(2026, 6, 15)
 
@@ -31,7 +31,7 @@ TODAY = date(2026, 6, 15)
     ],
 )
 def test_status_comes_from_the_pause_flag_and_the_end_date(active, end_date, expected):
-    assert recurring_status({"active": active, "end_date": end_date}, TODAY) == expected
+    assert bill_status({"active": active, "end_date": end_date}, TODAY) == expected
 
 
 @pytest.fixture
@@ -43,15 +43,15 @@ def client(db, user_id):
 
 
 def row_for(page, name):
-    match = re.search(r"<tr[^>]*>(?:(?!</tr>).)*?" + re.escape(name) + r".*?</tr>", page, re.S)
+    match = re.search(r"<li class=\"budget-item[^>]*>(?:(?!</li>).)*?" + re.escape(name) + r".*?</li>", page, re.S)
     assert match, f"no row for {name}"
     return match.group(0)
 
 
 def test_an_ended_item_shows_as_completed_without_pause(client, db, user_id):
-    item_id = add_recurring(db, user_id, "Acme Streaming", 10.0, 1, date.today() - timedelta(days=400))
+    item_id = add_bill(db, user_id, "Acme Streaming", 10.0, date.today() - timedelta(days=400))
     db.execute(
-        "UPDATE recurring_items SET end_date = ? WHERE id = ?",
+        "UPDATE bills SET end_date = ? WHERE id = ?",
         [date.today() - timedelta(days=10), item_id],
     )
 
@@ -62,12 +62,12 @@ def test_an_ended_item_shows_as_completed_without_pause(client, db, user_id):
     assert not re.search(r">\s*(pause|resume)\s*<", row)
 
 
-def test_the_recurring_count_counts_only_active_items(client, db, user_id):
-    add_recurring(db, user_id, "Acme Gym", 30.0, 1, date.today() - timedelta(days=60))
-    ended = add_recurring(db, user_id, "Acme Streaming", 10.0, 1, date.today() - timedelta(days=400))
+def test_the_bill_count_counts_only_active_bills(client, db, user_id):
+    add_bill(db, user_id, "Acme Gym", 30.0, date.today() - timedelta(days=60))
+    ended = add_bill(db, user_id, "Acme Streaming", 10.0, date.today() - timedelta(days=400))
     db.execute(
-        "UPDATE recurring_items SET end_date = ? WHERE id = ?",
+        "UPDATE bills SET end_date = ? WHERE id = ?",
         [date.today() - timedelta(days=10), ended],
     )
 
-    assert "1 recurring" in client.get("/budget").text
+    assert re.search(r'stat-chip">1 bill</span>', client.get("/budget").text)

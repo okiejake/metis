@@ -8,13 +8,15 @@ from base_path import BasePathMiddleware, configured_base_path
 from routes.accounts import router as accounts_router
 from routes.categories import router as categories_router
 from routes.core import router as core_router
+from routes.budget import router as budget_router
 from routes.expected import router as expected_router
+from routes.transactions import router as transactions_router
 from routes.imports import router as imports_router
-from routes.manual import router as manual_router
 from routes.overview import router as overview_router
 from routes.auth import router as auth_router
-from routes.recurring import router as recurring_router
-from routes.review import router as review_router
+from routes.bills import router as bills_router
+from routes.one_time import router as one_time_router
+from routes.inbox import router as inbox_router
 from routes.splits import router as splits_router
 from routes.statements import router as statements_router
 from routes.window import router as window_router
@@ -87,15 +89,17 @@ app.add_middleware(BasePathMiddleware)
 app.include_router(auth_router)
 app.include_router(core_router)
 app.include_router(categories_router)
-app.include_router(recurring_router)
-app.include_router(manual_router)
+app.include_router(bills_router)
+app.include_router(one_time_router)
 app.include_router(overview_router)
 app.include_router(imports_router)
+app.include_router(budget_router)
 app.include_router(expected_router)
+app.include_router(transactions_router)
 app.include_router(accounts_router)
 app.include_router(splits_router)
 app.include_router(statements_router)
-app.include_router(review_router)
+app.include_router(inbox_router)
 app.include_router(window_router)
 
 

@@ -1,6 +1,6 @@
-"""Review is reached from the navigation, with a count of what is waiting, and
-from one line on the dashboard. Recurring suggestions moved from Budget to
-Review; Budget's chip points there.
+"""The inbox is reached from the navigation, with a count of what is waiting, and
+from one line on the dashboard. Bill suggestions moved from Budget to
+The inbox; Budget's chip points there.
 
 All data here is synthetic.
 """
@@ -16,7 +16,7 @@ from conftest import add_imported, quiet_imports
 from services import SESSION_COOKIE
 
 TODAY = date.today()
-NAV_REVIEW = re.compile(r'<a href="/inbox"[^>]*>\s*inbox\s*(<span class="nav-badge">(\d+)</span>)?\s*</a>')
+NAV_INBOX = re.compile(r'<a href="/inbox"[^>]*>\s*inbox\s*(<span class="nav-badge">(\d+)</span>)?\s*</a>')
 
 
 @pytest.fixture
@@ -30,16 +30,16 @@ def client(db, user_id):
 
 def test_nav_shows_inbox_with_a_count_only_when_something_waits(client, db, user_id, accounts):
     quiet_imports(user_id)
-    quiet = NAV_REVIEW.search(client.get("/budget").text)
+    quiet = NAV_INBOX.search(client.get("/budget").text)
     assert quiet and quiet.group(1) is None
 
     add_imported(db, user_id, accounts["Example Card"], "Example Card", TODAY, "EXAMPLE FUEL", -50.0)
 
-    busy = NAV_REVIEW.search(client.get("/budget").text)
+    busy = NAV_INBOX.search(client.get("/budget").text)
     assert busy and busy.group(2) == "1"
 
 
-def test_dashboard_line_links_to_review_and_hides_when_nothing_waits(client, db, user_id, accounts):
+def test_dashboard_line_links_to_inbox_and_hides_when_nothing_waits(client, db, user_id, accounts):
     assert "categorized" not in client.get("/dashboard").text
 
     add_imported(db, user_id, accounts["Example Card"], "Example Card", TODAY, "EXAMPLE FUEL", -50.0)
@@ -48,12 +48,12 @@ def test_dashboard_line_links_to_review_and_hides_when_nothing_waits(client, db,
     assert re.search(r'<a href="/inbox"[^>]*>\s*categorized 0%\s*</a>', page)
 
 
-def test_budget_no_longer_lists_suggestions_and_links_its_chip_to_review(client, db, user_id, accounts):
+def test_budget_no_longer_lists_suggestions_and_links_its_chip_to_inbox(client, db, user_id, accounts):
     for months in (4, 3, 2, 1):
         add_imported(db, user_id, accounts["Example Card"], "Example Card", TODAY - timedelta(days=30 * months),
                      "ACME STREAMING", -10.0)
 
     page = client.get("/budget").text
 
-    assert "suggested recurring" not in page.lower()
-    assert re.search(r'<a [^>]*href="/inbox#recurring"[^>]*>\s*1 suggested\s*</a>', page)
+    assert "suggested bill" not in page.lower()
+    assert re.search(r'<a [^>]*href="/inbox#bills"[^>]*>\s*1 suggested\s*</a>', page)

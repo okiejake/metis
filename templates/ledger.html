@@ -56,7 +56,6 @@
       <tbody>
         {% set ns = namespace(forecast_divider_shown=false) %}
         {% for row in rows %}
-        {% set default_insert_date = row.insert_default_date.isoformat() if row.insert_default_date else (row.date.isoformat() if row.date else today_iso) %}
         {% if not ns.forecast_divider_shown and row.row_type != 'month_summary' and row.source is defined and row.source != 'actual' and not row.due_not_posted %}
         <tr class="forecast-divider-row">
           <td colspan="8"><span class="forecast-divider-label">↓ forecast begins {{ forecast_start_iso }}</span></td>
@@ -112,16 +111,14 @@
           <td class="amount-value negative">{% if row.expense > 0 %}${{ row.expense|currency }}{% else %}-{% endif %}</td>
           <td class="amount-value {{ 'negative' if row.running_balance < 0 else '' }}{% if row.date.isoformat() == today_iso %} today-balance{% endif %}">${{ row.running_balance|currency }}</td>
           <td class="row-action-cell">
-            {% if row.source == 'manual' %}
+            {% if row.source == 'one-time' %}
             <details class="row-action-menu">
               <summary class="row-action-trigger" aria-label="open transaction actions">
                 <i data-lucide="settings-2" class="menu-icon" aria-hidden="true"></i>
               </summary>
               <div class="row-action-dropdown">
-                <a href="{{ base_path() }}/manual/{{ row.id }}/edit?start={{ start }}&end={{ end }}" class="row-action-item">edit</a>
-                <form method="post" action="{{ base_path() }}/manual/{{ row.id }}/delete" class="row-action-item-form" onsubmit="return confirm('delete this one-off transaction?')">
-                  <input type="hidden" name="start" value="{{ start }}" />
-                  <input type="hidden" name="end" value="{{ end }}" />
+                <a href="{{ base_path() }}/one-time/{{ row.id }}/edit?next=/ledger" class="row-action-item">edit</a>
+                <form method="post" action="{{ base_path() }}/one-time/{{ row.id }}/delete?next=/ledger" class="row-action-item-form" onsubmit="return confirm('delete this one-time item?')">
                   <button type="submit" class="row-action-item danger">delete</button>
                 </form>
               </div>
@@ -142,68 +139,8 @@
         </tr>
         {% endif %}
 
-        <tr class="insert-trigger-row" data-default-date="{{ default_insert_date }}">
-          <td colspan="8">
-            <button type="button" class="insert-plus js-insert-trigger" aria-label="insert transaction on {{ default_insert_date }}">
-              <i data-lucide="plus" class="menu-icon" aria-hidden="true"></i>
-            </button>
-          </td>
-        </tr>
         {% endfor %}
 
-        <tr id="inline-insert-row" class="inline-insert-row hidden">
-          <td colspan="8">
-            <form method="post" action="{{ base_path() }}/manual" class="inline-insert-form" id="inline-insert-form">
-              <input type="hidden" name="start" value="{{ start }}" />
-              <input type="hidden" name="end" value="{{ end }}" />
-
-              <label class="inline-field inline-field-name">
-                name
-                <input type="text" name="name" placeholder="extra income / one-time expense" required />
-              </label>
-
-              <label class="inline-field inline-field-type">
-                type
-                <select name="kind" required>
-                  <option value="expense">expense</option>
-                  <option value="income">income</option>
-                </select>
-              </label>
-
-              <label class="inline-field inline-field-amount">
-                amount
-                <input type="number" step="0.01" min="0.01" name="amount" required />
-              </label>
-
-              <label class="inline-field inline-field-category">
-                category
-                <select name="category_id">
-                  <option value="">no category</option>
-                  {% for category in categories %}
-                  <option value="{{ category.id }}">{% filter lower %}{{ category.name }}{% endfilter %}</option>
-                  {% endfor %}
-                </select>
-              </label>
-
-              <label class="checkbox-field inline-field inline-field-recurring">
-                <span class="checkbox-input-wrap">
-                  <input type="checkbox" name="make_recurring" value="1" />
-                  make recurring monthly
-                </span>
-              </label>
-
-              <label class="inline-field inline-field-date">
-                date
-                <input type="date" name="tx_date" id="inline-tx-date" value="{{ today_iso }}" required />
-              </label>
-
-              <div class="inline-insert-actions">
-                <button type="submit" class="button-link">add transaction</button>
-                <button type="button" class="button-link" id="inline-insert-cancel">cancel</button>
-              </div>
-            </form>
-          </td>
-        </tr>
       </tbody>
     </table>
   </div>
@@ -213,92 +150,6 @@
 </section>
 
 <script>
-  (() => {
-    const insertRow = document.getElementById('inline-insert-row');
-    const insertForm = document.getElementById('inline-insert-form');
-    const triggerButtons = document.querySelectorAll('.js-insert-trigger');
-    const dateInput = document.getElementById('inline-tx-date');
-    const cancelButton = document.getElementById('inline-insert-cancel');
-
-    if (!insertRow || !insertForm || !triggerButtons.length || !dateInput || !cancelButton) {
-      return;
-    }
-
-    const nameInput = insertForm.querySelector('input[name="name"]');
-    let activeTriggerRow = null;
-
-    function parseIsoDate(value) {
-      if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-        return null;
-      }
-      const [year, month, day] = value.split('-').map((part) => Number.parseInt(part, 10));
-      if (!year || !month || !day) {
-        return null;
-      }
-      return new Date(year, month - 1, day);
-    }
-
-    function toIsoDate(dateValue) {
-      const year = String(dateValue.getFullYear());
-      const month = String(dateValue.getMonth() + 1).padStart(2, '0');
-      const day = String(dateValue.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    }
-
-    function syncDateDisplay(dateValue) {
-      if (!dateValue) {
-        return;
-      }
-      dateInput.value = toIsoDate(dateValue);
-    }
-
-    function closeComposer() {
-      insertRow.classList.add('hidden');
-      insertRow.classList.remove('open');
-      if (activeTriggerRow) {
-        activeTriggerRow.classList.remove('insert-target');
-      }
-      activeTriggerRow = null;
-    }
-
-    triggerButtons.forEach((button) => {
-      button.addEventListener('click', () => {
-        const triggerRow = button.closest('.insert-trigger-row');
-        if (!triggerRow) {
-          return;
-        }
-
-        const isSameOpenRow = !insertRow.classList.contains('hidden') && activeTriggerRow === triggerRow;
-        if (isSameOpenRow) {
-          closeComposer();
-          return;
-        }
-
-        const defaultDate = parseIsoDate(triggerRow.dataset.defaultDate || '') || parseIsoDate('{{ today_iso }}');
-        triggerRow.after(insertRow);
-        insertRow.classList.remove('hidden');
-        insertRow.classList.add('open');
-        document.querySelectorAll('.insert-trigger-row.insert-target').forEach((row) => row.classList.remove('insert-target'));
-        triggerRow.classList.add('insert-target');
-        activeTriggerRow = triggerRow;
-        syncDateDisplay(defaultDate);
-
-        if (nameInput) {
-          nameInput.focus();
-        }
-      });
-    });
-
-    cancelButton.addEventListener('click', closeComposer);
-    document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && !insertRow.classList.contains('hidden')) {
-        closeComposer();
-      }
-    });
-
-    syncDateDisplay(parseIsoDate('{{ today_iso }}'));
-  })();
-
   // Expand/collapse the statement behind a card-payment row.
   (() => {
     document.querySelectorAll('.js-card-toggle').forEach((button) => {

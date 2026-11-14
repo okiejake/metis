@@ -1,5 +1,5 @@
 """POST /window saves the date range from the header picker and returns to the
-page it came from, dropping any one-off dates from a link.
+page it came from, dropping any dates a link carried.
 
 All data here is synthetic.
 """

@@ -1,4 +1,4 @@
-"""One definition of spending, read by Budget and Review: money going out that
+"""One definition of spending, read by Budget and the inbox: money going out that
 is not a transfer, less card refunds. Money arriving in any other account is
 income and never reduces spending. Split parts count in their own categories.
 

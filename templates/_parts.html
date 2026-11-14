@@ -4,7 +4,7 @@
 <span class="category-pill"><span class="category-dot" style="background: {{ color if color else 'var(--muted)' }};"></span>{{ name }}</span>
 {%- endmacro %}
 
-{# A horizontal bar on Budget's shared scale; also Review's meter. #}
+{# A horizontal bar on Budget's shared scale; also the inbox's meter. #}
 {% macro bar(fill_pct=0, over_pct=0, neutral_pct=0, title="") -%}
 <div class="budget-bar-track"{% if title %} title="{{ title }}"{% endif %}>
   {% if neutral_pct > 0 %}
@@ -18,14 +18,28 @@
 </div>
 {%- endmacro %}
 
-{# With extras, also offers "New category" (choosing it reveals the name
-   field; see the page's picker script) and, unless transfer is false,
-   "Transfer". #}
-{% macro category_picker(field, categories, selected=None, extras=False, transfer=True) -%}
-<select name="{{ field }}" class="category-picker"{% if extras %} data-category-picker{% endif %}>
+{# The one category picker (#27): a select with an optgroup per parent, which
+   static/category-picker.js turns into a type-ahead box. With extras it also
+   offers "new category" (the script fills the name field from what was typed)
+   and, unless transfer is false, "transfer". With submit, choosing a category
+   submits the picker's form, as in a list row; in a form it only sets the
+   field. #}
+{% macro _picker_option(category, selected) -%}
+<option value="{{ category.id }}" {{ 'selected' if category.id == selected else '' }}>{% filter lower %}{{ category.label or category.name }}{% endfilter %}</option>
+{%- endmacro %}
+{% macro category_picker(field, categories, selected=None, extras=False, transfer=True, submit=False, label="category") -%}
+<select name="{{ field }}" class="category-picker" data-category-picker{% if submit %} data-picker-submit{% endif %} aria-label="{{ label }}">
   <option value="">no category</option>
-  {% for category in categories %}
-  <option value="{{ category.id }}" {{ 'selected' if category.id == selected else '' }}>{% filter lower %}{{ category.name }}{% endfilter %}</option>
+  {% for top in categories|rejectattr('parent_id') %}
+  {% set children = categories|selectattr('parent_id', 'equalto', top.id)|list %}
+  {% if children %}
+  <optgroup label="{{ top.name|lower }}">
+    {{ _picker_option(top, selected) }}
+    {% for child in children %}{{ _picker_option(child, selected) }}{% endfor %}
+  </optgroup>
+  {% else %}
+  {{ _picker_option(top, selected) }}
+  {% endif %}
   {% endfor %}
   {% if extras and transfer %}
   <option value="transfer">transfer</option>
@@ -39,65 +53,106 @@
 {% endif %}
 {%- endmacro %}
 
-{# One row in a Review list: a name, one line of facts, and what the caller
-   puts after them (the input and Confirm / Dismiss). Skip shows on phones. #}
-{% macro review_row(name, facts, key) -%}
-<li class="review-row" data-key="{{ key }}">
-  <div class="review-row-text">
-    <strong class="review-row-name">{{ name }}</strong>
-    <span class="review-row-facts">{{ facts }}</span>
-  </div>
-  <div class="review-row-body">
-    {{ caller() }}
-    <button type="button" class="button-link review-skip" data-review-skip>skip</button>
-  </div>
-</li>
+{# A paged list of transactions, ten to a page. The caller supplies each row's
+   actions: {% call(tx) parts.transaction_list(listed) %}...{% endcall %}.
+   listed is services.page_of's page, with prev and next links ({href,
+   partial}) when there are other pages. #}
+{% macro transaction_list(listed) -%}
+<ul class="tx-list">
+  {% for tx in listed.rows %}
+  <li class="tx-row">
+    <span class="tx-date">{{ tx.tx_date.strftime('%m/%d') }}</span>
+    <span class="tx-name" title="{{ tx.description }}">{{ tx.name }}</span>
+    <span class="tx-amount amount-value{{ ' positive' if tx.kind == 'income' else '' }}">${{ tx.amount|currency }}</span>
+    <span class="tx-actions">{{ caller(tx) }}</span>
+  </li>
+  {% endfor %}
+</ul>
+{% if listed.pages > 1 %}
+<nav class="pager" aria-label="pages">
+  {% if listed.prev %}<a class="button-link" href="{{ base_path() }}{{ listed.prev.href }}" data-partial-href="{{ base_path() }}{{ listed.prev.partial }}" aria-label="previous page">‹</a>{% endif %}
+  <span class="pager-position">{{ listed.page }} / {{ listed.pages }}</span>
+  {% if listed.next %}<a class="button-link" href="{{ base_path() }}{{ listed.next.href }}" data-partial-href="{{ base_path() }}{{ listed.next.partial }}" aria-label="next page">›</a>{% endif %}
+</nav>
+{% endif %}
 {%- endmacro %}
 
-{# The fields that turn a detected recurring suggestion into a recurring item. #}
-{% macro recurring_fields(s, accounts, categories) -%}
-<input type="hidden" name="kind" value="{{ s.kind }}" />
-<input type="hidden" name="suggestion_key" value="{{ s.key }}" />
-<input type="hidden" name="start_date" value="{{ s.start_date }}" />
-<input type="hidden" name="end_date" value="" />
-<input type="hidden" name="day_of_month" value="{{ s.day_of_month }}" />
-<input type="hidden" name="day_of_month_touched" value="1" />
-<input type="hidden" name="interval_months" value="{{ s.interval_months }}" />
-<input type="hidden" name="semimonthly_day1" value="{{ s.semimonthly_day1 }}" />
-<input type="hidden" name="semimonthly_day2" value="{{ s.semimonthly_day2 }}" />
+{# The four choices for a transaction with no expected transaction: a bill of
+   its kind (nearest amount first), a new bill made from it, a one-time item
+   made from it, or the unexpected mark. Budget and the ledger both use it. #}
+{% macro settle(tx, next_path) -%}
+{% set noun = 'income' if tx.kind == 'income' else 'bill' %}
+<div class="settle">
+  {% if tx.bills %}
+  <form method="post" action="{{ base_path() }}/transactions/{{ tx.id }}/match" class="inline-form settle-match" data-partial>
+    <input type="hidden" name="next" value="{{ next_path }}" />
+    <select name="bill_id" aria-label="{{ noun }} to match" data-auto-submit required>
+      <option value="">{% filter lower %}{{ noun }}{% endfilter %}</option>
+      {% for bill in tx.bills %}
+      <option value="{{ bill.id }}">{% filter lower %}{{ bill.name }}{% endfilter %}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="button-link settle-match-button">match</button>
+  </form>
+  {% endif %}
+  <a class="button-link" href="{{ base_path() }}/bills/new?from_tx={{ tx.id }}&amp;next={{ next_path|urlencode }}">new {{ noun }}</a>
+  <form method="post" action="{{ base_path() }}/transactions/{{ tx.id }}/one-time" class="inline-form" data-partial>
+    <input type="hidden" name="next" value="{{ next_path }}" />
+    <button type="submit" class="button-link">one-time</button>
+  </form>
+  <form method="post" action="{{ base_path() }}/transactions/{{ tx.id }}/unexpected" class="inline-form" data-partial>
+    <input type="hidden" name="next" value="{{ next_path }}" />
+    <button type="submit" class="button-link">unexpected</button>
+  </form>
+</div>
+{%- endmacro %}
 
-<label class="suggestion-field suggestion-field-name">
-  name
-  <input type="text" name="name" value="{{ s.name }}" required />
-</label>
-<label class="suggestion-field suggestion-field-amount">
-  amount
-  <input type="number" step="0.01" min="0.01" name="amount" value="{{ '%.2f'|format(s.amount) }}" required />
-</label>
-<label class="suggestion-field">
-  frequency
-  <select name="frequency_type">
-    <option value="weekly" {{ 'selected' if s.frequency_type == 'weekly' else '' }}>weekly</option>
-    <option value="biweekly" {{ 'selected' if s.frequency_type == 'biweekly' else '' }}>bi-weekly</option>
-    <option value="semimonthly" {{ 'selected' if s.frequency_type == 'semimonthly' else '' }}>semi-monthly</option>
-    <option value="monthly" {{ 'selected' if s.frequency_type == 'monthly' else '' }}>monthly</option>
-    <option value="yearly" {{ 'selected' if s.frequency_type == 'yearly' else '' }}>yearly</option>
-    <option value="every_x_months" {{ 'selected' if s.frequency_type == 'every_x_months' else '' }}>{% filter lower %}every {{ s.interval_months }} months{% endfilter %}</option>
-  </select>
-</label>
-<label class="suggestion-field">
-  account
-  <select name="account_id">
-    <option value="">unassigned (immediate)</option>
-    {% for account in accounts %}
-    <option value="{{ account.id }}" {{ 'selected' if account.id == s.account_id else '' }}>{% filter lower %}{{ account.name }}{{ ' (card)' if account.account_type == 'credit_card' else '' }}{% endfilter %}</option>
-    {% endfor %}
-  </select>
-</label>
-<label class="suggestion-field">
-  category
-  {{ category_picker("category_id", categories, s.category_id) }}
-</label>
+{# The rule prompt, after a category is picked for one transaction or it is
+   matched to a bill: the fields of the rule that would do the same for others,
+   and how many others it would take, kept current by static/partial.js. #}
+{% macro rule_prompt(prompt, next_path, skip_partial) -%}
+{% set action = '/categories/' ~ prompt.target_id ~ '/rules' if prompt.kind == 'category' else '/expected/rules' %}
+<form method="post" action="{{ base_path() }}{{ action }}" class="rule-prompt" data-rule-prompt data-partial
+      data-preview-url="{{ base_path() }}/rules/preview">
+  <input type="hidden" name="next" value="{{ next_path }}" />
+  <input type="hidden" name="kind" value="{{ prompt.kind }}" />
+  <input type="hidden" name="tx_id" value="{{ prompt.tx_id }}" />
+  {% if prompt.kind == 'bill' %}
+  <input type="hidden" name="source_type" value="bill" />
+  <input type="hidden" name="source_id" value="{{ prompt.target_id }}" />
+  <input type="hidden" name="amount_mode" value="any" />
+  {% endif %}
+  <p class="rule-prompt-title"><strong>rule</strong> → {{ prompt.target_name }}</p>
+  <div class="rule-prompt-fields">
+    <label>name contains <input type="text" name="pattern" value="{{ prompt.pattern }}" required /></label>
+    {% if prompt.kind == 'category' %}
+    <label>min <input type="number" name="amount_min" step="0.01" min="0" value="{{ '%.2f'|format(prompt.amount_min) if prompt.amount_min is not none else '' }}" /></label>
+    <label>max <input type="number" name="amount_max" step="0.01" min="0" value="{{ '%.2f'|format(prompt.amount_max) if prompt.amount_max is not none else '' }}" /></label>
+    <label>from <input type="date" name="date_from" value="{{ prompt.date_from or '' }}" /></label>
+    <label>to <input type="date" name="date_to" value="{{ prompt.date_to or '' }}" /></label>
+    {% endif %}
+  </div>
+  <div class="actions">
+    <span class="rule-prompt-count"><output data-rule-count>{{ prompt.count }}</output> more</span>
+    <button type="submit" class="button-link">save rule</button>
+    <a class="button-link" href="{{ base_path() }}{{ next_path }}" data-partial-href="{{ base_path() }}{{ skip_partial }}">skip</a>
+  </div>
+</form>
+{%- endmacro %}
+
+{# One row in an inbox list: a name, one line of facts, and what the caller
+   puts after them (the input and Confirm / Dismiss). Skip shows on phones. #}
+{% macro inbox_row(name, facts, key) -%}
+<li class="inbox-row" data-key="{{ key }}">
+  <div class="inbox-row-text">
+    <strong class="inbox-row-name">{{ name }}</strong>
+    <span class="inbox-row-facts">{{ facts }}</span>
+  </div>
+  <div class="inbox-row-body">
+    {{ caller() }}
+    <button type="button" class="button-link inbox-skip" data-inbox-skip>skip</button>
+  </div>
+</li>
 {%- endmacro %}
 
 {# One choice in a set of cards; a radio underneath, so it works without script. #}

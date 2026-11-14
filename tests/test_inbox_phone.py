@@ -1,4 +1,4 @@
-"""On a phone, Review shows each list one row at a time, with Skip and a
+"""On a phone, the inbox shows each list one row at a time, with Skip and a
 position such as "3 of 45". Same page, same rows, same actions.
 
 All data here is synthetic.
@@ -35,8 +35,8 @@ def page(db, user_id, accounts):
 
 def test_every_row_has_skip_and_every_list_has_a_position_line(page):
     # Three merchants to categorize, and the checking account with no imports yet.
-    assert page.count('class="review-row"') == len(re.findall(r"<button[^>]*data-review-skip", page)) == 4
-    assert page.count('<ol class="review-list"') == len(re.findall(r"<p[^>]*data-review-position", page)) >= 1
+    assert page.count('class="inbox-row"') == len(re.findall(r"<button[^>]*data-inbox-skip", page)) == 4
+    assert page.count('<ol class="inbox-list"') == len(re.findall(r"<p[^>]*data-inbox-position", page)) >= 1
 
 
 class _InlineScripts(HTMLParser):
@@ -86,5 +86,5 @@ def test_the_phone_rule_shows_one_row_with_skip():
     block = re.search(r"@media \(max-width: 640px\) \{(.*?)\n\}", css, re.S)
 
     assert block, "no 640px block"
-    assert re.search(r"\.review-row:not\(\.is-current\)\s*\{[^}]*display:\s*none", block.group(1))
-    assert re.search(r"\.review-skip[^{]*\{[^}]*display:\s*inline-flex", block.group(1))
+    assert re.search(r"\.inbox-row:not\(\.is-current\)\s*\{[^}]*display:\s*none", block.group(1))
+    assert re.search(r"\.inbox-skip[^{]*\{[^}]*display:\s*inline-flex", block.group(1))

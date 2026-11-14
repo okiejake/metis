@@ -31,7 +31,7 @@ def template_id(user_id):
 
 
 def add(client, **fields):
-    form = {"name": "Example Savings", "account_type": "checking", "method": "manual", "template": "new", **fields}
+    form = {"name": "Example Savings", "account_type": "checking", "method": "csv", "template": "new", **fields}
     return client.post("/accounts/new", data=form, follow_redirects=False)
 
 

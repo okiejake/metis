@@ -9,7 +9,7 @@ All data here is synthetic.
 
 from datetime import date, timedelta
 
-from conftest import add_imported, add_recurring, months_before, reconcile, rows_on
+from conftest import add_bill, add_imported, due_months_before, reconcile, rows_on
 
 TODAY = date.today()
 WINDOW_START = TODAY - timedelta(days=30)
@@ -32,13 +32,12 @@ def seed_cutover_today(db, user_id, accounts):
 
 def test_expected_item_due_on_cutover_date_still_appears(db, user_id, accounts):
     seed_cutover_today(db, user_id, accounts)
-    add_recurring(
+    add_bill(
         db,
         user_id,
         "Acme Utilities",
         2000.00,
-        day_of_month=TODAY.day,
-        start_date=months_before(TODAY, 4),
+        first_due_date=due_months_before(TODAY, 4),
         account_id=accounts["Example Checking"],
     )
 
@@ -51,13 +50,12 @@ def test_expected_item_due_on_cutover_date_still_appears(db, user_id, accounts):
 
 def test_due_on_cutover_row_moves_the_running_balance(db, user_id, accounts):
     seed_cutover_today(db, user_id, accounts)
-    add_recurring(
+    add_bill(
         db,
         user_id,
         "Acme Utilities",
         2000.00,
-        day_of_month=TODAY.day,
-        start_date=months_before(TODAY, 4),
+        first_due_date=due_months_before(TODAY, 4),
         account_id=accounts["Example Checking"],
     )
 
@@ -73,13 +71,12 @@ def test_due_on_cutover_row_moves_the_running_balance(db, user_id, accounts):
 
 
 def test_reconciled_occurrence_on_cutover_date_is_not_double_counted(db, user_id, accounts):
-    item_id = add_recurring(
+    item_id = add_bill(
         db,
         user_id,
         "Acme Utilities",
         2000.00,
-        day_of_month=TODAY.day,
-        start_date=months_before(TODAY, 4),
+        first_due_date=due_months_before(TODAY, 4),
         account_id=accounts["Example Checking"],
     )
     tx_id = add_imported(
@@ -91,7 +88,7 @@ def test_reconciled_occurrence_on_cutover_date_is_not_double_counted(db, user_id
         "Acme Utilities Co",
         -2000.00,
     )
-    reconcile(db, user_id, "recurring", item_id, tx_id)
+    reconcile(db, user_id, "bill", item_id, tx_id)
 
     transactions = db.collect_blended_transactions(user_id, WINDOW_START, WINDOW_END)
 
@@ -104,13 +101,12 @@ def test_reconciled_occurrence_on_cutover_date_is_not_double_counted(db, user_id
 def test_unposted_occurrence_before_the_cutover_date_stays_hidden(db, user_id, accounts):
     seed_cutover_today(db, user_id, accounts)
     earlier = TODAY - timedelta(days=10)
-    add_recurring(
+    add_bill(
         db,
         user_id,
         "Example Insurance",
         75.00,
-        day_of_month=earlier.day,
-        start_date=months_before(earlier, 4),
+        first_due_date=due_months_before(earlier, 4),
         account_id=accounts["Example Checking"],
     )
 
@@ -124,13 +120,12 @@ def test_unposted_occurrence_before_the_cutover_date_stays_hidden(db, user_id, a
 
 def test_forecast_after_the_cutover_is_not_flagged_as_due(db, user_id, accounts):
     seed_cutover_today(db, user_id, accounts)
-    add_recurring(
+    add_bill(
         db,
         user_id,
         "Acme Utilities",
         2000.00,
-        day_of_month=TODAY.day,
-        start_date=months_before(TODAY, 4),
+        first_due_date=due_months_before(TODAY, 4),
         account_id=accounts["Example Checking"],
     )
 
