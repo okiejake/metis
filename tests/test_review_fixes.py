@@ -93,7 +93,7 @@ def test_a_card_charge_cannot_be_marked_a_transfer(db, user_id, accounts):
 def test_transfer_is_not_offered_for_card_charges(client, db, user_id, accounts):
     add_imported(db, user_id, accounts["Example Card"], "Example Card", TODAY, "ACME CASH", -40.0)
 
-    page = client.get("/review").text
+    page = client.get("/inbox").text
 
     assert 'id="categories"' in page and 'value="transfer"' not in page
 
@@ -133,7 +133,7 @@ def test_a_repeated_recurring_confirm_creates_nothing(client, db, user_id, accou
     form = {
         "name": s["name"], "kind": "expense", "amount": "10.00", "start_date": s["start_date"],
         "frequency_type": "monthly", "interval_months": "1", "day_of_month": str(s["day_of_month"]),
-        "day_of_month_touched": "1", "suggestion_key": s["key"], "next_path": "/review#recurring",
+        "day_of_month_touched": "1", "suggestion_key": s["key"], "next_path": "/inbox#recurring",
     }
     client.post("/recurring", data=form, follow_redirects=False)
 
@@ -148,20 +148,20 @@ def test_a_repeated_recurring_confirm_creates_nothing(client, db, user_id, accou
 def test_new_category_is_safe_to_repeat_and_undo_removes_it(client, db, user_id, accounts):
     tx = add_imported(db, user_id, accounts["Example Card"], "Example Card", TODAY, "EXAMPLE FUEL", -50.0)
     form = {"key": merchant_key("EXAMPLE FUEL"), "choice": "new", "new_category_name": "Fuel", "list": "categories"}
-    first = client.post("/review/merchants/confirm", data=form, follow_redirects=False)
+    first = client.post("/inbox/merchants/confirm", data=form, follow_redirects=False)
 
-    again = client.post("/review/merchants/confirm", data=form, follow_redirects=False)
+    again = client.post("/inbox/merchants/confirm", data=form, follow_redirects=False)
     assert "Nothing+left+to+change" in again.headers["location"]
     assert db.fetch_one("SELECT COUNT(*) FROM categories WHERE name = 'Fuel'")[0] == 1
 
     action = int(first.headers["location"].split("undo=")[1].split("#")[0])
-    client.post(f"/review/undo/{action}", follow_redirects=False)
+    client.post(f"/inbox/undo/{action}", follow_redirects=False)
     assert db.fetch_one("SELECT COUNT(*) FROM categories WHERE name = 'Fuel'")[0] == 0
     assert row(db, tx)[1] is None
 
 
 def test_a_stale_new_category_confirm_creates_nothing(client, db, user_id):
-    client.post("/review/merchants/confirm",
+    client.post("/inbox/merchants/confirm",
                 data={"key": "NOTHING HERE", "choice": "new", "new_category_name": "Fuel", "list": "categories"},
                 follow_redirects=False)
 
@@ -169,6 +169,6 @@ def test_a_stale_new_category_confirm_creates_nothing(client, db, user_id):
 
 
 def test_a_stale_new_category_on_a_missing_charge_creates_nothing(client, db, user_id):
-    client.post("/review/charges/999999", data={"choice": "new", "new_category_name": "Fuel"}, follow_redirects=False)
+    client.post("/inbox/charges/999999", data={"choice": "new", "new_category_name": "Fuel"}, follow_redirects=False)
 
     assert db.fetch_one("SELECT COUNT(*) FROM categories WHERE name = 'Fuel'")[0] == 0

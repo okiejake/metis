@@ -23,19 +23,19 @@
    "Transfer". #}
 {% macro category_picker(field, categories, selected=None, extras=False, transfer=True) -%}
 <select name="{{ field }}" class="category-picker"{% if extras %} data-category-picker{% endif %}>
-  <option value="">No category</option>
+  <option value="">no category</option>
   {% for category in categories %}
-  <option value="{{ category.id }}" {{ 'selected' if category.id == selected else '' }}>{{ category.name }}</option>
+  <option value="{{ category.id }}" {{ 'selected' if category.id == selected else '' }}>{% filter lower %}{{ category.name }}{% endfilter %}</option>
   {% endfor %}
   {% if extras and transfer %}
-  <option value="transfer">Transfer</option>
+  <option value="transfer">transfer</option>
   {% endif %}
   {% if extras %}
-  <option value="new">New category</option>
+  <option value="new">new category</option>
   {% endif %}
 </select>
 {% if extras %}
-<input type="text" name="new_category_name" class="category-new-name hidden" placeholder="Name" aria-label="New category name" data-new-category />
+<input type="text" name="new_category_name" class="category-new-name hidden" placeholder="name" aria-label="new category name" data-new-category />
 {% endif %}
 {%- endmacro %}
 
@@ -49,7 +49,7 @@
   </div>
   <div class="review-row-body">
     {{ caller() }}
-    <button type="button" class="button-link review-skip" data-review-skip>Skip</button>
+    <button type="button" class="button-link review-skip" data-review-skip>skip</button>
   </div>
 </li>
 {%- endmacro %}
@@ -67,35 +67,35 @@
 <input type="hidden" name="semimonthly_day2" value="{{ s.semimonthly_day2 }}" />
 
 <label class="suggestion-field suggestion-field-name">
-  Name
+  name
   <input type="text" name="name" value="{{ s.name }}" required />
 </label>
 <label class="suggestion-field suggestion-field-amount">
-  Amount
+  amount
   <input type="number" step="0.01" min="0.01" name="amount" value="{{ '%.2f'|format(s.amount) }}" required />
 </label>
 <label class="suggestion-field">
-  Frequency
+  frequency
   <select name="frequency_type">
-    <option value="weekly" {{ 'selected' if s.frequency_type == 'weekly' else '' }}>Weekly</option>
-    <option value="biweekly" {{ 'selected' if s.frequency_type == 'biweekly' else '' }}>Bi-weekly</option>
-    <option value="semimonthly" {{ 'selected' if s.frequency_type == 'semimonthly' else '' }}>Semi-monthly</option>
-    <option value="monthly" {{ 'selected' if s.frequency_type == 'monthly' else '' }}>Monthly</option>
-    <option value="yearly" {{ 'selected' if s.frequency_type == 'yearly' else '' }}>Yearly</option>
-    <option value="every_x_months" {{ 'selected' if s.frequency_type == 'every_x_months' else '' }}>Every {{ s.interval_months }} months</option>
+    <option value="weekly" {{ 'selected' if s.frequency_type == 'weekly' else '' }}>weekly</option>
+    <option value="biweekly" {{ 'selected' if s.frequency_type == 'biweekly' else '' }}>bi-weekly</option>
+    <option value="semimonthly" {{ 'selected' if s.frequency_type == 'semimonthly' else '' }}>semi-monthly</option>
+    <option value="monthly" {{ 'selected' if s.frequency_type == 'monthly' else '' }}>monthly</option>
+    <option value="yearly" {{ 'selected' if s.frequency_type == 'yearly' else '' }}>yearly</option>
+    <option value="every_x_months" {{ 'selected' if s.frequency_type == 'every_x_months' else '' }}>{% filter lower %}every {{ s.interval_months }} months{% endfilter %}</option>
   </select>
 </label>
 <label class="suggestion-field">
-  Account
+  account
   <select name="account_id">
-    <option value="">Unassigned (immediate)</option>
+    <option value="">unassigned (immediate)</option>
     {% for account in accounts %}
-    <option value="{{ account.id }}" {{ 'selected' if account.id == s.account_id else '' }}>{{ account.name }}{{ ' (card)' if account.account_type == 'credit_card' else '' }}</option>
+    <option value="{{ account.id }}" {{ 'selected' if account.id == s.account_id else '' }}>{% filter lower %}{{ account.name }}{{ ' (card)' if account.account_type == 'credit_card' else '' }}{% endfilter %}</option>
     {% endfor %}
   </select>
 </label>
 <label class="suggestion-field">
-  Category
+  category
   {{ category_picker("category_id", categories, s.category_id) }}
 </label>
 {%- endmacro %}
@@ -112,9 +112,9 @@
 {# A picker of a CSV's columns, for mapping a template. #}
 {% macro column_select(field, header, selected=None, optional=False, required=False) -%}
 <select name="{{ field }}"{{ ' required' if required else '' }}>
-  <option value="">{{ 'None' if optional else 'Choose…' }}</option>
+  <option value="">{% filter lower %}{{ 'none' if optional else 'choose…' }}{% endfilter %}</option>
   {% for column in header %}
-  <option value="{{ column }}"{{ ' selected' if column == selected else '' }}>{{ column }}</option>
+  <option value="{{ column }}"{{ ' selected' if column == selected else '' }}>{% filter lower %}{{ column }}{% endfilter %}</option>
   {% endfor %}
 </select>
 {%- endmacro %}
@@ -125,16 +125,16 @@
 {% set statement_day = account.statement_day if account else None %}
 {% set due_day = account.due_day if account else None %}
 <div data-field="statement_day" class="conditional cycle-field" data-card-only>
-  <label>Statement closes (day of month)
+  <label>statement closes (day of month)
     <input type="number" min="1" max="31" name="statement_day" value="{{ statement_day if statement_day else 15 }}" class="cycle-day-input" />
   </label>
-  <label class="eom-toggle"><input type="checkbox" name="statement_eom" value="1" class="eom-checkbox" data-target="statement_day" {{ 'checked' if statement_day == 0 else '' }} /> Last day of month</label>
+  <label class="eom-toggle"><input type="checkbox" name="statement_eom" value="1" class="eom-checkbox" data-target="statement_day" {{ 'checked' if statement_day == 0 else '' }} /> last day of month</label>
 </div>
 <div data-field="due_day" class="conditional cycle-field" data-card-only>
-  <label>Payment due (day of month)
+  <label>payment due (day of month)
     <input type="number" min="1" max="31" name="due_day" value="{{ due_day if due_day else 10 }}" class="cycle-day-input" />
   </label>
-  <label class="eom-toggle"><input type="checkbox" name="due_eom" value="1" class="eom-checkbox" data-target="due_day" {{ 'checked' if due_day == 0 else '' }} /> Last day of month</label>
+  <label class="eom-toggle"><input type="checkbox" name="due_eom" value="1" class="eom-checkbox" data-target="due_day" {{ 'checked' if due_day == 0 else '' }} /> last day of month</label>
 </div>
 {%- endmacro %}
 
@@ -167,25 +167,25 @@
 {% macro import_dialog(templates, next_path="/accounts") -%}
 <dialog class="import-dialog" id="import-dialog" aria-labelledby="import-dialog-title">
   <form method="post" enctype="multipart/form-data" class="import-dialog-form" data-action-base="{{ base_path() }}/accounts/">
-    <h2 id="import-dialog-title">Import <span data-import-name></span></h2>
+    <h2 id="import-dialog-title">import <span data-import-name></span></h2>
     <input type="hidden" name="next" value="{{ next_path }}" />
     <label>
-      Template
+      template
       <select name="template_id" required>
-        <option value="">Choose…</option>
+        <option value="">choose…</option>
         {% for t in templates %}
-        <option value="{{ t.id }}">{{ t.name }}</option>
+        <option value="{{ t.id }}">{% filter lower %}{{ t.name }}{% endfilter %}</option>
         {% endfor %}
       </select>
     </label>
     <label>
-      File
+      file
       <input type="file" name="file" accept=".csv,text/csv" required />
     </label>
     <div class="actions">
-      <button type="submit" class="button-link">Import</button>
-      <a class="button-link" data-new-template href="{{ base_path() }}/templates/new">New template</a>
-      <button type="button" class="button-link" data-import-close>Cancel</button>
+      <button type="submit" class="button-link">import</button>
+      <a class="button-link" data-new-template href="{{ base_path() }}/templates/new">new template</a>
+      <button type="button" class="button-link" data-import-close>cancel</button>
     </div>
   </form>
 </dialog>
@@ -215,5 +215,5 @@
 {# The Import button that opens import_dialog for one account. #}
 {% macro import_button(account) -%}
 <button type="button" class="button-link" data-import-account="{{ account.id }}"
-        data-import-name="{{ account.name }}" data-import-template="{{ account.default_template_id or '' }}">Import</button>
+        data-import-name="{{ account.name }}" data-import-template="{{ account.default_template_id or '' }}">import</button>
 {%- endmacro %}

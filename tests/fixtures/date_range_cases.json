@@ -1,0 +1,20 @@
+[
+  {"rule": {"grain": "month", "mode": "relative", "start": -3, "end": 6}, "today": "2026-11-13", "start": "2026-08-01", "end": "2027-05-31"},
+  {"rule": {"grain": "month", "mode": "relative", "start": -3, "end": 6}, "today": "2026-12-02", "start": "2026-09-01", "end": "2027-06-30"},
+  {"rule": {"grain": "month", "mode": "relative", "start": 0, "end": 0}, "today": "2026-11-13", "start": "2026-11-01", "end": "2026-11-30"},
+  {"rule": {"grain": "month", "mode": "relative", "start": -1, "end": 1}, "today": "2027-01-31", "start": "2026-12-01", "end": "2027-02-28"},
+  {"rule": {"grain": "month", "mode": "absolute", "start": "2024-02", "end": "2024-02"}, "today": "2026-11-13", "start": "2024-02-01", "end": "2024-02-29"},
+  {"rule": {"grain": "year", "mode": "relative", "start": 0, "end": 0}, "today": "2026-11-13", "start": "2026-01-01", "end": "2026-12-31"},
+  {"rule": {"grain": "year", "mode": "relative", "start": -1, "end": 1}, "today": "2026-11-13", "start": "2025-01-01", "end": "2027-12-31"},
+  {"rule": {"grain": "year", "mode": "absolute", "start": "2024", "end": "2026"}, "today": "2026-11-13", "start": "2024-01-01", "end": "2026-12-31"},
+  {"rule": {"grain": "decade", "mode": "relative", "start": 0, "end": 0}, "today": "2026-11-13", "start": "2020-01-01", "end": "2029-12-31"},
+  {"rule": {"grain": "decade", "mode": "relative", "start": -1, "end": 0}, "today": "2026-11-13", "start": "2010-01-01", "end": "2029-12-31"},
+  {"rule": {"grain": "decade", "mode": "absolute", "start": "2020", "end": "2030"}, "today": "2026-11-13", "start": "2020-01-01", "end": "2039-12-31"},
+  {"rule": {"grain": "day", "mode": "relative", "start": -90, "end": 90}, "today": "2026-11-13", "start": "2026-08-15", "end": "2027-02-11"},
+  {"rule": {"grain": "day", "mode": "absolute", "start": "2026-11-10", "end": "2027-01-20"}, "today": "2026-11-13", "start": "2026-11-10", "end": "2027-01-20"},
+  {"rule": {"grain": "quarter", "mode": "relative", "start": 0, "end": 0}, "today": "2026-11-13", "start": "2026-10-01", "end": "2026-12-31"},
+  {"rule": {"grain": "quarter", "mode": "relative", "start": -1, "end": 1}, "today": "2026-11-13", "start": "2026-07-01", "end": "2027-03-31"},
+  {"rule": {"grain": "quarter", "mode": "relative", "start": -1, "end": 0}, "today": "2027-01-15", "start": "2026-10-01", "end": "2027-03-31"},
+  {"rule": {"grain": "quarter", "mode": "absolute", "start": "2024-Q1", "end": "2024-Q1"}, "today": "2026-11-13", "start": "2024-01-01", "end": "2024-03-31"},
+  {"rule": {"grain": "quarter", "mode": "absolute", "start": "2025-Q4", "end": "2026-Q2"}, "today": "2026-11-13", "start": "2025-10-01", "end": "2026-06-30"}
+]

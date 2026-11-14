@@ -1,10 +1,10 @@
-"""The Review page and its actions. Every action lands back on its list with
+"""The Inbox page (served at /inbox; it was Review at /review) and its actions. Every action lands back on its list with
 a message that carries an Undo."""
 
 from typing import Optional, Tuple, Union
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 import import_templates as it
 import review
@@ -27,7 +27,7 @@ LISTS = ("imports", "transfers", "categories", "budgets", "recurring")
 
 def _back(list_name: str, message: str, action_id: Optional[int]):
     """Return to the list. A None action means nothing was left to change."""
-    target = f"/review#{list_name if list_name in LISTS else 'categories'}"
+    target = f"/inbox#{list_name if list_name in LISTS else 'categories'}"
     if action_id is None:
         return redirect_with_message(target, "Nothing left to change")
     return redirect_with_message(target, message, undo=action_id)
@@ -49,7 +49,14 @@ def _choice(user_id: int, choice: str, new_category_name: str) -> Tuple[Union[in
     return int(choice), False
 
 
-@router.get("/review", response_class=HTMLResponse)
+@router.get("/review")
+def review_moved(request: Request):
+    """Old links and bookmarks: Review is now Inbox."""
+    query = f"?{request.url.query}" if request.url.query else ""
+    return RedirectResponse(url=f"/inbox{query}", status_code=308)
+
+
+@router.get("/inbox", response_class=HTMLResponse)
 def review_page(request: Request, user: CurrentUser, start: str = "", end: str = "", msg: str = "", err: int = 0):
     window_start, window_end, invalid_filter = resolve_forecast_window(user["id"], start, end)
     if invalid_filter:
@@ -66,12 +73,10 @@ def review_page(request: Request, user: CurrentUser, start: str = "", end: str =
         dismissed_count=count_dismissed_suggestions(user["id"]),
         start=window_start.isoformat(),
         end=window_end.isoformat(),
-        show_forecast_window_form=True,
-        window_form_action="/review",
     )
 
 
-@router.post("/review/merchants/confirm")
+@router.post("/inbox/merchants/confirm")
 def confirm_merchant(
     request: Request, user: CurrentUser,
     key: str = Form(...), choice: str = Form(""), new_category_name: str = Form(""), list: str = Form("categories"),
@@ -81,7 +86,7 @@ def confirm_merchant(
     try:
         picked, created = _choice(user["id"], choice, new_category_name)
     except ValueError as exc:
-        return redirect_with_message(f"/review#{list}", str(exc), is_error=True)
+        return redirect_with_message(f"/inbox#{list}", str(exc), is_error=True)
     if picked == "transfer":
         action = review.confirm_transfer(user["id"], key)
     else:
@@ -89,19 +94,19 @@ def confirm_merchant(
     return _back(list, "Confirmed", action)
 
 
-@router.post("/review/imports/dismiss")
+@router.post("/inbox/imports/dismiss")
 def dismiss_import(request: Request, user: CurrentUser, key: str = Form(...)):
     if not key.startswith(review.STALE_DISMISS_PREFIX):
-        return redirect_with_message("/review#imports", "Nothing to dismiss", is_error=True)
+        return redirect_with_message("/inbox#imports", "Nothing to dismiss", is_error=True)
     return _back("imports", "Dismissed", review.dismiss(user["id"], key))
 
 
-@router.post("/review/merchants/dismiss")
+@router.post("/inbox/merchants/dismiss")
 def dismiss_merchant(request: Request, user: CurrentUser, key: str = Form(...)):
     return _back("transfers", "Dismissed", review.dismiss(user["id"], review.TRANSFER_DISMISS_PREFIX + key))
 
 
-@router.post("/review/charges/{tx_id}")
+@router.post("/inbox/charges/{tx_id}")
 def set_charge(
     request: Request, user: CurrentUser, tx_id: int, choice: str = Form(""), new_category_name: str = Form(""),
 ):
@@ -111,37 +116,37 @@ def set_charge(
         picked, created = _choice(user["id"], choice, new_category_name)
         action = review.set_charge(user["id"], tx_id, picked, created=created)
     except ValueError as exc:
-        return redirect_with_message("/review#categories", str(exc), is_error=True)
+        return redirect_with_message("/inbox#categories", str(exc), is_error=True)
     return _back("categories", "Confirmed", action)
 
 
-@router.post("/review/budgets/confirm")
+@router.post("/inbox/budgets/confirm")
 def confirm_budget(request: Request, user: CurrentUser, category_id: int = Form(...), amount: str = Form("")):
     try:
         monthly = float(amount)
         if monthly < 0:
             raise ValueError
     except ValueError:
-        return redirect_with_message("/review#budgets", "Enter a monthly amount", is_error=True)
+        return redirect_with_message("/inbox#budgets", "Enter a monthly amount", is_error=True)
     return _back("budgets", "Confirmed", review.confirm_budget(user["id"], category_id, monthly))
 
 
-@router.post("/review/budgets/dismiss")
+@router.post("/inbox/budgets/dismiss")
 def dismiss_budget(request: Request, user: CurrentUser, category_id: int = Form(...)):
     return _back("budgets", "Dismissed", review.dismiss(user["id"], f"{review.BUDGET_DISMISS_PREFIX}{category_id}"))
 
 
-@router.post("/review/recurring/dismiss")
+@router.post("/inbox/recurring/dismiss")
 def dismiss_recurring(request: Request, user: CurrentUser, suggestion_key: str = Form(...)):
     return _back("recurring", "Dismissed", review.dismiss(user["id"], suggestion_key))
 
 
-@router.post("/review/undo/{action_id}")
+@router.post("/inbox/undo/{action_id}")
 def undo_action(request: Request, user: CurrentUser, action_id: int):
-    return redirect_with_message("/review", review.undo(user["id"], action_id))
+    return redirect_with_message("/inbox", review.undo(user["id"], action_id))
 
 
-@router.post("/review/restore")
+@router.post("/inbox/restore")
 def restore_dismissed(request: Request, user: CurrentUser):
     reset_dismissed_suggestions(user["id"])
-    return redirect_with_message("/review", "Restored")
+    return redirect_with_message("/inbox", "Restored")

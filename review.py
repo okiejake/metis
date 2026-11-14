@@ -635,14 +635,17 @@ def build_review(user_id: int, window_start: date, window_end: date) -> Dict[str
     budgets = _budget_rows(user_id, window_start, window_end, dismissed)
     recurring = db.detect_recurring_suggestions(user_id)
     imports = stale_accounts(user_id, date.today())
+    negative = db.first_projected_negative(user_id, window_start, window_end)
+    alerts = [{"kind": "negative", "date": negative.isoformat()}] if negative else []
     return {
+        "alerts": alerts,
         "meter": {"percent": percent, "spending": spending, "uncategorized": uncategorized},
         "imports": imports,
         "transfers": transfers,
         "categories": categories,
         "budgets": budgets,
         "recurring": recurring,
-        "waiting": len(imports) + len(transfers) + len(categories) + len(budgets) + len(recurring),
+        "waiting": len(alerts) + len(imports) + len(transfers) + len(categories) + len(budgets) + len(recurring),
     }
 
 
@@ -668,9 +671,15 @@ def _data_stamp(user_id: int) -> tuple:
           (SELECT COUNT(*) FROM transaction_splits WHERE user_id = ?),
           (SELECT COUNT(*) FROM expected_reconciliations WHERE user_id = ?),
           (SELECT COUNT(*) FROM accounts WHERE user_id = ?),
+          -- the forecast behind the negative-balance alert
+          (SELECT SUM(amount) FROM recurring_items WHERE user_id = ?),
+          (SELECT SUM(CAST(active AS INTEGER)) FROM recurring_items WHERE user_id = ?),
+          (SELECT COUNT(*) FROM manual_transactions WHERE user_id = ?),
+          (SELECT SUM(amount) FROM manual_transactions WHERE user_id = ?),
+          (SELECT value FROM settings WHERE key = ?),
           CURRENT_DATE
         """,
-        [user_id] * 12,
+        [user_id] * 16 + [f"user:{user_id}:starting_balance"],
     ))
 
 

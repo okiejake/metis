@@ -16,32 +16,32 @@
    in, what happened during the cycle, what it closed at, then what is left. #}
 {% macro summary(statement) %}
 <dl class="statement-summary">
-  <div><dt>Previous balance</dt><dd>{{ money(statement.previous_balance) }}</dd></div>
-  <div><dt>+ Charges</dt><dd>{{ money(statement.charges) }}</dd></div>
+  <div><dt>previous balance</dt><dd>{{ money(statement.previous_balance) }}</dd></div>
+  <div><dt>+ charges</dt><dd>{{ money(statement.charges) }}</dd></div>
   {% if statement.credits %}
-  <div><dt>− Credits &amp; refunds</dt><dd>{{ money(statement.credits) }}</dd></div>
+  <div><dt>− credits &amp; refunds</dt><dd>{{ money(statement.credits) }}</dd></div>
   {% endif %}
-  <div><dt>− Payments</dt><dd>{{ money(statement.payments) }}</dd></div>
+  <div><dt>− payments</dt><dd>{{ money(statement.payments) }}</dd></div>
   {% if statement.expected_charges %}
-  <div class="estimate"><dt>+ Expected, not imported yet</dt><dd>{{ money(statement.expected_charges) }}</dd></div>
+  <div class="estimate"><dt>+ expected, not imported yet</dt><dd>{{ money(statement.expected_charges) }}</dd></div>
   {% endif %}
   {% if statement.assumed_payments %}
-  <div class="estimate"><dt>− Previous statement, paid when due</dt><dd>{{ money(statement.assumed_payments) }}</dd></div>
+  <div class="estimate"><dt>− previous statement, paid when due</dt><dd>{{ money(statement.assumed_payments) }}</dd></div>
   {% endif %}
   {% if statement.issuer_balance is not none %}
-  <div class="subtotal"><dt>Adds up to</dt><dd>{{ money(statement.computed_balance) }}</dd></div>
-  <div class="total"><dt>Statement balance <span class="card-note">from your issuer</span></dt><dd>{{ money(statement.balance) }}</dd></div>
+  <div class="subtotal"><dt>adds up to</dt><dd>{{ money(statement.computed_balance) }}</dd></div>
+  <div class="total"><dt>statement balance <span class="card-note">from your issuer</span></dt><dd>{{ money(statement.balance) }}</dd></div>
   {% if statement.difference and statement.difference > 0.005 %}
-  <div class="mismatch"><dt>Owed but missing from your imports</dt><dd>{{ money(statement.difference) }}</dd></div>
+  <div class="mismatch"><dt>owed but missing from your imports</dt><dd>{{ money(statement.difference) }}</dd></div>
   {% elif statement.difference and statement.difference < -0.005 %}
-  <div class="mismatch"><dt>Imported but not on the statement</dt><dd>{{ money(-statement.difference) }}</dd></div>
+  <div class="mismatch"><dt>imported but not on the statement</dt><dd>{{ money(-statement.difference) }}</dd></div>
   {% endif %}
   {% else %}
-  <div class="total"><dt>{{ 'Statement balance' if statement.closed else 'Estimated balance at close' }}</dt><dd>{{ money(statement.balance) }}</dd></div>
+  <div class="total"><dt>{{ 'statement balance' if statement.closed else 'estimated balance at close' }}</dt><dd>{{ money(statement.balance) }}</dd></div>
   {% endif %}
   {% if statement.paid_since_close %}
-  <div><dt>− Paid since it closed</dt><dd>{{ money(statement.paid_since_close) }}</dd></div>
+  <div><dt>− paid since it closed</dt><dd>{{ money(statement.paid_since_close) }}</dd></div>
   {% endif %}
-  <div class="total"><dt>Left to pay by {{ statement.due_date }}</dt><dd>{{ money(statement.remaining) }}</dd></div>
+  <div class="total"><dt>left to pay by {{ statement.due_date }}</dt><dd>{{ money(statement.remaining) }}</dd></div>
 </dl>
 {% endmacro %}

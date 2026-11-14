@@ -89,18 +89,18 @@ def client(db, user_id):
 def test_the_imports_list_comes_first_with_an_import_button(client, db, user_id, accounts):
     add_imported(db, user_id, accounts["Example Checking"], "Example Checking", date.today(), "ACME GROCER", -5.0)
 
-    page = client.get("/review").text
+    page = client.get("/inbox").text
 
     assert page.index('id="imports"') < page.index('id="categories"')
     assert re.search(rf'data-import-account="{accounts["Example Card"]}"', page)
-    assert "No imports yet" in page
+    assert "no imports yet" in page
     assert page.count('id="import-dialog"') == 1
 
 
 def test_dismissing_from_review_hides_the_account(client, db, user_id, accounts):
     key = flagged(user_id, date.today())[accounts["Example Card"]]["key"]
 
-    response = client.post("/review/imports/dismiss", data={"key": key}, follow_redirects=False)
+    response = client.post("/inbox/imports/dismiss", data={"key": key}, follow_redirects=False)
 
     assert response.headers["location"].endswith("#imports")
     assert accounts["Example Card"] not in flagged(user_id, date.today())

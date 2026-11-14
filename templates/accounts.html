@@ -1,36 +1,30 @@
 {% extends "base.html" %}
 {% import "_parts.html" as parts %}
 {% block content %}
-<section class="page-intro">
-  <div>
-    <p class="page-kicker">Accounts</p>
-    <h2>Model where money lands — and when it actually leaves.</h2>
-    <p>Assign expected transactions to a checking or credit-card account. Card charges defer to the card's payment due date so your cash flow is accurate.</p>
-  </div>
+<div class="page-bar">
   <div class="intro-badge-stack">
-    <span class="stat-chip amount-value">Checking opening ${{ starting_balance|currency }}</span>
+    <span class="stat-chip amount-value">checking opening ${{ starting_balance|currency }}</span>
     <span class="stat-chip">{{ accounts|length }} account{{ '' if accounts|length == 1 else 's' }}</span>
-    <a class="button-link" href="{{ base_path() }}/accounts/new">Add account</a>
+    <a class="button-link" href="{{ base_path() }}/accounts/new">add account</a>
   </div>
-</section>
+</div>
 
 <section class="panel">
   <div class="panel-head">
-    <h2>Accounts</h2>
-    <p>Credit-card cycle status shows the next statement close and payment due date.</p>
+    <h2>accounts</h2>
   </div>
   {% if accounts %}
   <div class="table-wrap">
     <table>
       <thead>
         <tr>
-          <th>Account</th>
-          <th>Type</th>
-          <th>Cycle</th>
-          <th>Amount Due</th>
-          <th>Next Payment</th>
-          <th>Assigned</th>
-          <th>Actions</th>
+          <th>account</th>
+          <th>type</th>
+          <th>cycle</th>
+          <th>amount due</th>
+          <th>next payment</th>
+          <th>assigned</th>
+          <th>actions</th>
         </tr>
       </thead>
       <tbody>
@@ -39,20 +33,20 @@
           <td><strong>{{ account.name }}</strong></td>
           <td>
             <span class="table-pill {{ 'success' if account.account_type == 'checking' else 'neutral' }}">
-              {{ 'Checking' if account.account_type == 'checking' else 'Credit card' }}
+              {{ 'checking' if account.account_type == 'checking' else 'credit card' }}
             </span>
           </td>
           {% if account.account_type == 'checking' %}
           <td colspan="3">
             <form method="post" action="{{ base_path() }}/accounts/opening-balance" class="inline-balance-form">
               <label class="inline-balance-label">
-                Opening balance{% if first_actual %} (as of {{ first_actual }}){% endif %}
+                opening balance{% if first_actual %} (as of {{ first_actual }}){% endif %}
                 <input type="number" step="0.01" name="value" value="{{ '%.2f'|format(starting_balance) }}" />
               </label>
-              <button type="submit" class="button-link">Save</button>
+              <button type="submit" class="button-link">save</button>
             </form>
             {% if first_actual %}
-            <p class="card-note">Set this to your real checking balance on {{ first_actual }}; the running balance sums forward from here.</p>
+            <p class="card-note">set this to your real checking balance on {{ first_actual }}; the running balance sums forward from here.</p>
             {% endif %}
           </td>
           {% else %}
@@ -66,7 +60,7 @@
           <td>
             {% if account.balance %}
               {% if account.balance.paid or account.balance.status == 'no_balance' %}
-              <span class="table-pill success">{{ 'Paid' if account.balance.paid else 'No balance' }}</span>
+              <span class="table-pill success">{{ 'paid' if account.balance.paid else 'no balance' }}</span>
               <span class="card-note">stmt {{ account.balance.statement_close }}</span>
               {% else %}
               <span class="amount-value negative">${{ account.balance.amount_due|currency }}</span>
@@ -86,14 +80,14 @@
               {{ parts.import_button(account) }}
               {% if account.account_type == 'credit_card' %}
               <form method="get" action="{{ base_path() }}/statements/{{ account.id }}">
-                <button type="submit">Statements</button>
+                <button type="submit">statements</button>
               </form>
               {% endif %}
               <form method="get" action="{{ base_path() }}/accounts/{{ account.id }}/edit">
-                <button type="submit">Edit</button>
+                <button type="submit">edit</button>
               </form>
-              <form method="post" action="{{ base_path() }}/accounts/{{ account.id }}/delete" onsubmit="return confirm('Delete this account? Assigned items become unassigned.')">
-                <button type="submit" class="danger">Delete</button>
+              <form method="post" action="{{ base_path() }}/accounts/{{ account.id }}/delete" onsubmit="return confirm('delete this account? assigned items become unassigned.')">
+                <button type="submit" class="danger">delete</button>
               </form>
             </div>
           </td>
@@ -103,18 +97,18 @@
     </table>
   </div>
   {% else %}
-  <p class="empty-state">No accounts yet.</p>
+  <p class="empty-state">no accounts yet.</p>
   {% endif %}
 </section>
 
 {% if unplaced %}
 <section class="panel" id="unplaced">
   <div class="panel-head">
-    <h2>Rows with no account</h2>
+    <h2>rows with no account</h2>
   </div>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Imported as</th><th>Rows</th><th>Move to</th></tr></thead>
+      <thead><tr><th>imported as</th><th>rows</th><th>move to</th></tr></thead>
       <tbody>
         {% for item in unplaced %}
         <tr>
@@ -124,10 +118,10 @@
             <form method="post" action="{{ base_path() }}/accounts/unplaced" class="inline-map-form">
               <input type="hidden" name="label" value="{{ item.label }}" />
               <select name="account_id" required>
-                <option value="" disabled selected>Choose…</option>
-                {% for acct in accounts %}<option value="{{ acct.id }}">{{ acct.name }}</option>{% endfor %}
+                <option value="" disabled selected>choose…</option>
+                {% for acct in accounts %}<option value="{{ acct.id }}">{% filter lower %}{{ acct.name }}{% endfilter %}</option>{% endfor %}
               </select>
-              <button type="submit" class="button-link">Move</button>
+              <button type="submit" class="button-link">move</button>
             </form>
           </td>
         </tr>
@@ -140,13 +134,13 @@
 
 <section class="panel" id="templates">
   <div class="panel-head review-list-head">
-    <h2>Templates</h2>
-    <a class="button-link" href="{{ base_path() }}/templates/new">New template</a>
+    <h2>templates</h2>
+    <a class="button-link" href="{{ base_path() }}/templates/new">new template</a>
   </div>
   {% if templates %}
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Name</th><th>Created</th><th>Default for</th><th></th></tr></thead>
+      <thead><tr><th>name</th><th>created</th><th>default for</th><th></th></tr></thead>
       <tbody>
         {% for t in templates %}
         <tr>
@@ -154,8 +148,8 @@
           <td>{{ t.created }}</td>
           <td>{{ t.used_by|join(', ') or '—' }}</td>
           <td>
-            <form method="post" action="{{ base_path() }}/templates/{{ t.id }}/delete" onsubmit="return confirm('Delete this template?')">
-              <button type="submit" class="danger">Delete</button>
+            <form method="post" action="{{ base_path() }}/templates/{{ t.id }}/delete" onsubmit="return confirm('delete this template?')">
+              <button type="submit" class="danger">delete</button>
             </form>
           </td>
         </tr>
@@ -164,7 +158,7 @@
     </table>
   </div>
   {% else %}
-  <p class="empty-state">No templates yet.</p>
+  <p class="empty-state">no templates yet.</p>
   {% endif %}
 </section>
 

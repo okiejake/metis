@@ -1,57 +1,53 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="page-intro">
-  <div>
-    <p class="page-kicker">Edit Category</p>
-    <h2>Naming, budget, and the rules that fill it.</h2>
-    <p>Keep labels consistent so filters and reports stay easy to scan. Match rules categorize imported transactions automatically — no budget or recurring item required.</p>
+<div class="page-bar">
+  <div class="page-bar-title">
+    <h2>edit category</h2>
   </div>
   <div class="intro-badge-stack">
-    <span class="stat-chip">Current {{ category.name }}</span>
-    <span class="stat-chip">Color {{ category.color }}</span>
+    <span class="stat-chip">current {{ category.name }}</span>
+    <span class="stat-chip">color {{ category.color }}</span>
     {% if category.budget_amount is not none %}
     <span class="stat-chip">${{ category.budget_amount|currency }}/mo</span>
     {% endif %}
   </div>
-</section>
+</div>
 
 <section class="panel">
   <div class="panel-head">
-    <h2>Details</h2>
-    <p>Update the name, color, and monthly budget.</p>
+    <h2>details</h2>
   </div>
   <form method="post" action="{{ base_path() }}/categories/{{ category.id }}/edit" class="inline-form">
     <label>
-      Name
+      name
       <input type="text" name="name" value="{{ category.name }}" required />
     </label>
     <label>
-      Color
+      color
       <input type="color" name="color" value="{{ category.color }}" required />
     </label>
-    <button type="submit" class="button-link">Save Changes</button>
-    <a class="button-link" href="{{ base_path() }}/budget">Cancel</a>
+    <button type="submit" class="button-link">save changes</button>
+    <a class="button-link" href="{{ base_path() }}/budget">cancel</a>
   </form>
 
   <form method="post" action="{{ base_path() }}/categories/{{ category.id }}/budget" class="inline-form">
     <label>
-      Monthly budget
+      monthly budget
       <input type="number" name="budget_amount" step="0.01" min="0"
              value="{{ '%.2f'|format(category.budget_amount) if category.budget_amount is not none else '' }}"
-             placeholder="Leave blank to use expected items" />
+             placeholder="leave blank to use expected items" />
     </label>
-    <button type="submit" class="button-link">Save Budget</button>
+    <button type="submit" class="button-link">save budget</button>
   </form>
   <p class="card-note">
-    With a monthly budget set, this category's bar uses it (prorated across the window you're viewing).
-    Leave it blank and the budget is the sum of this category's recurring and one-time expected items.
+    with a monthly budget set, this category's bar uses it (prorated across the window you're viewing).
+    leave it blank and the budget is the sum of this category's recurring and one-time expected items.
   </p>
 </section>
 
 <section class="panel">
   <div class="panel-head">
-    <h2>Match Rules</h2>
-    <p>Any imported transaction whose description contains the text lands in this category. Rules apply to your existing history straight away and to everything you import later.</p>
+    <h2>match rules</h2>
   </div>
 
   {% if rules %}
@@ -59,8 +55,8 @@
     <table>
       <thead>
         <tr>
-          <th>Description contains</th>
-          <th>Amount</th>
+          <th>description contains</th>
+          <th>amount</th>
           <th></th>
         </tr>
       </thead>
@@ -80,7 +76,7 @@
           </td>
           <td>
             <form method="post" action="{{ base_path() }}/categories/{{ category.id }}/rules/{{ rule.id }}/delete">
-              <button type="submit" class="button-link">Delete</button>
+              <button type="submit" class="button-link">delete</button>
             </form>
           </td>
         </tr>
@@ -89,33 +85,33 @@
     </table>
   </div>
   {% else %}
-  <p class="empty-state">No rules yet. Add one to categorize things like ATM withdrawals or card payments automatically.</p>
+  <p class="empty-state">no rules yet. add one to categorize things like atm withdrawals or card payments automatically.</p>
   {% endif %}
 
   <form method="post" action="{{ base_path() }}/categories/{{ category.id }}/rules" class="inline-form">
     <label>
-      Description contains
-      <input type="text" name="pattern" placeholder="e.g. ATM" required />
+      description contains
+      <input type="text" name="pattern" placeholder="e.g. atm" required />
     </label>
     <label>
-      Min amount
+      min amount
       <input type="number" name="amount_min" step="0.01" min="0" placeholder="optional" />
     </label>
     <label>
-      Max amount
+      max amount
       <input type="number" name="amount_max" step="0.01" min="0" placeholder="optional" />
     </label>
-    <button type="submit" class="button-link">Add Rule</button>
+    <button type="submit" class="button-link">add rule</button>
   </form>
 </section>
 
 <section class="panel">
   <div class="panel-head">
-    <h2>Delete Category</h2>
-    <p>Removes the category, its match rules, and any splits assigned to it. Items and transactions keep their history but lose this label.</p>
+    <h2>delete category</h2>
+    <p>removes the category, its match rules, and any splits assigned to it. items and transactions keep their history but lose this label.</p>
   </div>
   <form method="post" action="{{ base_path() }}/categories/{{ category.id }}/delete" class="inline-form">
-    <button type="submit" class="button-link">Delete Category</button>
+    <button type="submit" class="button-link">delete category</button>
   </form>
 </section>
 {% endblock %}

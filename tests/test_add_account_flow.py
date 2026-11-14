@@ -41,7 +41,7 @@ def test_the_flow_offers_types_methods_and_templates(client, template_id):
     assert 'name="name"' in page
     assert re.search(r'value="checking"', page) and re.search(r'value="credit_card"', page)
     assert re.search(r'<input[^>]*value="plaid"[^>]*disabled', page)
-    assert "Coming soon" in page
+    assert "coming soon" in page
     assert "Example export" in page and date.today().isoformat() in page
     assert re.search(r'name="template" value="new"', page)
 

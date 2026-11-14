@@ -72,8 +72,6 @@ def ledger_page(request: Request, user: CurrentUser, start: str = "", end: str =
         forecast_start_iso=forecast_start.isoformat() if forecast_start else "",
         first_actual_iso=first_actual.isoformat() if first_actual else "",
         window_all_future=window_all_future,
-        show_forecast_window_form=True,
-        window_form_action="/ledger",
     )
 
 
@@ -110,8 +108,6 @@ def dashboard_page(request: Request, user: CurrentUser, start: str = "", end: st
         err,
         start=window_start.isoformat(),
         end=window_end.isoformat(),
-        show_forecast_window_form=True,
-        window_form_action="/dashboard",
         starting_balance=starting_balance,
         total_income=total_income,
         total_expense=total_expense,

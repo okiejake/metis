@@ -1,0 +1,60 @@
+{# The header date range popup. static/date-range.js drives it; POST /window saves it. #}
+<dialog id="range-dialog" class="range-dialog neu-raised" aria-labelledby="range-label"
+        data-rule='{{ range_rule|tojson }}' data-today="{{ range_today }}"
+        data-first-year="{{ range_first_year }}" data-saved='{{ range_saved|tojson }}' data-base="{{ base_path() }}" data-start="{{ range_start }}" data-end="{{ range_end }}">
+  <form method="post" action="{{ base_path() }}/window" class="range-form">
+    <input type="hidden" name="grain" value="{{ range_rule.grain }}" />
+    <input type="hidden" name="start" value="{{ range_rule.start }}" />
+    <input type="hidden" name="end" value="{{ range_rule.end }}" />
+    <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}" />
+
+    <div class="range-top">
+      <button type="button" class="icon-button range-panel-toggle neu-press" id="range-panel-toggle"
+              aria-controls="range-panel" aria-expanded="true" aria-label="hide filters" title="hide filters">
+        <i data-lucide="filter" class="menu-icon" aria-hidden="true"></i>
+      </button>
+      <h2 class="range-label" id="range-label">{{ range_label }}</h2>
+      <button type="button" class="button-link" id="range-cancel">cancel</button>
+      <button type="submit" class="button-link range-apply neu-press">apply</button>
+    </div>
+
+    <div class="range-body">
+      <div class="range-panel" id="range-panel">
+        <div class="range-fieldset" id="range-saved" hidden>
+          <span class="range-legend">saved</span>
+          <ul class="range-saved-list" id="range-saved-list"></ul>
+        </div>
+
+        <fieldset class="range-fieldset">
+          <legend>grain</legend>
+          <div class="range-segments" role="group" aria-label="grain">
+            {% for grain in ["day", "month", "quarter", "year", "decade"] %}
+            <button type="button" class="range-segment neu-press" data-grain="{{ grain }}" aria-pressed="false">{{ grain }}</button>
+            {% endfor %}
+          </div>
+        </fieldset>
+
+        <fieldset class="range-fieldset">
+          <legend>mode</legend>
+          <div class="range-modes">
+            <label><input type="radio" name="mode" value="absolute"{% if range_rule.mode == "absolute" %} checked{% endif %} /> absolute</label>
+            <label><input type="radio" name="mode" value="relative"{% if range_rule.mode == "relative" %} checked{% endif %} /> relative</label>
+          </div>
+        </fieldset>
+
+        <div class="range-fieldset">
+          <span class="range-legend">start</span>
+          <div id="range-start-control"></div>
+        </div>
+        <div class="range-fieldset">
+          <span class="range-legend">end</span>
+          <div id="range-end-control"></div>
+        </div>
+
+        <button type="button" class="range-save neu-press" id="range-save">save</button>
+      </div>
+
+      <div class="range-preview" id="range-preview" aria-hidden="true"></div>
+    </div>
+  </form>
+</dialog>

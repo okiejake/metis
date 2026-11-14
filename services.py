@@ -18,6 +18,7 @@ from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
 
 from base_path import configured_base_path
+from date_range import DEFAULT_RULE, RangeRule, resolve_rule, rule_from_saved, rule_to_saved
 from merchants import legacy_merchant_key, merchant_key
 
 DB_PATH = os.getenv("FINANCE_DB_PATH", "finance.duckdb")
@@ -28,7 +29,6 @@ HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 FORECAST_WINDOW_SETTINGS_KEY = "forecast_window"
 FORECAST_WINDOW_FALLBACK_START_KEY = "ledger_window_start"
 FORECAST_WINDOW_FALLBACK_END_KEY = "ledger_window_end"
-FORECAST_WINDOW_DEFAULT_DAYS = 180
 DEFAULT_USER_SLUG = "personal"
 DEFAULT_USER_DISPLAY_NAME = "Personal"
 USER_SLUG_COOKIE = "metis_user"
@@ -415,6 +415,7 @@ def delete_user_and_data(user_id: int) -> None:
         conn.execute("DELETE FROM expected_match_rules WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM category_rules WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM transaction_splits WHERE user_id = ?", [user_id])
+        conn.execute("DELETE FROM saved_ranges WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM sessions WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM card_statements WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM accounts WHERE user_id = ?", [user_id])
@@ -442,6 +443,7 @@ def init_db() -> None:
         conn.execute("CREATE SEQUENCE IF NOT EXISTS card_statements_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS merchant_decisions_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS review_actions_id_seq START 1")
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS saved_ranges_id_seq START 1")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -588,6 +590,17 @@ def init_db() -> None:
                 created_at TIMESTAMP NOT NULL DEFAULT NOW(),
                 expires_at TIMESTAMP NOT NULL,
                 last_seen_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS saved_ranges (
+                id BIGINT PRIMARY KEY DEFAULT nextval('saved_ranges_id_seq'),
+                user_id BIGINT NOT NULL,
+                name TEXT NOT NULL,
+                rule TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW()
             )
             """
         )
@@ -1343,54 +1356,103 @@ def parse_optional_iso_date(value: Any) -> Optional[date]:
         return None
 
 
-def load_saved_forecast_window(user_id: int) -> tuple[Optional[date], Optional[date]]:
-    object_value = get_setting_value(user_id, FORECAST_WINDOW_SETTINGS_KEY)
-    if object_value:
+def load_range_rule(user_id: int) -> RangeRule:
+    """The saved date range rule. An older two-date value reads as day/absolute,
+    the oldest per-key dates likewise, and anything unreadable as the default."""
+    raw = get_setting_value(user_id, FORECAST_WINDOW_SETTINGS_KEY)
+    if raw:
         try:
-            parsed = json.loads(object_value)
+            rule = rule_from_saved(json.loads(raw))
         except json.JSONDecodeError:
-            parsed = None
-        if isinstance(parsed, dict):
-            saved_start = parse_optional_iso_date(parsed.get("start"))
-            saved_end = parse_optional_iso_date(parsed.get("end"))
-            if saved_start or saved_end:
-                return saved_start, saved_end
+            rule = None
+        if rule:
+            return rule
+    legacy = rule_from_saved({
+        "start": get_setting_value(user_id, FORECAST_WINDOW_FALLBACK_START_KEY),
+        "end": get_setting_value(user_id, FORECAST_WINDOW_FALLBACK_END_KEY),
+    })
+    return legacy or DEFAULT_RULE
 
-    # Backward compatibility for prior per-ledger keys.
-    fallback_start = parse_optional_iso_date(get_setting_value(user_id, FORECAST_WINDOW_FALLBACK_START_KEY))
-    fallback_end = parse_optional_iso_date(get_setting_value(user_id, FORECAST_WINDOW_FALLBACK_END_KEY))
-    return fallback_start, fallback_end
+
+def save_range_rule(user_id: int, rule: RangeRule) -> None:
+    set_setting_value(user_id, FORECAST_WINDOW_SETTINGS_KEY, json.dumps(rule_to_saved(rule)))
 
 
 def save_forecast_window(user_id: int, window_start: date, window_end: date) -> None:
-    set_setting_value(
-        user_id,
-        FORECAST_WINDOW_SETTINGS_KEY,
-        json.dumps({"start": window_start.isoformat(), "end": window_end.isoformat()}),
-    )
+    """Save two fixed dates as a day/absolute rule."""
+    save_range_rule(user_id, RangeRule("day", "absolute", window_start.isoformat(), window_end.isoformat()))
 
 
-def resolve_forecast_window(user_id: int, start: str = "", end: str = "") -> tuple[date, date, bool]:
-    today = date.today()
-    saved_start, saved_end = load_saved_forecast_window(user_id)
-    # Blend-friendly default: recent past → near future so actuals + forecast both show.
-    default_start = saved_start or (today - timedelta(days=90))
-    default_end = saved_end or (default_start + timedelta(days=FORECAST_WINDOW_DEFAULT_DAYS))
-
+def resolve_forecast_window(
+    user_id: int, start: str = "", end: str = "", today: Optional[date] = None
+) -> tuple[date, date, bool]:
+    """The range a page shows: the saved rule resolved for today, with any
+    ?start=/?end= from a link taking over that side for this view only. Link
+    dates are never saved. The flag is True when a link date didn't parse."""
+    saved_start, saved_end = resolve_rule(load_range_rule(user_id), today or date.today())
     invalid_filter = False
     try:
-        window_start = parse_iso_date(start) if start else default_start
-        window_end = parse_iso_date(end) if end else default_end
+        window_start = parse_iso_date(start) if start else saved_start
+        window_end = parse_iso_date(end) if end else saved_end
     except ValueError:
-        window_start = default_start
-        window_end = default_end
+        window_start, window_end = saved_start, saved_end
         invalid_filter = True
 
     if window_end < window_start:
         window_start, window_end = window_end, window_start
-
-    save_forecast_window(user_id, window_start, window_end)
     return window_start, window_end, invalid_filter
+
+
+def _saved_range_row(row: tuple) -> Optional[Dict[str, Any]]:
+    range_id, name, raw_rule, created_at = row
+    try:
+        rule = rule_from_saved(json.loads(raw_rule))
+    except json.JSONDecodeError:
+        rule = None
+    if not rule:
+        return None
+    return {"id": int(range_id), "name": name, "created": created_at.date().isoformat(), "rule": rule_to_saved(rule)}
+
+
+def load_saved_ranges(user_id: int) -> List[Dict[str, Any]]:
+    """A user's saved date filters, newest first. Rows whose rule no longer
+    reads are left out rather than breaking the picker."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, name, rule, created_at FROM saved_ranges WHERE user_id = ? ORDER BY created_at DESC, id DESC",
+            [user_id],
+        ).fetchall()
+    return [saved for saved in map(_saved_range_row, rows) if saved]
+
+
+def saved_range_name_taken(user_id: int, name: str) -> bool:
+    row = fetch_one("SELECT 1 FROM saved_ranges WHERE user_id = ? AND lower(name) = lower(?)", [user_id, name])
+    return row is not None
+
+
+def save_saved_range(user_id: int, name: str, rule: RangeRule) -> Dict[str, Any]:
+    with get_connection() as conn:
+        row = conn.execute(
+            "INSERT INTO saved_ranges (user_id, name, rule) VALUES (?, ?, ?) RETURNING id, name, rule, created_at",
+            [user_id, name, json.dumps(rule_to_saved(rule))],
+        ).fetchone()
+    return _saved_range_row(row)
+
+
+def delete_saved_range(user_id: int, range_id: int) -> bool:
+    with get_connection() as conn:
+        row = conn.execute(
+            "DELETE FROM saved_ranges WHERE id = ? AND user_id = ? RETURNING id", [range_id, user_id]
+        ).fetchone()
+    return row is not None
+
+
+def range_first_year(user_id: int, today: date) -> int:
+    """The first year the picker's dropdowns offer: the earliest transaction's
+    year, or ten years back if that is earlier."""
+    row = fetch_one("SELECT MIN(tx_date) FROM imported_transactions WHERE user_id = ?", [user_id])
+    earliest = row[0].year if row and row[0] else today.year
+    return min(earliest, today.year - 10)
 
 
 def load_categories(user_id: int) -> List[Dict[str, Any]]:
@@ -2965,6 +3027,29 @@ def collect_window_transactions(
         )
     )
     return transactions
+
+
+def first_projected_negative(
+    user_id: int, window_start: date, window_end: date, today: Optional[date] = None
+) -> Optional[date]:
+    """The first day from today on, inside the window, when the checking
+    balance (actuals, then forecast) drops below zero; None if it never does."""
+    today = today or date.today()
+    if window_end < today:
+        return None
+    opening_balance = get_setting_float(user_id, "starting_balance", 0.0)
+    start_balance = checking_actual_balance_before(user_id, window_start, opening_balance)
+    rows, _first, _end = build_ledger_rows(collect_blended_transactions(user_id, window_start, window_end), start_balance, window_start)
+    balance = start_balance
+    if balance < 0 and window_start >= today:
+        return window_start
+    for row in rows:
+        balance = row["running_balance"]
+        if row["date"] >= today and balance < 0:
+            return row["date"]
+    if balance < 0 and not rows and window_start <= today:
+        return today
+    return None
 
 
 def build_ledger_rows(

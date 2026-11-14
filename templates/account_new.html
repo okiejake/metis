@@ -1,49 +1,49 @@
 {% extends "base.html" %}
 {% import "_parts.html" as parts %}
 {% block content %}
-<section class="page-intro">
-  <div>
-    <p class="page-kicker"><a href="{{ base_path() }}/accounts" class="button-link">← Accounts</a></p>
-    <h2>Add account</h2>
+<div class="page-bar">
+  <div class="page-bar-title">
+    <p class="page-kicker"><a href="{{ base_path() }}/accounts" class="button-link">← accounts</a></p>
+    <h2>add account</h2>
   </div>
-</section>
+</div>
 
 <form method="post" action="{{ base_path() }}/accounts/new" id="account-new-form" class="flow">
   <section class="panel flow-step">
-    <div class="panel-head"><h2>1. Account</h2></div>
+    <div class="panel-head"><h2>1. account</h2></div>
     <div class="grid-form">
       <label>
-        Name
+        name
         <input type="text" name="name" required autofocus />
       </label>
-      <div class="full-row choice-cards" role="radiogroup" aria-label="Type">
-        {{ parts.choice_card('account_type', 'checking', 'Checking', checked=True) }}
-        {{ parts.choice_card('account_type', 'credit_card', 'Credit card') }}
+      <div class="full-row choice-cards" role="radiogroup" aria-label="type">
+        {{ parts.choice_card('account_type', 'checking', 'checking', checked=True) }}
+        {{ parts.choice_card('account_type', 'credit_card', 'credit card') }}
       </div>
       {{ parts.cycle_fields() }}
     </div>
   </section>
 
   <section class="panel flow-step">
-    <div class="panel-head"><h2>2. Import method</h2></div>
-    <div class="choice-cards" role="radiogroup" aria-label="Import method">
-      {{ parts.choice_card('method', 'manual', 'Manual Import', 'Upload a CSV', checked=True) }}
-      {{ parts.choice_card('method', 'plaid', 'Plaid', 'Coming soon', disabled=True) }}
+    <div class="panel-head"><h2>2. import method</h2></div>
+    <div class="choice-cards" role="radiogroup" aria-label="import method">
+      {{ parts.choice_card('method', 'manual', 'manual import', 'upload a csv', checked=True) }}
+      {{ parts.choice_card('method', 'plaid', 'plaid', 'coming soon', disabled=True) }}
     </div>
   </section>
 
   <section class="panel flow-step">
-    <div class="panel-head"><h2>3. Template</h2></div>
-    <div class="choice-cards" role="radiogroup" aria-label="Template">
+    <div class="panel-head"><h2>3. template</h2></div>
+    <div class="choice-cards" role="radiogroup" aria-label="template">
       {% for t in templates %}
       {{ parts.choice_card('template', t.id, t.name, t.created) }}
       {% endfor %}
-      {{ parts.choice_card('template', 'new', 'Create new', 'From a file', checked=True) }}
+      {{ parts.choice_card('template', 'new', 'create new', 'from a file', checked=True) }}
     </div>
   </section>
 
   <div class="flow-actions">
-    <button type="submit" class="button-link">Add account</button>
+    <button type="submit" class="button-link">add account</button>
   </div>
 </form>
 

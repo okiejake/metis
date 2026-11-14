@@ -40,7 +40,7 @@ def test_each_account_has_an_import_button_with_its_default_template(client, use
                      page, re.S)
     assert re.search(rf'data-import-account="{accounts["Example Card"]}"[^>]*data-import-template=""', page, re.S)
     assert page.count('id="import-dialog"') == 1
-    assert re.search(rf'<option value="{template_id}">Example export</option>', page)
+    assert re.search(rf'<option value="{template_id}">example export</option>', page)
 
 
 def test_the_page_starts_the_add_account_flow(client):

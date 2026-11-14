@@ -1,30 +1,29 @@
 {% extends "base.html" %}
 {% import "_parts.html" as parts %}
 {% block content %}
-<section class="page-intro">
-  <div>
-    <p class="page-kicker"><a href="{{ base_path() }}/expected" class="button-link">← Expected Transactions</a></p>
-    <h2>Reconcile: {{ item.name }}</h2>
+<div class="page-bar">
+  <div class="page-bar-title">
+    <p class="page-kicker"><a href="{{ base_path() }}/expected" class="button-link">← expected transactions</a></p>
+    <h2>reconcile: {{ item.name }}</h2>
     <p>
-      {{ item.kind|capitalize }} · ${{ item.amount|currency }} · {{ item.cadence }}
+      {{ item.kind }} · ${{ item.amount|currency }} · {{ item.cadence }}
       {% if item.category_name %}
       · {{ parts.category_pill(item.category_name, item.category_color) }}
       {% endif %}
     </p>
   </div>
-</section>
+</div>
 
 {% if occurrences is not none %}
 <section class="panel">
   <div class="panel-head">
-    <h2>Occurrences</h2>
-    <p>Each scheduled occurrence and whether a matching actual has been detected.</p>
+    <h2>occurrences</h2>
   </div>
   {% if occurrences %}
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>Expected Date</th><th>Amount</th><th>Status</th><th>Matched Actual</th></tr>
+        <tr><th>expected date</th><th>amount</th><th>status</th><th>matched actual</th></tr>
       </thead>
       <tbody>
         {% for occ in occurrences %}
@@ -49,37 +48,33 @@
     </table>
   </div>
   {% else %}
-  <p class="empty-state">No occurrences in the reconciliation window.</p>
+  <p class="empty-state">no occurrences in the reconciliation window.</p>
   {% endif %}
 </section>
 {% endif %}
 
 {% macro amount_controls(mode, exact, minv, maxv) %}
 <span class="rule-amount-group">
-  <select name="amount_mode" class="rule-amount-mode" aria-label="Amount constraint">
+  <select name="amount_mode" class="rule-amount-mode" aria-label="amount constraint">
     <option value="any" {{ 'selected' if mode == 'any' else '' }}>any amount</option>
     <option value="exact" {{ 'selected' if mode == 'exact' else '' }}>exactly $</option>
     <option value="range" {{ 'selected' if mode == 'range' else '' }}>between $</option>
   </select>
   <input type="number" step="0.01" min="0" name="amount_exact" value="{{ exact }}"
-    placeholder="25.00" class="rule-amount" data-amount-field="exact" aria-label="Exact amount" />
+    placeholder="25.00" class="rule-amount" data-amount-field="exact" aria-label="exact amount" />
   <span class="rule-amount-pair" data-amount-field="range">
     <input type="number" step="0.01" min="0" name="amount_min" value="{{ minv }}"
-      placeholder="min" class="rule-amount" aria-label="Minimum amount" />
+      placeholder="min" class="rule-amount" aria-label="minimum amount" />
     <span class="rule-amount-sep">to</span>
     <input type="number" step="0.01" min="0" name="amount_max" value="{{ maxv }}"
-      placeholder="max" class="rule-amount" aria-label="Maximum amount" />
+      placeholder="max" class="rule-amount" aria-label="maximum amount" />
   </span>
 </span>
 {% endmacro %}
 
 <section class="panel">
   <div class="panel-head">
-    <h2>Auto-match Rules</h2>
-    <p>
-      A rule auto-marks paid any imported transaction whose description contains this text — historical and future.
-      Optionally restrict it to an exact amount or a range (matched against the transaction's magnitude).
-    </p>
+    <h2>auto-match rules</h2>
   </div>
 
   {% if rules %}
@@ -92,36 +87,35 @@
       <span class="rule-prefix">description contains</span>
       <input type="text" name="pattern" value="{{ rule.pattern }}" class="rule-input" />
       {{ amount_controls(rule.amount_mode, rule.amount_exact, rule.amount_min, rule.amount_max) }}
-      <button type="submit" class="button-link">Save</button>
-      <button type="submit" formaction="{{ base_path() }}/expected/rules/{{ rule.id }}/delete" class="button-link danger">Delete</button>
+      <button type="submit" class="button-link">save</button>
+      <button type="submit" formaction="{{ base_path() }}/expected/rules/{{ rule.id }}/delete" class="button-link danger">delete</button>
     </form>
     {% endfor %}
   </div>
   {% else %}
-  <p class="empty-state">No rules yet. Confirm a suggested match below to create one.</p>
+  <p class="empty-state">no rules yet. confirm a suggested match below to create one.</p>
   {% endif %}
 
   <form method="post" action="{{ base_path() }}/expected/rules" class="rule-row rule-add-row">
     <input type="hidden" name="source_type" value="{{ item.source_type }}" />
     <input type="hidden" name="source_id" value="{{ item.id }}" />
     <span class="rule-prefix">add rule — description contains</span>
-    <input type="text" name="pattern" value="{{ rule_seed }}" placeholder="e.g. ACH RENT" class="rule-input"
+    <input type="text" name="pattern" value="{{ rule_seed }}" placeholder="e.g. ach rent" class="rule-input"
       {{ 'autofocus' if rule_seed else '' }} required />
     {{ amount_controls('any', '', '', '') }}
-    <button type="submit" class="button-link">Save rule</button>
+    <button type="submit" class="button-link">save rule</button>
   </form>
 </section>
 
 <section class="panel">
   <div class="panel-head">
-    <h2>Suggested Matches</h2>
-    <p>Unreconciled actuals with a matching amount. Confirm the right one to link it (and seed a rule).</p>
+    <h2>suggested matches</h2>
   </div>
   {% if suggestions %}
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>Date</th><th>Account</th><th>Description</th><th>Amount</th><th></th></tr>
+        <tr><th>date</th><th>account</th><th>description</th><th>amount</th><th></th></tr>
       </thead>
       <tbody>
         {% for s in suggestions %}
@@ -139,7 +133,7 @@
               <input type="hidden" name="source_id" value="{{ item.id }}" />
               <input type="hidden" name="imported_transaction_id" value="{{ s.id }}" />
               <input type="hidden" name="description" value="{{ s.description }}" />
-              <button type="submit" class="button-link">Confirm match</button>
+              <button type="submit" class="button-link">confirm match</button>
             </form>
           </td>
         </tr>
@@ -148,20 +142,19 @@
     </table>
   </div>
   {% else %}
-  <p class="empty-state">No unreconciled actuals match this amount.</p>
+  <p class="empty-state">no unreconciled actuals match this amount.</p>
   {% endif %}
 </section>
 
 <section class="panel">
   <div class="panel-head">
-    <h2>Linked Actuals</h2>
-    <p>Imported transactions currently reconciled to this expected item.</p>
+    <h2>linked actuals</h2>
   </div>
   {% if linked %}
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>Date</th><th>Account</th><th>Description</th><th>Amount</th><th>Via</th><th></th></tr>
+        <tr><th>date</th><th>account</th><th>description</th><th>amount</th><th>via</th><th></th></tr>
       </thead>
       <tbody>
         {% for l in linked %}
@@ -177,7 +170,7 @@
             <form method="post" action="{{ base_path() }}/expected/reconcile/{{ l.recon_id }}/unlink">
               <input type="hidden" name="source_type" value="{{ item.source_type }}" />
               <input type="hidden" name="source_id" value="{{ item.id }}" />
-              <button type="submit" class="button-link danger">Unlink</button>
+              <button type="submit" class="button-link danger">unlink</button>
             </form>
           </td>
         </tr>
@@ -186,7 +179,7 @@
     </table>
   </div>
   {% else %}
-  <p class="empty-state">Nothing linked yet.</p>
+  <p class="empty-state">nothing linked yet.</p>
   {% endif %}
 </section>
 
