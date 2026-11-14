@@ -5,14 +5,12 @@
   <div>
     <p class="page-kicker"><a href="{{ base_path() }}/accounts" class="button-link">← Accounts</a></p>
     <h2>Edit {{ account.name }}</h2>
-    <p>Update the account type and, for credit cards, the billing-cycle days.</p>
   </div>
 </section>
 
 <section class="panel">
   <div class="panel-head">
     <h2>Edit Account</h2>
-    <p>Credit cards defer assigned charges to their payment due date.</p>
   </div>
   <form method="post" action="{{ base_path() }}/accounts/{{ account.id }}/edit" id="account-form" class="grid-form">
     <label>

@@ -26,9 +26,6 @@
   <section class="panel">
     <div class="panel-head">
       <h2>Summary</h2>
-      {% if not statement.closed %}
-      <p>An estimate: imported charges so far, plus expected charges assigned to this card that have not been imported yet.</p>
-      {% endif %}
     </div>
     {{ stmt.summary(statement) }}
   </section>
@@ -37,7 +34,6 @@
   <section class="panel">
     <div class="panel-head">
       <h2>Check Against Your Issuer</h2>
-      <p>Enter the statement balance from your {{ card.name }} statement. It becomes the balance the next statement carries in, and any gap with your imports shows here.</p>
     </div>
     <form method="post" action="{{ stmt.statement_url(statement) }}" class="grid-form compact">
       <label>
@@ -104,7 +100,6 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Paid Since It Closed</h2>
-    <p>Payments before the next statement closed{% if following %} on {{ following.close_date }}{% endif %}. They also appear on that statement, which starts from this one's balance.</p>
   </div>
   <div class="table-wrap">
     <table>

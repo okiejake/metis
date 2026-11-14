@@ -3,9 +3,7 @@
 {% block content %}
 <section class="page-intro">
   <div>
-    <p class="page-kicker">Statements</p>
-    <h2>Every card statement, closed and coming.</h2>
-    <p>Each statement is built from the transactions you import for that card. Enter the balance your issuer printed and Metis checks the two agree.</p>
+    <h2>Statements</h2>
   </div>
   {% if card and latest %}
   <div class="intro-badge-stack">
@@ -103,7 +101,7 @@
 <section class="panel">
   <div class="panel-head">
     <h2>{{ card.name }}</h2>
-    <p>Closes on day {{ 'last' if card.statement_day == 0 else card.statement_day }}, due on day {{ 'last' if card.due_day == 0 else card.due_day }}. Charges are net of credits and refunds; open a statement to see every line.</p>
+    <p>Closes on day {{ 'last' if card.statement_day == 0 else card.statement_day }}, due on day {{ 'last' if card.due_day == 0 else card.due_day }}.</p>
   </div>
   <div class="table-wrap">
     <table>

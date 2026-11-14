@@ -2,9 +2,7 @@
 {% block content %}
 <section class="page-intro">
   <div>
-    <p class="page-kicker">Edit Category</p>
-    <h2>Naming, budget, and the rules that fill it.</h2>
-    <p>Keep labels consistent so filters and reports stay easy to scan. Match rules categorize imported transactions automatically — no budget or recurring item required.</p>
+    <h2>Edit category</h2>
   </div>
   <div class="intro-badge-stack">
     <span class="stat-chip">Current {{ category.name }}</span>
@@ -18,7 +16,6 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Details</h2>
-    <p>Update the name, color, and monthly budget.</p>
   </div>
   <form method="post" action="{{ base_path() }}/categories/{{ category.id }}/edit" class="inline-form">
     <label>
@@ -51,7 +48,6 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Match Rules</h2>
-    <p>Any imported transaction whose description contains the text lands in this category. Rules apply to your existing history straight away and to everything you import later.</p>
   </div>
 
   {% if rules %}

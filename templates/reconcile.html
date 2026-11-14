@@ -18,7 +18,6 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Occurrences</h2>
-    <p>Each scheduled occurrence and whether a matching actual has been detected.</p>
   </div>
   {% if occurrences %}
   <div class="table-wrap">
@@ -76,10 +75,6 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Auto-match Rules</h2>
-    <p>
-      A rule auto-marks paid any imported transaction whose description contains this text — historical and future.
-      Optionally restrict it to an exact amount or a range (matched against the transaction's magnitude).
-    </p>
   </div>
 
   {% if rules %}
@@ -115,7 +110,6 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Suggested Matches</h2>
-    <p>Unreconciled actuals with a matching amount. Confirm the right one to link it (and seed a rule).</p>
   </div>
   {% if suggestions %}
   <div class="table-wrap">
@@ -155,7 +149,6 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Linked Actuals</h2>
-    <p>Imported transactions currently reconciled to this expected item.</p>
   </div>
   {% if linked %}
   <div class="table-wrap">

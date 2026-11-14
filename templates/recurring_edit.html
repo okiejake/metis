@@ -2,9 +2,7 @@
 {% block content %}
 <section class="page-intro">
   <div>
-    <p class="page-kicker">Edit Recurring Item</p>
-    <h2>Refine schedule, amount, and cadence.</h2>
-    <p>Changes apply to future projections while preserving your historical model.</p>
+    <h2>Edit recurring item</h2>
   </div>
   <div class="intro-badge-stack">
     <span class="stat-chip">Item {{ item.name }}</span>
@@ -15,7 +13,6 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Edit Recurring Item</h2>
-    <p>Update details and keep frequency fields synchronized with the selected start date.</p>
   </div>
   {% set item_day = item.day_of_month if item.day_of_month else item.start_date.day %}
   <form method="post" action="{{ base_path() }}/recurring/{{ item.id }}/edit" id="recurring-edit-form" class="grid-form">

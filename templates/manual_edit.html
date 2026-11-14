@@ -2,16 +2,13 @@
 {% block content %}
 <section class="page-intro">
   <div>
-    <p class="page-kicker">Edit Transaction</p>
-    <h2>Update one-off ledger details.</h2>
-    <p>Adjust amount, category, or date and re-run the forecast instantly.</p>
+    <h2>Edit transaction</h2>
   </div>
 </section>
 
 <section class="panel">
   <div class="panel-head">
     <h2>Edit One-Off Transaction</h2>
-    <p>Changes save directly to this forecast window.</p>
   </div>
   <form method="post" action="{{ base_path() }}/manual/{{ tx.id }}/edit" class="grid-form compact">
     <input type="hidden" name="start" value="{{ start }}" />

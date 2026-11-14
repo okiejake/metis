@@ -2,9 +2,7 @@
 {% block content %}
 <section class="page-intro">
   <div>
-    <p class="page-kicker">Settings</p>
-    <h2>Manage profiles, access, and account-level preferences.</h2>
-    <p>Update personal details and administer workspace users from one control center.</p>
+    <h2>Settings</h2>
   </div>
   <div class="intro-badge-stack">
     <span class="stat-chip">Active user {{ current_user.display_name }}</span>
@@ -24,7 +22,6 @@
     <section class="panel">
       <div class="panel-head">
         <h2>Personal</h2>
-        <p>Keep your identity and contact information current.</p>
       </div>
       <form method="post" action="{{ base_path() }}/settings/personal" class="grid-form compact">
         <label>
@@ -63,7 +60,6 @@
     <section class="panel">
       <div class="panel-head">
         <h2>Admin Table</h2>
-        <p>Edit profiles, give them a password so they can sign in, or remove them.</p>
       </div>
       {% if managed_users %}
       <div class="table-wrap">

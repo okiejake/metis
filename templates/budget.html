@@ -3,9 +3,7 @@
 {% block content %}
 <section class="page-intro">
   <div>
-    <p class="page-kicker">Budget</p>
-    <h2>Budget what you plan — then measure it against reality.</h2>
-    <p>Recurring bills, income, and one-time payments you expect. Track budget vs. actual per category, and reconcile items as they show up in your imported CSV data.</p>
+    <h2>Budget</h2>
   </div>
   <div class="intro-badge-stack">
     <span class="stat-chip">Today {{ today_iso }}</span>
@@ -19,7 +17,6 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Categories</h2>
-    <p>Budgeted (planned recurring + one-time) against actual imported spend for {{ budget_summary.window_start }} → {{ budget_summary.window_end }}. Use the date range in the header to change the period.</p>
   </div>
 
   <div class="summary-grid compact-grid">
@@ -162,7 +159,6 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Add Expected Transaction</h2>
-    <p>Choose recurring for repeating items, or one-time for a single expected payment.</p>
   </div>
 
   <div class="segmented" role="tablist">
@@ -292,7 +288,6 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Recurring</h2>
-    <p>Repeating expected income and bills. Reconcile to mark occurrences paid.</p>
   </div>
   {% if recurring_items %}
   <div class="segmented" role="tablist" aria-label="Show recurring items by status">
@@ -373,7 +368,6 @@
 <section class="panel">
   <div class="panel-head">
     <h2>One-time</h2>
-    <p>Single expected payments. Reconcile to mark them paid when detected in the CSV data.</p>
   </div>
   {% if one_time_items %}
   <div class="table-wrap">

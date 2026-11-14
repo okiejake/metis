@@ -3,9 +3,7 @@
 {% block content %}
 <section class="page-intro">
   <div>
-    <p class="page-kicker">Accounts</p>
-    <h2>Model where money lands — and when it actually leaves.</h2>
-    <p>Assign expected transactions to a checking or credit-card account. Card charges defer to the card's payment due date so your cash flow is accurate.</p>
+    <h2>Accounts</h2>
   </div>
   <div class="intro-badge-stack">
     <span class="stat-chip amount-value">Checking opening ${{ starting_balance|currency }}</span>
@@ -17,7 +15,6 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Accounts</h2>
-    <p>Credit-card cycle status shows the next statement close and payment due date.</p>
   </div>
   {% if accounts %}
   <div class="table-wrap">

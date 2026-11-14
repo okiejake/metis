@@ -4,11 +4,10 @@
 {% block content %}
 <section class="page-intro">
   <div>
-    <p class="page-kicker">Ledger</p>
-    <h2>Plan day-by-day cash flow with confidence.</h2>
-    <p>Add one-off transactions, monitor monthly summaries, and catch negative trends early.</p>
+    <h2>Ledger</h2>
   </div>
   <div class="intro-badge-stack">
+    {% if forecast_start_iso %}<span class="stat-chip">Forecast from {{ forecast_start_iso }}</span>{% endif %}
     {% if first_negative_date %}
     <span class="stat-chip danger">First negative: {{ first_negative_date }}</span>
     {% else %}
@@ -45,7 +44,6 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Ledger</h2>
-    <p>Actual checking transactions through {{ forecast_start_iso }}, then forecast. Hover a row and tap + to insert.</p>
   </div>
   {% if window_all_future and first_actual_iso %}
   <div class="panel-hint">
