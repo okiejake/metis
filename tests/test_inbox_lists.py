@@ -10,19 +10,11 @@ from datetime import date, timedelta
 import pytest
 
 import inbox
-from conftest import add_imported, months_before, quiet_imports
+from conftest import add_imported, quiet_imports
 from merchants import merchant_key
 
 TODAY = date.today()
 THIS_MONTH = (TODAY.replace(day=1), TODAY)
-
-
-@pytest.mark.parametrize(
-    "months, expected",
-    [([100, 120, 95], 100.0), ([101], 110.0), ([40, 0, 0, 0], None), ([0, 0, 0], None), ([], None)],
-)
-def test_suggested_budget_is_the_median_rounded_up_to_ten(months, expected):
-    assert inbox.suggested_budget(months) == expected
 
 
 @pytest.fixture
@@ -110,42 +102,25 @@ def test_a_dismissed_transfer_moves_to_categories(db, user_id, accounts, savings
     assert merchant_key("EXAMPLE SAVINGS XFER") in keys(lists["categories"])
 
 
-def test_budgets_list_unbudgeted_spending_with_a_suggestion_and_honor_dismiss(db, user_id, accounts):
+def test_there_is_no_budgets_list(db, user_id, accounts):
+    """A category's budget is its expected transactions (#104)."""
     dining = db.create_category(user_id, "Dining")
-    for months, amount in ((1, -100.0), (2, -120.0), (3, -95.0), (0, -30.0)):
-        tx = spend(db, user_id, accounts, f"ACME DINER {months}", amount, day=months_before(TODAY, months))
-        db.execute("UPDATE imported_transactions SET category_id = ? WHERE id = ?", [dining, tx])
+    tx = spend(db, user_id, accounts, "ACME DINER", -30.0)
+    db.execute("UPDATE imported_transactions SET category_id = ? WHERE id = ?", [dining, tx])
 
-    rows = inbox.build_inbox(user_id, *THIS_MONTH)["budgets"]
-    assert [(r["category_id"], r["typical"], r["suggested"]) for r in rows] == [(dining, 100.0, 100.0)]
-
-    action = inbox.dismiss(user_id, f"budget:{dining}")
-    assert inbox.build_inbox(user_id, *THIS_MONTH)["budgets"] == []
-    inbox.undo(user_id, action)
-    assert len(inbox.build_inbox(user_id, *THIS_MONTH)["budgets"]) == 1
-
-
-def test_confirming_a_budget_sets_it_and_undo_clears_it(db, user_id, accounts):
-    dining = db.create_category(user_id, "Dining")
-    action = inbox.confirm_budget(user_id, dining, 150.0)
-    assert db.load_category_by_id(user_id, dining)["budget_amount"] == 150.0
-
-    inbox.undo(user_id, action)
-    assert db.load_category_by_id(user_id, dining)["budget_amount"] is None
+    assert "budgets" not in inbox.build_inbox(user_id, *THIS_MONTH)
 
 
 def test_the_waiting_count_follows_each_action(db, user_id, accounts):
-    """Categorizing a merchant moves its category to Budgets; setting the budget
-    clears it. The remembered count must follow both."""
+    """Categorizing a merchant clears it, and the remembered count follows."""
     quiet_imports(user_id)
     groceries = db.create_category(user_id, "Groceries")
     spend(db, user_id, accounts, "ACME GROCER #2", -30.0)
     db.save_forecast_window(user_id, *THIS_MONTH)
     assert inbox.inbox_waiting_count(user_id) == 1
 
-    inbox.confirm_category(user_id, merchant_key("ACME GROCER #2"), groceries)
-    assert inbox.build_inbox(user_id, *THIS_MONTH)["budgets"][0]["category_id"] == groceries
-    assert inbox.inbox_waiting_count(user_id) == 1
-
-    inbox.confirm_budget(user_id, groceries, 30.0)
+    action = inbox.confirm_category(user_id, merchant_key("ACME GROCER #2"), groceries)
     assert inbox.inbox_waiting_count(user_id) == 0
+
+    inbox.undo(user_id, action)
+    assert inbox.inbox_waiting_count(user_id) == 1

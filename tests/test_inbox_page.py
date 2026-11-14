@@ -133,13 +133,13 @@ def test_dismiss_holds_across_reloads_and_restore_brings_rows_back(client, db, u
     assert 'id="transfers"' in client.get("/inbox").text
 
 
-def test_budget_confirm_and_dismiss(client, db, user_id, accounts):
+def test_the_budgets_list_and_its_routes_are_gone(client, db, user_id, accounts):
     dining = db.create_category(user_id, "Dining")
     tx = add_imported(db, user_id, accounts["Example Card"], "Example Card", TODAY, "ACME DINER", -40.0)
     db.execute("UPDATE imported_transactions SET category_id = ? WHERE id = ?", [dining, tx])
 
-    client.post("/inbox/budgets/confirm", data={"category_id": dining, "amount": "60"}, follow_redirects=False)
-    assert db.load_category_by_id(user_id, dining)["budget_amount"] == 60.0
+    assert 'id="budgets"' not in client.get("/inbox").text
+    assert client.post("/inbox/budgets/confirm", data={"category_id": dining, "amount": "60"}).status_code in (404, 405)
 
 
 def test_undo_from_the_message_returns_totals_and_categories(client, db, user_id, accounts):

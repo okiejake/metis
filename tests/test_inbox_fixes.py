@@ -113,17 +113,6 @@ def test_an_uncategorized_refund_is_listed_and_the_meter_stays_in_range(db, user
     assert [r["total"] for r in lists["categories"]] == [-30.0]
 
 
-# Important 4: a repeated budget Confirm records nothing.
-
-def test_a_repeated_budget_confirm_records_nothing(db, user_id):
-    dining = db.create_category(user_id, "Dining")
-    first = inbox.confirm_budget(user_id, dining, 100.0)
-
-    assert inbox.confirm_budget(user_id, dining, 100.0) is None
-    inbox.undo(user_id, first)
-    assert db.load_category_by_id(user_id, dining)["budget_amount"] is None
-
-
 # Important 5: a repeated bill Confirm creates nothing.
 
 def test_a_repeated_bill_confirm_creates_nothing(client, db, user_id, accounts):

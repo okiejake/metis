@@ -1197,10 +1197,12 @@ button.danger,
 .budget-detail-controls {
   gap: 0.75rem;
   justify-content: space-between;
+  flex-wrap: wrap;
 }
 
 .budget-expand-controls {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.75rem;
 }
 
@@ -1302,62 +1304,194 @@ button.danger,
   border-left: 2px solid var(--line);
 }
 
-.budget-bar-actions {
-  display: flex;
-  align-items: flex-end;
-  gap: 0.6rem;
-  flex-wrap: wrap;
+.budget-row-name {
+  font-weight: 700;
 }
 
-.budget-set-form {
-  display: flex;
-  align-items: flex-end;
-  gap: 0.5rem;
-}
-
-.budget-set-form input {
-  width: 9rem;
-}
-
-.budget-set-label {
-  display: block;
-  color: var(--muted);
-  font-size: 0.78rem;
-}
-
-.budget-bar-items {
+/* Inside a category: its bills and one-time items, one line each. */
+.budget-items {
   display: grid;
   list-style: none;
   margin: 0 0 0.6rem;
   padding: 0;
-  gap: 0.25rem;
+  gap: 0.35rem;
 }
 
-.budget-bar-items li {
-  display: flex;
-  gap: 0.75rem;
-  align-items: baseline;
-  justify-content: space-between;
+.budget-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  gap: 0.35rem 0.75rem;
+  align-items: center;
   font-size: 0.9rem;
 }
 
-.budget-bar-items .budget-bar-figures {
-  font-size: 0.86rem;
-}
-
-.budget-bars-total {
-  margin-top: 1.25rem;
-  padding-top: 0.85rem;
-  border-top: 1px solid var(--line);
-  display: flex;
-  gap: 0.5rem;
-  align-items: baseline;
-  flex-wrap: wrap;
+.budget-item.hidden {
+  display: none;
 }
 
 .budget-item-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.budget-item-facts {
+  grid-column: 1;
+  grid-row: 2;
   color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.budget-item .budget-bar-figures {
+  font-size: 0.86rem;
+}
+
+.budget-row-actions {
+  margin: 0.25rem 0 0.5rem;
+}
+
+.budget-children {
+  margin-top: 0.75rem;
+}
+
+.budget-unsettled {
+  margin-top: 0.5rem;
+}
+
+.budget-unsettled-head {
+  margin: 0 0 0.35rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* A paged list of transactions (parts.transaction_list). */
+.tx-list {
+  display: grid;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  gap: 0.35rem;
+}
+
+.tx-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 0.25rem 0.75rem;
+  align-items: center;
+  padding: 0.35rem 0;
+  border-top: 1px solid var(--line);
   font-size: 0.9rem;
+}
+
+.tx-date {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tx-name {
+  overflow-wrap: anywhere;
+}
+
+.tx-amount {
+  white-space: nowrap;
+}
+
+.tx-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  justify-content: flex-end;
+}
+
+.tx-actions .inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+/* With script, choosing in a list row's picker or bill select submits it, so
+   its button is only for pages without script (the class is set in <head>). */
+.has-script .settle-match-button,
+.has-script select.picker-native[data-picker-submit] ~ button[type="submit"] {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .tx-actions {
+    grid-column: 1 / -1;
+  }
+
+  .budget-item {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .budget-item-name {
+    flex: 1 1 100%;
+  }
+}
+
+.settle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.settle-match select {
+  max-width: 12rem;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+}
+
+.pager-position {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The rule prompt (parts.rule_prompt). */
+.rule-prompt {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0 0 1rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-solid);
+}
+
+.rule-prompt-title {
+  margin: 0;
+}
+
+.rule-prompt-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+}
+
+.rule-prompt-fields input[type="number"] {
+  width: 7rem;
+}
+
+.rule-prompt-count {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+[data-section].is-busy {
+  opacity: 0.7;
+  transition: opacity 0.15s ease;
 }
 
 table {

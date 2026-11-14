@@ -1,0 +1,210 @@
+{# Budget's one section (#104). The page includes it; GET /budget/section
+   renders it alone, for static/partial.js to put in place after a background
+   action. Without script every form reloads the page at page_next. #}
+{% import "_parts.html" as parts %}
+{% set b = budget %}
+
+{% macro figures(item) -%}
+<span class="budget-bar-figures">
+  <span class="budget-bar-actual">${{ item.actual|currency }}</span>
+  {% if item.budgeted > 0.005 %}
+  <span class="budget-bar-sep">/</span>
+  <span class="budget-bar-target">${{ item.budgeted|currency }}</span>
+  {% if item.difference < -0.005 %}
+  <span class="budget-bar-over">▲ ${{ (-item.difference)|currency }}</span>
+  {% elif item.difference > 0.005 %}
+  <span class="budget-bar-under">▼ ${{ item.difference|currency }}</span>
+  {% endif %}
+  {% else %}
+  <span class="budget-bar-untargeted">no budget</span>
+  {% endif %}
+</span>
+{%- endmacro %}
+
+{% macro item_menu(path, item, noun, pausable) -%}
+<a href="{{ base_path() }}{{ path }}/reconcile" class="button-link">reconcile</a>
+<details class="row-action-menu">
+  <summary class="row-action-trigger" aria-label="open {{ noun }} actions">
+    <i data-lucide="settings-2" class="menu-icon" aria-hidden="true"></i>
+  </summary>
+  <div class="row-action-dropdown">
+    <a href="{{ base_path() }}{{ path }}/edit?next={{ page_next|urlencode }}" class="row-action-item">edit</a>
+    {% if pausable and item.status != 'completed' %}
+    <form method="post" action="{{ base_path() }}{{ path }}/toggle?next={{ page_next|urlencode }}" class="row-action-item-form">
+      <button type="submit" class="row-action-item">{{ 'pause' if item.active else 'resume' }}</button>
+    </form>
+    {% endif %}
+    <form method="post" action="{{ base_path() }}{{ path }}/delete?next={{ page_next|urlencode }}" class="row-action-item-form" onsubmit="return confirm('delete this {{ noun }}?')">
+      <button type="submit" class="row-action-item danger">delete</button>
+    </form>
+  </div>
+</details>
+{%- endmacro %}
+
+{% macro row(r) -%}
+{% set opened = state.is_open(r.key) %}
+{% set listed = lists.get(r.key) %}
+<li class="budget-bar-row{{ ' is-over' if r.over > 0 else '' }}{{ ' no-target' if not r.has_target else '' }}{{ ' is-open' if opened else '' }}" data-row="{{ r.key }}">
+  <div class="budget-bar-head">
+    <span class="budget-bar-label">
+      <a class="card-expand-toggle{{ ' is-open' if opened else '' }}" href="{{ base_path() }}{{ state.toggle_url(r.key) }}" data-toggle-row
+         role="button" aria-expanded="{{ 'true' if opened else 'false' }}" aria-label="show {{ r.name|lower }}">›</a>
+      {% if r.key == 'income' or r.key == 'uncategorized' %}<strong class="budget-row-name">{{ r.name|lower }}</strong>{% else %}{{ parts.category_pill(r.name, r.color) }}{% endif %}
+    </span>
+    {{ figures(r) }}
+  </div>
+  {% if r.key != 'income' %}
+  {% set bar_title %}{{ r.name }} — actual ${{ r.actual|currency }}{% if r.has_target %}, budget ${{ r.budgeted|currency }}{% endif %}{% endset %}
+  {{ parts.bar(r.fill_pct, r.over_pct, r.neutral_pct, bar_title) }}
+  {% endif %}
+
+  <div class="budget-bar-detail{{ '' if opened else ' hidden' }}" data-row-detail>
+    {% if r.bills or r.one_time %}
+    <ul class="budget-items">
+      {% for item in r.bills %}
+      <li class="budget-item{{ ' hidden' if state.status != 'all' and item.status != state.status else '' }}" data-status="{{ item.status }}">
+        <span class="budget-item-name">{{ item.name }}</span>
+        <span class="budget-item-facts">{{ item.cadence|lower }}{% if item.next_due %} · next {{ item.next_due.strftime('%m/%d') }}{% endif %}</span>
+        {{ figures(item) }}
+        <span class="table-pill {{ 'success' if item.status == 'active' else 'neutral' }}">{{ item.status }}</span>
+        <span class="row-action-inline">{{ item_menu('/bills/%d'|format(item.id), item, 'bill' if item.kind == 'expense' else 'income', True) }}</span>
+      </li>
+      {% endfor %}
+      {% for item in r.one_time %}
+      <li class="budget-item">
+        <span class="budget-item-name">{{ item.name }}</span>
+        <span class="budget-item-facts">one-time · {{ item.date.strftime('%m/%d') }}</span>
+        {{ figures(item) }}
+        <span class="table-pill {{ 'success' if item.settled else 'neutral' }}">{{ 'paid' if item.settled else 'expected' }}</span>
+        <span class="row-action-inline">{{ item_menu('/one-time/%d'|format(item.id), item, 'one-time item', False) }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+
+    <div class="actions budget-row-actions">
+      {% if r.key == 'income' %}
+      <a class="button-link" href="{{ base_path() }}/bills/new?kind=income&amp;next={{ page_next|urlencode }}">add income</a>
+      <a class="button-link" href="{{ base_path() }}/one-time/new?kind=income&amp;next={{ page_next|urlencode }}">add one-time</a>
+      {% else %}
+      {% set category_query = 'category_id=%d&'|format(r.id) if r.id else '' %}
+      <a class="button-link" href="{{ base_path() }}/bills/new?{{ category_query }}next={{ page_next|urlencode }}">add bill</a>
+      <a class="button-link" href="{{ base_path() }}/one-time/new?{{ category_query }}next={{ page_next|urlencode }}">add one-time</a>
+      {% if r.id %}<a class="button-link" href="{{ base_path() }}/categories/{{ r.id }}/edit">edit category</a>{% endif %}
+      {% endif %}
+    </div>
+
+    {% if listed and listed.total %}
+    <div class="budget-unsettled" data-unsettled>
+      <p class="budget-unsettled-head">{{ 'uncategorized' if r.key == 'uncategorized' else 'unbudgeted' }} ({{ listed.total }})</p>
+      {% if listed.lazy %}
+      <p class="card-note" data-lazy>…</p>
+      {% else %}
+      {% call(tx) parts.transaction_list(listed) %}
+        {% if r.key == 'uncategorized' %}
+        <form method="post" action="{{ base_path() }}/transactions/{{ tx.id }}/category" class="inline-form" data-partial>
+          <input type="hidden" name="next" value="{{ page_next }}" />
+          {{ parts.category_picker('choice', categories, None, extras=True, transfer=False, submit=True) }}
+          <button type="submit" class="button-link">save</button>
+        </form>
+        {% else %}
+        {{ parts.settle(tx, page_next) }}
+        {% endif %}
+      {% endcall %}
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if r.children %}
+    <ul class="budget-bars budget-children">
+      {% for child in r.children %}{{ row(child) }}{% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+</li>
+{%- endmacro %}
+
+<section class="panel budget-section" id="budget-section" data-section
+         data-section-next="/budget/section" data-section-url="{{ base_path() }}/budget/section"
+         data-state-query="{{ state.query() }}">
+  {% if section_only and message %}
+  {% set undo_id = request.query_params.get('undo', '')|int(0) %}
+  <div class="flash {{ 'error' if is_error else 'success' }}">
+    {{ message }}
+    {% if undo_id and not is_error %}
+    <form method="post" action="{{ base_path() }}/inbox/undo/{{ undo_id }}" class="inline-form flash-undo" data-partial>
+      <input type="hidden" name="next" value="{{ page_next }}" />
+      <button type="submit" class="button-link">undo</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div class="panel-head">
+    <h2>budget</h2>
+  </div>
+
+  {% if rule_prompt %}{{ parts.rule_prompt(rule_prompt, page_next, section_next) }}{% endif %}
+
+  <div class="summary-grid compact-grid">
+    <article class="card compact-card">
+      <h3>budgeted</h3>
+      <p class="amount-value">${{ b.totals.budgeted|currency }}</p>
+    </article>
+    <article class="card compact-card">
+      <h3>actual</h3>
+      <p class="amount-value negative">${{ b.totals.actual|currency }}</p>
+    </article>
+    <article class="card compact-card">
+      <h3>difference</h3>
+      <p class="amount-value {{ 'negative' if b.totals.difference < 0 else 'positive' }}">
+        {{ '-' if b.totals.difference < 0 else '' }}${{ (b.totals.difference|abs)|currency }}
+      </p>
+    </article>
+    <article class="card compact-card">
+      <h3>income</h3>
+      <p class="amount-value positive">${{ b.income.actual|currency }}</p>
+      <p class="card-note">of ${{ b.income.budgeted|currency }}</p>
+    </article>
+  </div>
+
+  <div class="budget-detail-controls">
+    <div class="segmented" role="group" aria-label="bills by status">
+      {% for status in ['active', 'completed', 'paused', 'all'] %}
+      <a class="button-link{{ ' active' if status == state.status else '' }}" href="{{ base_path() }}{{ state.url(status=status) }}" data-status-filter="{{ status }}">{{ status }}</a>
+      {% endfor %}
+    </div>
+    <div class="budget-expand-controls">
+      <button type="button" class="button-link" data-expand-all>expand all</button>
+      <button type="button" class="button-link" data-collapse-all>collapse all</button>
+      <button type="button" class="button-link" data-reveal="category-add" aria-expanded="false" aria-controls="category-add">new category</button>
+    </div>
+  </div>
+
+  <form method="post" action="{{ base_path() }}/categories" class="inline-form category-add-form hidden" id="category-add">
+    <label>
+      name
+      <input type="text" name="name" placeholder="e.g. groceries" required />
+    </label>
+    <label>
+      color
+      <input type="color" name="color" value="{{ default_color }}" />
+    </label>
+    <label>
+      parent
+      <select name="parent_id">
+        <option value="">none</option>
+        {% for parent in categories|rejectattr('parent_id') %}
+        <option value="{{ parent.id }}">{% filter lower %}{{ parent.name }}{% endfilter %}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit" class="button-link">add category</button>
+  </form>
+
+  <ul class="budget-bars" id="budget-vs-actual-bars">
+    {{ row(b.income) }}
+    {% for r in b.rows %}{{ row(r) }}{% endfor %}
+    {{ row(b.uncategorized) }}
+  </ul>
+</section>

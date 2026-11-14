@@ -30,10 +30,9 @@
   'imports': none,
   'transfers': r.transfers|sum(attribute='total'),
   'categories': r.categories|sum(attribute='total'),
-  'budgets': r.budgets|sum(attribute='actual'),
   'bills': r.bills|sum(attribute='amount'),
 } %}
-{% set titles = [('imports', 'imports'), ('transfers', 'transfers'), ('categories', 'categories'), ('budgets', 'budgets'), ('bills', 'bills')] %}
+{% set titles = [('imports', 'imports'), ('transfers', 'transfers'), ('categories', 'categories'), ('bills', 'bills')] %}
 
 {% for alert in r.alerts %}
 <div class="inbox-alert danger" role="alert">
@@ -138,27 +137,6 @@
 </section>
 {% endif %}
 
-{% if r.budgets %}
-<section class="panel" id="budgets">
-  {{ list_head('budgets', r.budgets, totals.budgets) }}
-  <ol class="inbox-list">
-    {% for row in r.budgets %}
-    {% call parts.inbox_row(row.name, ('$' ~ row.typical|currency ~ ' a month') if row.typical is not none else ('$' ~ row.actual|currency), 'budget-' ~ row.category_id) %}
-    <form method="post" action="{{ base_path() }}/inbox/budgets/confirm" class="inline-form inbox-form">
-      <input type="hidden" name="category_id" value="{{ row.category_id }}" />
-      <input type="number" name="amount" step="0.01" min="0" required aria-label="monthly budget for {{ row.name }}"
-             value="{{ '%.2f'|format(row.suggested) if row.suggested is not none else '' }}" />
-      <button type="submit" class="button-link">confirm</button>
-    </form>
-    <form method="post" action="{{ base_path() }}/inbox/budgets/dismiss" class="inline-form">
-      <input type="hidden" name="category_id" value="{{ row.category_id }}" />
-      <button type="submit" class="button-link">dismiss</button>
-    </form>
-    {% endcall %}
-    {% endfor %}
-  </ol>
-</section>
-{% endif %}
 
 {% if r.bills %}
 <section class="panel" id="bills">

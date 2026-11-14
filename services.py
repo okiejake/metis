@@ -455,18 +455,9 @@ SCHEMA = (
         value TEXT NOT NULL
     )
     """,
-    """
-    CREATE TABLE IF NOT EXISTS categories (
-        id BIGINT PRIMARY KEY DEFAULT nextval('categories_id_seq'),
-        name TEXT NOT NULL,
-        color TEXT NOT NULL DEFAULT '#64748b',
-        user_id BIGINT NOT NULL,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        budget_amount DOUBLE,
-        -- One level: a category with a parent has no children (#100).
-        parent_id BIGINT
-    )
-    """,
+    # One level: a category with a parent has no children (#100). Its budget is
+    # its expected transactions, so it has no budget of its own (#104).
+    migrations.CATEGORIES_TABLE.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS"),
     # Scheduled money out (kind 'expense') and in (kind 'income'). A bill recurs
     # on the day of first_due_date. balance, interest_rate, biller_url and the
     # charge_ columns belong to bills in depth.
@@ -1426,7 +1417,7 @@ def set_category_parent(user_id: int, category_id: int, parent_id: Optional[int]
 
 def load_category_by_id(user_id: int, category_id: int) -> Optional[Dict[str, Any]]:
     row = fetch_one("""
-            SELECT id, name, color, budget_amount, parent_id
+            SELECT id, name, color, parent_id
             FROM categories
             WHERE id = ? AND user_id = ?
             """, [category_id, user_id])
@@ -1436,8 +1427,7 @@ def load_category_by_id(user_id: int, category_id: int) -> Optional[Dict[str, An
         "id": int(row[0]),
         "name": row[1],
         "color": safe_hex_color(row[2]),
-        "budget_amount": float(row[3]) if row[3] is not None else None,
-        "parent_id": int(row[4]) if row[4] is not None else None,
+        "parent_id": int(row[3]) if row[3] is not None else None,
     }
 
 
@@ -1469,46 +1459,6 @@ def delete_category(user_id: int, category_id: int, children: str = "") -> None:
             conn.execute("DELETE FROM transaction_splits WHERE category_id = ? AND user_id = ?", [doomed_id, user_id])
             conn.execute("DELETE FROM categories WHERE id = ? AND user_id = ?", [doomed_id, user_id])
     resync_category_rules(user_id)
-
-
-def set_category_budget(user_id: int, category_id: int, amount: Optional[float]) -> None:
-    """Set (or clear, with None) a category's explicit monthly budget. When set it
-    replaces the budget derived from that category's expected items."""
-    if amount is not None and amount < 0:
-        raise ValueError("A budget cannot be negative")
-    execute(
-        "UPDATE categories SET budget_amount = ? WHERE id = ? AND user_id = ?",
-        [amount, category_id, user_id],
-    )
-
-
-def load_category_budgets(user_id: int) -> Dict[str, float]:
-    """lower(name) -> explicit monthly budget, for categories that have one."""
-    rows = fetch_all(
-        "SELECT name, budget_amount FROM categories WHERE user_id = ? AND budget_amount IS NOT NULL",
-        [user_id],
-    )
-    return {str(name).strip().lower(): float(amount) for name, amount in rows}
-
-
-def window_month_fraction(window_start: date, window_end: date) -> float:
-    """How many months the window covers, prorated by days so a full calendar
-    month counts 1.0 and half of March counts 0.5. Explicit budgets are stored
-    monthly, so this is what scales them to whatever window you're looking at."""
-    if window_end < window_start:
-        return 0.0
-    total = 0.0
-    cursor = date(window_start.year, window_start.month, 1)
-    end_month = date(window_end.year, window_end.month, 1)
-    while cursor <= end_month:
-        days_in_month = (add_months(cursor, 1) - cursor).days
-        month_last_day = add_months(cursor, 1) - timedelta(days=1)
-        overlap_start = max(window_start, cursor)
-        overlap_end = min(window_end, month_last_day)
-        if overlap_end >= overlap_start:
-            total += ((overlap_end - overlap_start).days + 1) / days_in_month
-        cursor = add_months(cursor, 1)
-    return round(total, 4)
 
 
 def parse_optional_category_id(user_id: int, value: str) -> Optional[int]:
@@ -2661,35 +2611,11 @@ def income_total(user_id: int, window_start: date, window_end: date) -> float:
     return round(float(row[0] if row else 0.0), 2)
 
 
-def _budget_actuals_by_category(
-    user_id: int, window_start: date, window_end: date
-) -> Dict[str, Dict[str, Any]]:
-    """Actual spending in the window by effective category, from spending_parts.
-    Returns keyed by lower(name) ('' = none); income is reported separately by
-    income_total, so each bucket's income is 0."""
-    result: Dict[str, Dict[str, Any]] = {}
-    for part in spending_parts(user_id, window_start, window_end):
-        name = part["category_name"]
-        key = (name or "").strip().lower()
-        bucket = result.setdefault(
-            key,
-            {"name": name or "Uncategorized", "color": safe_hex_color(part["category_color"]), "expense": 0.0, "income": 0.0},
-        )
-        bucket["expense"] += part["spent"]
-    for bucket in result.values():
-        bucket["expense"] = round(bucket["expense"], 2)
-    return result
-
-
-def _budget_actuals_by_item(
-    user_id: int, window_start: date, window_end: date
-) -> Dict[tuple, float]:
-    """Actual imported expense in the window attributed to a specific budgeted
-    line item via its reconciliation. Keyed by (source_type, source_id) ->
-    expense as a positive number. Only reconciled, non-transfer imports count;
-    unreconciled category spend belongs to the category, not to any one item.
-    Split parts are subtracted — money moved to another category is no longer
-    this line item's spend."""
+def _item_actuals(user_id: int, window_start: date, window_end: date) -> Dict[tuple, float]:
+    """What the actuals linked to each expected transaction add up to in the
+    window, as a positive amount: (source_type, source_id) -> amount. Split
+    parts are taken off, since money moved to another category is no longer
+    this item's."""
     rows = fetch_all("""
             WITH allocated AS (
                 SELECT imported_transaction_id AS tx_id, COALESCE(SUM(amount), 0) AS part_total
@@ -2705,12 +2631,7 @@ def _budget_actuals_by_item(
               AND i.tx_date >= ? AND i.tx_date <= ?
             GROUP BY 1, 2
             """, [user_id, user_id, window_start, window_end])
-    result: Dict[tuple, float] = {}
-    for source_type, source_id, total in rows:
-        total = float(total)
-        if total < 0:
-            result[(source_type, int(source_id))] = round(-total, 2)
-    return result
+    return {(source_type, int(source_id)): round(abs(float(total)), 2) for source_type, source_id, total in rows}
 
 
 def _apply_bar_geometry(categories: List[Dict[str, Any]]) -> None:
@@ -2737,138 +2658,218 @@ def _apply_bar_geometry(categories: List[Dict[str, Any]]) -> None:
             cat["neutral_pct"] = round(cat["actual"] / scale * 100, 2)
 
 
-def build_budget_summary(user_id: int, window_start: date, window_end: date) -> Dict[str, Any]:
-    """Budget vs actual vs difference by category for the window. Budgeted =
-    bill due dates + one-time items in the window; actual = imported spend
-    grouped by effective category. Expense-focused, with income shown separately."""
-    # --- Budgeted, grouped by category ---
-    budget_cats: Dict[str, Dict[str, Any]] = {}
-    income_budgeted = 0.0
+def next_due_date(bill: Dict[str, Any], linked: List[Dict[str, Any]],
+                  overrides: Optional[List[Dict[str, Any]]] = None, today: Optional[date] = None) -> Optional[date]:
+    """The first due date from today on that no linked payment has settled."""
+    today = today or date.today()
+    start = today - timedelta(days=RECONCILE_OCCURRENCE_TOLERANCE_DAYS)
+    for occurrence in bill_occurrence_status(bill, start, today + timedelta(days=800), linked, overrides):
+        if occurrence["date"] >= today and not occurrence["paid"]:
+            return occurrence["date"]
+    return None
 
-    def _cat_bucket(name: Optional[str], color: Optional[str]) -> Dict[str, Any]:
-        key = (name or "").strip().lower()
-        return budget_cats.setdefault(
-            key,
-            {
-                "name": name or "Uncategorized",
-                "color": safe_hex_color(color),
-                "budgeted": 0.0,
-                "line_items": [],
-            },
-        )
 
-    active_bills = load_active_bills(user_id)
-    overrides_by_id = load_amount_overrides_for_bills([bill["id"] for bill in active_bills])
-    for bill in active_bills:
-        due_dates = bill_due_dates(bill, window_start, window_end, overrides=overrides_by_id.get(bill["id"], []))
-        total = sum(due["amount"] for due in due_dates)
-        if total <= 0:
-            continue
-        if bill["kind"] == "income":
-            income_budgeted += total
-            continue
-        bucket = _cat_bucket(bill.get("category_name"), bill.get("category_color"))
-        bucket["budgeted"] += total
-        bucket["line_items"].append(
-            {"id": bill["id"], "name": bill["name"], "budgeted": round(total, 2), "source": "bill"}
-        )
+def _budget_row(key: str, category: Optional[Dict[str, Any]], name: str) -> Dict[str, Any]:
+    return {
+        "key": key,
+        "id": category["id"] if category else None,
+        "name": name,
+        "color": safe_hex_color(category["color"] if category else None),
+        "parent_id": category["parent_id"] if category else None,
+        "own_budgeted": 0.0,
+        "own_actual": 0.0,
+        "bills": [],
+        "one_time": [],
+        "children": [],
+    }
 
-    for row in load_one_time_transactions(user_id, window_start, window_end):
-        amount = abs(float(row["delta"]))
-        if amount <= 0:
-            continue
-        if row["kind"] == "income":
-            income_budgeted += amount
-            continue
-        bucket = _cat_bucket(row.get("category_name"), row.get("category_color"))
-        bucket["budgeted"] += amount
-        bucket["line_items"].append(
-            {"id": int(row["id"]), "name": row["description"], "budgeted": round(amount, 2), "source": "one_time"}
-        )
 
-    # --- Actuals, grouped by effective category and by reconciled line item ---
-    actuals = _budget_actuals_by_category(user_id, window_start, window_end)
-    item_actuals = _budget_actuals_by_item(user_id, window_start, window_end)
-    actual_income = income_total(user_id, window_start, window_end)
+def _finish_row(row: Dict[str, Any]) -> None:
+    row["budgeted"] = round(row["own_budgeted"] + sum(child["own_budgeted"] for child in row["children"]), 2)
+    row["actual"] = round(row["own_actual"] + sum(child["own_actual"] for child in row["children"]), 2)
+    row["difference"] = round(row["budgeted"] - row["actual"], 2)
+    # No target means nothing to exceed — without this guard every unbudgeted
+    # category reads as "over" by the whole of its spend.
+    row["has_target"] = row["budgeted"] > 0.005
+    row["over"] = round(max(0.0, row["actual"] - row["budgeted"]), 2) if row["has_target"] else 0.0
 
-    # --- Explicit per-category budgets, prorated to the window ---
-    # A category with its own monthly budget uses it instead of the sum of its
-    # expected items; the items still show underneath as detail.
-    monthly_budgets = load_category_budgets(user_id)
-    months = window_month_fraction(window_start, window_end)
-    category_meta = {c["name"].strip().lower(): c for c in load_categories(user_id)}
 
-    # --- Merge expense categories from both sides ---
-    keys = set(budget_cats) | {k for k, v in actuals.items() if v["expense"] > 0.005} | set(monthly_budgets)
-    categories: List[Dict[str, Any]] = []
-    for key in keys:
-        explicit_monthly = monthly_budgets.get(key)
-        if explicit_monthly is not None:
-            budgeted = round(explicit_monthly * months, 2)
-        else:
-            budgeted = round(budget_cats.get(key, {}).get("budgeted", 0.0), 2)
-        actual = round(actuals.get(key, {}).get("expense", 0.0), 2)
-        meta = category_meta.get(key, {})
-        name = (
-            budget_cats.get(key, {}).get("name")
-            or actuals.get(key, {}).get("name")
-            or meta.get("name")
-            or "Uncategorized"
-        )
-        color = budget_cats.get(key, {}).get("color") or actuals.get(key, {}).get("color") or meta.get("color")
-        line_items = []
-        for li in sorted(
-            budget_cats.get(key, {}).get("line_items", []), key=lambda i: -i["budgeted"]
-        ):
-            li_actual = item_actuals.get((li["source"], li["id"]), 0.0)
-            line_items.append(
-                {
-                    **li,
-                    "actual": li_actual,
-                    "difference": round(li["budgeted"] - li_actual, 2),
-                }
-            )
-        # No target means nothing to exceed — without this guard every unbudgeted
-        # category reads as "over" by the whole of its spend.
-        has_target = budgeted > 0.005
-        over = round(max(0.0, actual - budgeted), 2) if has_target else 0.0
+def build_budget_summary(user_id: int, window_start: date, window_end: date,
+                         today: Optional[date] = None) -> Dict[str, Any]:
+    """Budget for the window (#104). A category's budget is exactly its
+    expected transactions: its active bills' due dates and its one-time items
+    in the window. Its actual is its spending, by effective category. A parent
+    adds up its own and its children's.
 
-        categories.append(
-            {
-                "id": meta.get("id"),
-                "name": name,
-                "color": safe_hex_color(color),
-                "budgeted": budgeted,
-                "actual": actual,
-                "difference": round(budgeted - actual, 2),
-                "over": over,
-                "has_target": has_target,
-                "explicit_monthly": explicit_monthly,
-                "line_items": line_items,
-            }
-        )
+    Returns rows (every top-level category, each with its children), income
+    (scheduled and one-time income against money arriving outside cards), and
+    uncategorized (expected transactions with no category against spending
+    with none). Each row lists its bills, whatever their status, and its
+    one-time items in the window. categories is every category row, children
+    and uncategorized included, flat."""
+    today = today or date.today()
+    categories = load_categories(user_id)
+    by_id = {c["id"]: _budget_row(str(c["id"]), c, c["label"]) for c in categories}
+    income = _budget_row("income", None, "income")
+    uncategorized = _budget_row("uncategorized", None, "Uncategorized")
+    accounts = load_accounts_map(user_id)
 
-    _apply_bar_geometry(categories)
-    categories.sort(key=lambda c: (-max(c["budgeted"], c["actual"]), c["name"].lower()))
+    def row_for(kind: str, category_id: Any) -> Dict[str, Any]:
+        if kind == "income":
+            return income
+        return by_id.get(int(category_id)) if category_id and int(category_id) in by_id else uncategorized
 
-    total_budgeted = round(sum(c["budgeted"] for c in categories), 2)
-    total_actual = round(sum(c["actual"] for c in categories), 2)
+    def account_name(account_id: Any) -> str:
+        account = accounts.get(int(account_id)) if account_id else None
+        return account["name"] if account else ""
+
+    item_actuals = _item_actuals(user_id, window_start, window_end)
+    bills = load_all_bills(user_id)
+    overrides = load_amount_overrides_for_bills([bill["id"] for bill in bills])
+    linked = load_reconciliations_by_item(user_id, "bill")
+    for bill in sorted(bills, key=lambda b: (b["name"].lower(), b["id"])):
+        bill_overrides = overrides.get(bill["id"], [])
+        due = bill_due_dates(bill, window_start, window_end, overrides=bill_overrides) if bill["active"] else []
+        budgeted = round(sum(d["amount"] for d in due), 2)
+        actual = item_actuals.get(("bill", bill["id"]), 0.0)
+        status = bill_status(bill, today)
+        target = row_for(bill["kind"], bill.get("category_id"))
+        target["own_budgeted"] += budgeted
+        target["bills"].append({
+            "id": bill["id"], "name": bill["name"], "kind": bill["kind"], "status": status,
+            "active": bool(bill["active"]), "cadence": summarize_frequency(bill),
+            "account_name": account_name(bill.get("account_id")), "budgeted": budgeted, "actual": actual,
+            "difference": round(budgeted - actual, 2),
+            "next_due": next_due_date(bill, linked.get(bill["id"], []), bill_overrides, today)
+            if status == "active" else None,
+        })
+
+    settled = {int(source_id) for (source_id,) in fetch_all(
+        "SELECT source_id FROM expected_reconciliations WHERE user_id = ? AND source_type = 'one_time'", [user_id])}
+    for item in _load_one_time_items(user_id, "AND o.expected_date >= ? AND o.expected_date <= ?",
+                                     [window_start, window_end]):
+        actual = item_actuals.get(("one_time", item["id"]), 0.0)
+        target = row_for(item["kind"], item.get("category_id"))
+        target["own_budgeted"] += item["amount"]
+        target["one_time"].append({
+            "id": item["id"], "name": item["name"], "kind": item["kind"], "date": item["expected_date"],
+            "account_name": account_name(item.get("account_id")), "budgeted": round(item["amount"], 2),
+            "actual": actual, "difference": round(item["amount"] - actual, 2), "settled": item["id"] in settled,
+        })
+
+    for part in spending_parts(user_id, window_start, window_end):
+        row_for("expense", part["category_id"])["own_actual"] += part["spent"]
+    income["own_actual"] = income_total(user_id, window_start, window_end)
+
+    tops: List[Dict[str, Any]] = []
+    for row in by_id.values():
+        parent = by_id.get(row["parent_id"]) if row["parent_id"] else None
+        (parent["children"] if parent else tops).append(row)
+    every = list(by_id.values()) + [income, uncategorized]
+    for row in every:
+        if not row["children"]:
+            _finish_row(row)
+    for row in every:
+        if row["children"]:
+            _finish_row(row)
+
+    def size(row: Dict[str, Any]) -> tuple:
+        return (-max(row["budgeted"], row["actual"]), row["name"].lower())
+
+    tops.sort(key=size)
+    flat: List[Dict[str, Any]] = []
+    for row in tops:
+        row["children"].sort(key=size)
+        flat.append(row)
+        flat.extend(row["children"])
+    flat.append(uncategorized)
+    _apply_bar_geometry(flat)
+
+    total_budgeted = round(sum(row["budgeted"] for row in tops) + uncategorized["budgeted"], 2)
+    total_actual = round(sum(row["actual"] for row in tops) + uncategorized["actual"], 2)
     return {
         "window_start": window_start,
         "window_end": window_end,
-        "months": months,
-        "categories": categories,
+        "rows": tops,
+        "income": income,
+        "uncategorized": uncategorized,
+        "categories": flat,
         "totals": {
             "budgeted": total_budgeted,
             "actual": total_actual,
             "difference": round(total_budgeted - total_actual, 2),
         },
-        "income": {
-            "budgeted": round(income_budgeted, 2),
-            "actual": round(actual_income, 2),
-            "difference": round(income_budgeted - actual_income, 2),
-        },
+        "bill_count": sum(1 for bill in bills if bill_status(bill, today) == "active"),
+        "one_time_count": sum(len(row["one_time"]) for row in every),
     }
+
+
+def unsettled_transactions(user_id: int, window_start: date, window_end: date) -> Dict[Any, List[Dict[str, Any]]]:
+    """What budget lists as not settled yet in the window, newest first, keyed
+    by where it is listed:
+
+    - a category id: spending with that category, no link to an expected
+      transaction and no unexpected mark (#105). Refunds are not listed;
+    - "income": money arriving outside cards that is not a transfer, with no
+      link and no mark;
+    - "uncategorized": spending with no category (#103), as spending_parts
+      counts it.
+
+    Each: id, tx_date, name, description, amount (positive), account_id,
+    account_name, kind."""
+    accounts = load_accounts_map(user_id)
+    found: Dict[Any, List[Dict[str, Any]]] = {"income": [], "uncategorized": []}
+
+    def entry(tx_id: int, tx_date: date, name: str, description: str, amount: float, account_id: Any) -> Dict[str, Any]:
+        account = accounts.get(int(account_id)) if account_id else None
+        return {"id": int(tx_id), "tx_date": _as_date(tx_date), "name": name, "description": description,
+                "amount": round(abs(float(amount)), 2), "signed": round(float(amount), 2),
+                "account_id": int(account_id) if account_id else None,
+                "account_name": account["name"] if account else "", "kind": "income" if amount > 0 else "expense"}
+
+    for row in query_all("""
+            SELECT i.id, i.tx_date, COALESCE(NULLIF(i.merchant, ''), i.description) AS name, i.description,
+                   i.amount, i.account_id, i.category_id,
+                   COALESCE(acct.account_type = 'credit_card', FALSE) AS on_card
+            FROM imported_transactions i
+            LEFT JOIN accounts acct ON acct.id = i.account_id AND acct.user_id = i.user_id
+            WHERE i.user_id = ? AND NOT i.is_transfer AND NOT i.unexpected
+              AND i.tx_date >= ? AND i.tx_date <= ?
+              AND i.id NOT IN (SELECT imported_transaction_id FROM expected_reconciliations WHERE user_id = ?)
+            ORDER BY i.tx_date DESC, i.id DESC
+            """, [user_id, window_start, window_end, user_id]):
+        amount = float(row["amount"])
+        if amount > 0 and not row["on_card"]:
+            found["income"].append(entry(row["id"], row["tx_date"], row["name"], row["description"], amount,
+                                         row["account_id"]))
+        elif amount < 0 and row["category_id"] is not None:
+            found.setdefault(int(row["category_id"]), []).append(
+                entry(row["id"], row["tx_date"], row["name"], row["description"], amount, row["account_id"]))
+
+    loose: Dict[int, Dict[str, Any]] = {}
+    for part in spending_parts(user_id, window_start, window_end):
+        if part["category_id"] is not None:
+            continue
+        held = loose.setdefault(int(part["tx_id"]), {"part": part, "spent": 0.0})
+        held["spent"] += part["spent"]
+    descriptions = {int(tx_id): text for tx_id, text in fetch_all(
+        "SELECT id, description FROM imported_transactions WHERE user_id = ? AND tx_date >= ? AND tx_date <= ?",
+        [user_id, window_start, window_end])} if loose else {}
+    for tx_id, held in sorted(loose.items(), key=lambda kv: (kv[1]["part"]["tx_date"], kv[0]), reverse=True):
+        part = held["part"]
+        found["uncategorized"].append(entry(tx_id, part["tx_date"], part["merchant"], descriptions.get(tx_id, ""),
+                                            -held["spent"], part["account_id"]))
+    return found
+
+
+LIST_PAGE_SIZE = 10
+
+
+def page_of(rows: List[Any], page: int, size: int = LIST_PAGE_SIZE) -> Dict[str, Any]:
+    """One page of a list, clamped to the pages there are. Pages count from 1."""
+    pages = max(1, -(-len(rows) // size))
+    page = min(max(1, int(page or 1)), pages)
+    return {"rows": rows[(page - 1) * size: page * size], "page": page, "pages": pages, "total": len(rows)}
 
 
 def collect_blended_transactions(user_id: int, window_start: date, window_end: date) -> List[Dict[str, Any]]:
@@ -3776,7 +3777,8 @@ def confirm_reconciliation(
     user_id: int, source_type: str, source_id: int, imported_transaction_id: int, matched_via: str = "confirm"
 ) -> bool:
     """Link an actual to an expected item. Idempotent: an already-linked actual
-    is left untouched (returns False)."""
+    is left untouched (returns False). Matching by hand clears an unexpected
+    mark."""
     with get_connection() as conn:
         existing = conn.execute(
             "SELECT id FROM expected_reconciliations WHERE user_id = ? AND imported_transaction_id = ?",
@@ -3791,6 +3793,9 @@ def confirm_reconciliation(
             """,
             [user_id, imported_transaction_id, source_type, source_id, matched_via],
         )
+        if matched_via == "confirm":
+            conn.execute("UPDATE imported_transactions SET unexpected = FALSE WHERE id = ? AND user_id = ?",
+                         [imported_transaction_id, user_id])
     return True
 
 
@@ -3900,6 +3905,7 @@ def apply_match_rules(
                 SELECT i.id FROM imported_transactions i
                 WHERE i.user_id = ?
                   AND NOT i.is_transfer
+                  AND NOT i.unexpected
                   AND {sign_condition}
                   AND UPPER(i.description) LIKE ?
                   AND i.id NOT IN (
@@ -4380,13 +4386,10 @@ def _rule_matches(rule: Dict[str, Any], row: Dict[str, Any]) -> bool:
     return rule["pattern"].upper() in str(row["description"] or "").upper()
 
 
-def category_rule_candidates(user_id: int, where: str = "", params: Sequence[Any] = ()) -> List[Dict[str, Any]]:
-    """Rows a rule may categorize: uncategorized, or set by a rule. Each with
-    what matching reads: description, merchant_key, amount, tx_date and
-    whether it is spending (money out that is not a transfer, or a card
-    refund), as spending_parts counts it."""
-    from merchants import merchant_key  # merchants is pure; imported here to keep services' imports flat
-
+def rule_rows(user_id: int, where: str = "", params: Sequence[Any] = ()) -> List[Dict[str, Any]]:
+    """Imported rows with what rule matching reads: description, merchant_key,
+    amount, tx_date and whether it is spending (money out that is not a
+    transfer, or a card refund), as spending_parts counts it."""
     rows = query_all(f"""
             SELECT i.id, i.description, COALESCE(NULLIF(i.merchant, ''), i.description) AS merchant, i.amount,
                    i.tx_date, i.category_id, i.category_rule_id,
@@ -4394,13 +4397,18 @@ def category_rule_candidates(user_id: int, where: str = "", params: Sequence[Any
                        AS spending
             FROM imported_transactions i
             LEFT JOIN accounts acct ON acct.id = i.account_id AND acct.user_id = i.user_id
-            WHERE i.user_id = ? AND (i.category_id IS NULL OR i.category_via = 'rule') {where}
+            WHERE i.user_id = ? {where}
             """, [user_id, *params])
     for row in rows:
         row["tx_date"] = _as_date(row["tx_date"])
         row["merchant_key"] = merchant_key(row["merchant"])
         row["spending"] = bool(row["spending"])
     return rows
+
+
+def category_rule_candidates(user_id: int, where: str = "", params: Sequence[Any] = ()) -> List[Dict[str, Any]]:
+    """Rows a category rule may categorize: uncategorized, or set by a rule."""
+    return rule_rows(user_id, f"AND (i.category_id IS NULL OR i.category_via = 'rule') {where}", params)
 
 
 def winning_rule(rules: List[Dict[str, Any]], row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -4491,7 +4499,7 @@ def _one_time_settlement(user_id: int) -> Tuple[List[Tuple[Dict[str, Any], int]]
     actuals = query_all("""
             SELECT i.id, i.tx_date, i.amount, i.account_id
             FROM imported_transactions i
-            WHERE i.user_id = ? AND NOT i.is_transfer AND i.tx_date >= ? AND i.tx_date <= ?
+            WHERE i.user_id = ? AND NOT i.is_transfer AND NOT i.unexpected AND i.tx_date >= ? AND i.tx_date <= ?
               AND i.id NOT IN (SELECT imported_transaction_id FROM expected_reconciliations WHERE user_id = ?)
             """, [user_id, min(item["expected_date"] for item in items) - window,
                   max(item["expected_date"] for item in items) + window, user_id])

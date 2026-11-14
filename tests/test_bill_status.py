@@ -43,7 +43,7 @@ def client(db, user_id):
 
 
 def row_for(page, name):
-    match = re.search(r"<tr[^>]*>(?:(?!</tr>).)*?" + re.escape(name) + r".*?</tr>", page, re.S)
+    match = re.search(r"<li class=\"budget-item[^>]*>(?:(?!</li>).)*?" + re.escape(name) + r".*?</li>", page, re.S)
     assert match, f"no row for {name}"
     return match.group(0)
 

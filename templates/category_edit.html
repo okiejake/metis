@@ -7,9 +7,6 @@
   <div class="intro-badge-stack">
     <span class="stat-chip">current {{ category.name }}</span>
     <span class="stat-chip">color {{ category.color }}</span>
-    {% if category.budget_amount is not none %}
-    <span class="stat-chip">${{ category.budget_amount|currency }}/mo</span>
-    {% endif %}
   </div>
 </div>
 
@@ -39,16 +36,6 @@
     {% endif %}
     <button type="submit" class="button-link">save changes</button>
     <a class="button-link" href="{{ base_path() }}/budget">cancel</a>
-  </form>
-
-  <form method="post" action="{{ base_path() }}/categories/{{ category.id }}/budget" class="inline-form">
-    <label>
-      monthly budget
-      <input type="number" name="budget_amount" step="0.01" min="0"
-             value="{{ '%.2f'|format(category.budget_amount) if category.budget_amount is not none else '' }}"
-             placeholder="leave blank to use expected items" />
-    </label>
-    <button type="submit" class="button-link">save budget</button>
   </form>
 </section>
 

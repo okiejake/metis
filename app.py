@@ -8,7 +8,9 @@ from base_path import BasePathMiddleware, configured_base_path
 from routes.accounts import router as accounts_router
 from routes.categories import router as categories_router
 from routes.core import router as core_router
+from routes.budget import router as budget_router
 from routes.expected import router as expected_router
+from routes.transactions import router as transactions_router
 from routes.imports import router as imports_router
 from routes.overview import router as overview_router
 from routes.auth import router as auth_router
@@ -91,7 +93,9 @@ app.include_router(bills_router)
 app.include_router(one_time_router)
 app.include_router(overview_router)
 app.include_router(imports_router)
+app.include_router(budget_router)
 app.include_router(expected_router)
+app.include_router(transactions_router)
 app.include_router(accounts_router)
 app.include_router(splits_router)
 app.include_router(statements_router)

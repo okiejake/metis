@@ -280,7 +280,8 @@ def test_links_and_auto_match_rules_point_at_bills(v040):
 
 
 def test_recorded_actions_move_to_inbox_actions_with_their_ids(v040):
-    before = v040.fetch_all("SELECT id, user_id, created_at FROM review_actions ORDER BY id")
+    """All but a hand-set budget, which can no longer be undone."""
+    before = v040.fetch_all("SELECT id, user_id, created_at FROM review_actions WHERE kind <> 'budget' ORDER BY id")
 
     v040.init_db()
 
@@ -363,6 +364,18 @@ def test_categories_gain_an_empty_parent(v040):
 
     assert "parent_id" in columns(v040, "categories")
     assert v040.fetch_all("SELECT id, parent_id FROM categories ORDER BY id") == [(n, None) for n in range(1, 6)]
+
+
+def test_hand_set_budgets_go_and_categories_keep_everything_else(v040):
+    before = v040.fetch_all("SELECT id, name, color, user_id, created_at FROM categories ORDER BY id")
+
+    v040.init_db()
+
+    assert "budget_amount" not in columns(v040, "categories")
+    assert v040.fetch_all("SELECT id, name, color, user_id, created_at FROM categories ORDER BY id") == before
+    assert v040.fetch_one("SELECT COUNT(*) FROM inbox_actions WHERE kind = 'budget'")[0] == 0
+    assert v040.fetch_one("SELECT COUNT(*) FROM dismissed_suggestions WHERE suggestion_key LIKE 'budget:%'")[0] == 0
+    assert v040.create_category(1, "Example new") == 6
 
 
 def test_category_rules_gain_a_kind_and_dates_and_keep_their_ids(v040):

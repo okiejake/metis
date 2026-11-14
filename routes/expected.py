@@ -1,38 +1,30 @@
-"""Budget, and what bills and one-time items share: the expected form, saving
-it, and the reconcile page."""
+"""What bills and one-time items share: the expected form, saving it, and the
+reconcile page."""
 
 from datetime import date, timedelta
 from typing import Any, Dict, Optional
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
 
 import expected_form as ef
 from inbox import record_action
 from services import (
-    DEFAULT_CATEGORY_COLOR,
     EXPECTED_SOURCE_TYPES,
     bill_occurrence_status,
-    build_budget_summary,
     confirm_reconciliation,
     create_match_rule,
     delete_match_rule,
-    detect_bill_suggestions,
     dismiss_suggestion,
     find_amount_suggestions,
     find_bill_suggestion,
     load_accounts,
     load_categories,
     load_expected_item,
-    load_expected_items,
     load_match_rules_for_item,
-    load_reconciliation_counts,
     load_reconciliations_for_item,
     occurrence_history_start,
     redirect_with_message,
-    reset_dismissed_suggestions,
-    resolve_forecast_window,
     resolve_safe_redirect_target,
     settle_one_time_items,
     suggest_rule_pattern,
@@ -144,58 +136,6 @@ def render_reconcile(request: Request, user: Dict[str, Any], source_type: str, s
     )
 
 
-# --- Budget -----------------------------------------------------------------------
-
-
-@router.get("/expected")
-def expected_page(request: Request):
-    # Expected has been consolidated into Budget.
-    return RedirectResponse(url="/budget", status_code=303)
-
-
-@router.get("/budget", response_class=HTMLResponse)
-def budget_page(request: Request, user: CurrentUser, start: str = "", end: str = "", msg: str = "", err: int = 0):
-    window_start, window_end, invalid_filter = resolve_forecast_window(user["id"], start, end)
-    if invalid_filter:
-        msg = "Invalid date filter. Using saved/default range."
-        err = 1
-    budget_summary = build_budget_summary(user["id"], window_start, window_end)
-
-    items = load_expected_items(user["id"])
-    counts = load_reconciliation_counts(user["id"])
-    for item in items:
-        item["recon_count"] = counts.get((item["source_type"], item["id"]), 0)
-
-    return render(
-        request,
-        "budget.html",
-        msg,
-        err,
-        budget_summary=budget_summary,
-        bills=[item for item in items if item["source_type"] == "bill"],
-        one_time_items=[item for item in items if item["source_type"] == "one_time"],
-        suggestion_count=len(detect_bill_suggestions(user["id"])),
-        categories=load_categories(user["id"]),
-        accounts=load_accounts(user["id"]),
-        default_color=DEFAULT_CATEGORY_COLOR,
-        today_iso=date.today().isoformat(),
-        start=window_start.isoformat(),
-        end=window_end.isoformat(),
-    )
-
-
-@router.post("/expected/suggestions/dismiss")
-def dismiss_suggestion_route(request: Request, user: CurrentUser, suggestion_key: str = Form(...)):
-    dismiss_suggestion(user["id"], suggestion_key, reason="dismissed")
-    return redirect_with_message("/budget", "Suggestion dismissed")
-
-
-@router.post("/expected/suggestions/reset")
-def reset_suggestions_route(request: Request, user: CurrentUser):
-    reset_dismissed_suggestions(user["id"])
-    return redirect_with_message("/budget", "Dismissed suggestions restored")
-
-
 # --- Matching an expected transaction to actuals ----------------------------------
 
 
@@ -263,8 +203,11 @@ def save_rule(
     amount_exact: str = Form(""),
     amount_min: str = Form(""),
     amount_max: str = Form(""),
+    next: str = Form(""),
 ):
-    target = _reconcile_path(source_type, source_id)
+    """Save an auto-match rule. From the reconcile page it returns there; from
+    the rule prompt it returns to the prompt's page."""
+    target = next or _reconcile_path(source_type, source_id)
     if not _known(user["id"], source_type, source_id):
         return redirect_with_message("/budget", "Expected item not found", is_error=True)
 

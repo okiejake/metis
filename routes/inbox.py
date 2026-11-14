@@ -1,16 +1,16 @@
 """The inbox page and its actions. Every action lands back on its list with a
 message that carries an Undo."""
 
-from typing import Optional, Tuple, Union
+from typing import Optional
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 import import_templates as it
 import inbox
+from settle import resolve_category_choice
 from services import (
     count_dismissed_suggestions,
-    create_category,
     load_accounts,
     load_categories,
     load_imported_transaction_by_id,
@@ -22,7 +22,7 @@ from web import CurrentUser, render
 
 router = APIRouter()
 
-LISTS = ("imports", "transfers", "categories", "budgets", "bills")
+LISTS = ("imports", "transfers", "categories", "bills")
 
 
 def _back(list_name: str, message: str, action_id: Optional[int]):
@@ -33,20 +33,8 @@ def _back(list_name: str, message: str, action_id: Optional[int]):
     return redirect_with_message(target, message, undo=action_id)
 
 
-def _choice(user_id: int, choice: str, new_category_name: str) -> Tuple[Union[int, str], bool]:
-    """A picker value as (category id or "transfer", created). "new" reuses a
-    category of that name, so a repeated submit doesn't fail, and otherwise
-    creates it. Call only once there is something to change."""
-    if choice == "transfer":
-        return "transfer", False
-    if choice == "new":
-        existing = inbox.find_category_id(user_id, new_category_name)
-        if existing:
-            return existing, False
-        return create_category(user_id, new_category_name), True
-    if not choice.strip():
-        raise ValueError("Choose a category")
-    return int(choice), False
+def _choice(user_id: int, choice: str, new_category_name: str):
+    return resolve_category_choice(user_id, choice, new_category_name)
 
 
 @router.get("/review")  # the inbox's old address
@@ -120,30 +108,15 @@ def set_charge(
     return _back("categories", "Confirmed", action)
 
 
-@router.post("/inbox/budgets/confirm")
-def confirm_budget(request: Request, user: CurrentUser, category_id: int = Form(...), amount: str = Form("")):
-    try:
-        monthly = float(amount)
-        if monthly < 0:
-            raise ValueError
-    except ValueError:
-        return redirect_with_message("/inbox#budgets", "Enter a monthly amount", is_error=True)
-    return _back("budgets", "Confirmed", inbox.confirm_budget(user["id"], category_id, monthly))
-
-
-@router.post("/inbox/budgets/dismiss")
-def dismiss_budget(request: Request, user: CurrentUser, category_id: int = Form(...)):
-    return _back("budgets", "Dismissed", inbox.dismiss(user["id"], f"{inbox.BUDGET_DISMISS_PREFIX}{category_id}"))
-
-
 @router.post("/inbox/bills/dismiss")
 def dismiss_bill(request: Request, user: CurrentUser, suggestion_key: str = Form(...)):
     return _back("bills", "Dismissed", inbox.dismiss(user["id"], suggestion_key))
 
 
 @router.post("/inbox/undo/{action_id}")
-def undo_action(request: Request, user: CurrentUser, action_id: int):
-    return redirect_with_message("/inbox", inbox.undo(user["id"], action_id))
+def undo_action(request: Request, user: CurrentUser, action_id: int, next: str = Form("/inbox")):
+    """Undo any recorded action, from whichever page showed its message."""
+    return redirect_with_message(next or "/inbox", inbox.undo(user["id"], action_id))
 
 
 @router.post("/inbox/restore")

@@ -1,4 +1,3 @@
-from typing import Optional
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
@@ -17,7 +16,6 @@ from services import (
     parse_optional_date,
     parse_optional_float,
     redirect_with_message,
-    set_category_budget,
     set_category_parent,
 )
 from web import CurrentUser, render
@@ -25,7 +23,7 @@ from web import CurrentUser, render
 router = APIRouter()
 
 
-def _parent_id(value: str) -> Optional[int]:
+def _parent_id(value: str):
     try:
         return int(value) if str(value).strip() else None
     except ValueError as exc:
@@ -105,24 +103,6 @@ def edit_category(request: Request, user: CurrentUser, category_id: int, name: s
     return redirect_with_message("/budget", "Category updated")
 
 
-@router.post("/categories/{category_id}/budget")
-def update_category_budget(
-    request: Request, user: CurrentUser, category_id: int, budget_amount: str = Form("")
-):
-    """Set or clear a category's explicit monthly budget. Blank clears it, which
-    hands the category back to a budget derived from its expected items."""
-    if not load_category_by_id(user["id"], category_id):
-        return redirect_with_message("/budget", "Category not found", is_error=True)
-
-    try:
-        amount: Optional[float] = parse_optional_float(budget_amount)
-        set_category_budget(user["id"], category_id, amount)
-    except ValueError as exc:
-        return redirect_with_message("/budget", str(exc), is_error=True)
-
-    return redirect_with_message("/budget", "Budget cleared" if amount is None else "Budget saved")
-
-
 @router.post("/categories/{category_id}/rules")
 def add_category_rule(
     request: Request, user: CurrentUser, category_id: int,
@@ -131,7 +111,11 @@ def add_category_rule(
     amount_max: str = Form(""),
     date_from: str = Form(""),
     date_to: str = Form(""),
+    next: str = Form(""),
 ):
+    """Add a description rule. From category edit it returns there; from the
+    rule prompt it returns to the prompt's page."""
+    target = next or f"/categories/{category_id}/edit"
     try:
         create_category_rule(
             user["id"], category_id, pattern,
@@ -139,9 +123,9 @@ def add_category_rule(
             date_from=parse_optional_date(date_from), date_to=parse_optional_date(date_to),
         )
     except ValueError as exc:
-        return redirect_with_message(f"/categories/{category_id}/edit", str(exc), is_error=True)
+        return redirect_with_message(target, str(exc), is_error=True)
 
-    return redirect_with_message(f"/categories/{category_id}/edit", "rule saved")
+    return redirect_with_message(target, "rule saved")
 
 
 @router.post("/categories/{category_id}/rules/{rule_id}/delete")

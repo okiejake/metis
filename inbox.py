@@ -316,12 +316,11 @@ def apply_transfer_rules(user_id: int) -> int:
     return sum(_apply_transfer(user_id, rule["merchant_key"], int(rule["id"]), cards) for rule in rules)
 
 
-# --- Dismiss and budgets ----------------------------------------------------
+# --- Dismiss ----------------------------------------------------------------
 
 # The inbox's own dismissals share dismissed_suggestions with the bill
 # suggestions, so one "Restore dismissed" brings every list's rows back.
 TRANSFER_DISMISS_PREFIX = "transfer:"
-BUDGET_DISMISS_PREFIX = "budget:"
 
 
 def suggestion_added(user_id: int, key: str) -> bool:
@@ -356,20 +355,6 @@ def _undo_dismiss(user_id: int, payload: Dict[str, Any]) -> None:
     )
 
 
-def confirm_budget(user_id: int, category_id: int, monthly: float) -> Optional[int]:
-    """Set a category's monthly budget. Returns the action id, or None when the
-    category does not exist."""
-    category = db.load_category_by_id(user_id, category_id)
-    if not category or category["budget_amount"] == monthly:
-        return None
-    db.set_category_budget(user_id, category_id, monthly)
-    return record_action(user_id, "budget", {"category_id": category_id, "before": category["budget_amount"]})
-
-
-def _undo_budget(user_id: int, payload: Dict[str, Any]) -> None:
-    db.set_category_budget(user_id, int(payload["category_id"]), payload["before"])
-
-
 def _undo_bill(user_id: int, payload: Dict[str, Any]) -> None:
     """Remove a bill added from a suggestion, so it is suggested again."""
     bill_id = int(payload["bill_id"])
@@ -390,58 +375,51 @@ def _undo_bill(user_id: int, payload: Dict[str, Any]) -> None:
         )
 
 
-_UNDO.update({"dismiss": _undo_dismiss, "budget": _undo_budget, "bill": _undo_bill})
+# --- Undoing a settle choice (see settle.py) -----------------------------------
 
 
-def suggested_budget(monthly: List[float]) -> Optional[float]:
-    """The median month, rounded up to the nearest 10. None when there is no
-    history or the median month had no spending."""
-    if not monthly:
-        return None
-    middle = db._median([float(m) for m in monthly])
-    if middle <= 0:
-        return None
-    return float(-(-middle // 10) * 10)
+def _restore_mark(user_id: int, tx_id: int, marked: Any) -> None:
+    db.execute("UPDATE imported_transactions SET unexpected = ? WHERE id = ? AND user_id = ?",
+               [bool(marked), tx_id, user_id])
 
 
-# --- The four lists ---------------------------------------------------------
+def _undo_match(user_id: int, payload: Dict[str, Any]) -> None:
+    tx_id = int(payload["tx_id"])
+    db.execute("DELETE FROM expected_reconciliations WHERE user_id = ? AND imported_transaction_id = ?",
+               [user_id, tx_id])
+    _restore_mark(user_id, tx_id, payload.get("was_unexpected"))
+
+
+def _undo_unmatch(user_id: int, payload: Dict[str, Any]) -> None:
+    db.confirm_reconciliation(user_id, payload["source_type"], int(payload["source_id"]), int(payload["tx_id"]),
+                              matched_via=payload.get("matched_via") or "confirm")
+
+
+def _undo_one_time(user_id: int, payload: Dict[str, Any]) -> None:
+    import expected_form as ef
+
+    item_id = int(payload["item_id"])
+    linked = db.fetch_all("SELECT imported_transaction_id FROM expected_reconciliations "
+                          "WHERE user_id = ? AND source_type = 'one_time' AND source_id = ?", [user_id, item_id])
+    ef.delete_item(user_id, "one_time", item_id)
+    for (tx_id,) in linked:
+        _restore_mark(user_id, int(tx_id), payload.get("was_unexpected"))
+
+
+def _undo_unexpected(user_id: int, payload: Dict[str, Any]) -> None:
+    _restore_mark(user_id, int(payload["tx_id"]), payload.get("before"))
+
+
+_UNDO.update({"dismiss": _undo_dismiss, "bill": _undo_bill, "match": _undo_match, "unmatch": _undo_unmatch,
+              "one_time": _undo_one_time, "unexpected": _undo_unexpected})
+
+
+# --- The lists ----------------------------------------------------------------
 
 
 def _mode(values: List[Any]) -> Any:
     values = [v for v in values if v is not None]
     return db._mode(values) if values else None
-
-
-def _recent_months(user_id: int, today: date) -> List[tuple]:
-    """Up to six complete calendar months before today, starting no earlier
-    than the month of the first imported row. Each is (first day, last day)."""
-    row = db.fetch_one("SELECT MIN(tx_date) FROM imported_transactions WHERE user_id = ?", [user_id])
-    first = db._as_date(row[0]) if row and row[0] else None
-    if first is None:
-        return []
-    months = []
-    end = today.replace(day=1) - timedelta(days=1)
-    while len(months) < 6:
-        start = end.replace(day=1)
-        if start < first.replace(day=1):
-            break
-        months.append((start, end))
-        end = start - timedelta(days=1)
-    return months
-
-
-def _monthly_by_category(user_id: int, today: date) -> Dict[int, List[float]]:
-    months = _recent_months(user_id, today)
-    if not months:
-        return {}
-    totals: Dict[int, List[float]] = {}
-    index = {start: i for i, (start, _end) in enumerate(months)}
-    for part in db.spending_parts(user_id, months[-1][0], months[0][1]):
-        if part["category_id"] is None:
-            continue
-        series = totals.setdefault(part["category_id"], [0.0] * len(months))
-        series[index[part["tx_date"].replace(day=1)]] += part["spent"]
-    return totals
 
 
 def _transfer_rows(user_id: int, window_start: date, window_end: date,
@@ -520,27 +498,6 @@ def _category_rows(user_id: int, parts: List[Dict[str, Any]], skip: Set[str]) ->
     return sorted(listed, key=lambda r: r["total"], reverse=True)
 
 
-def _budget_rows(user_id: int, window_start: date, window_end: date, dismissed: Set[str]) -> List[Dict[str, Any]]:
-    summary = db.build_budget_summary(user_id, window_start, window_end)
-    monthly = _monthly_by_category(user_id, date.today())
-    listed = []
-    for category in summary["categories"]:
-        category_id = category.get("id")
-        if (not category_id or category["has_target"] or category["actual"] <= 0.005
-                or f"{BUDGET_DISMISS_PREFIX}{category_id}" in dismissed):
-            continue
-        series = monthly.get(int(category_id), [])
-        listed.append({
-            "category_id": int(category_id),
-            "name": category["name"],
-            "color": category["color"],
-            "typical": round(db._median(series), 2) if series else None,
-            "suggested": suggested_budget(series),
-            "actual": category["actual"],
-        })
-    return sorted(listed, key=lambda r: r["actual"], reverse=True)
-
-
 # --- Stale accounts ---------------------------------------------------------
 
 STALE_DISMISS_PREFIX = "stale:"
@@ -595,7 +552,6 @@ def build_inbox(user_id: int, window_start: date, window_end: date) -> Dict[str,
     dismissed = db.load_dismissed_suggestion_keys(user_id)
     transfers = _transfer_rows(user_id, window_start, window_end, decided, dismissed)
     categories = _category_rows(user_id, parts, {row["key"] for row in transfers})
-    budgets = _budget_rows(user_id, window_start, window_end, dismissed)
     bills = db.detect_bill_suggestions(user_id)
     imports = stale_accounts(user_id, date.today())
     negative = db.first_projected_negative(user_id, window_start, window_end)
@@ -606,9 +562,8 @@ def build_inbox(user_id: int, window_start: date, window_end: date) -> Dict[str,
         "imports": imports,
         "transfers": transfers,
         "categories": categories,
-        "budgets": budgets,
         "bills": bills,
-        "waiting": len(alerts) + len(imports) + len(transfers) + len(categories) + len(budgets) + len(bills),
+        "waiting": len(alerts) + len(imports) + len(transfers) + len(categories) + len(bills),
     }
 
 
@@ -631,7 +586,7 @@ def _data_stamp(user_id: int) -> tuple:
           (SELECT COUNT(*) FROM dismissed_suggestions WHERE user_id = ?),
           (SELECT COUNT(*) FROM bills WHERE user_id = ?),
           (SELECT COUNT(*) FROM categories WHERE user_id = ?),
-          (SELECT SUM(budget_amount) FROM categories WHERE user_id = ?),
+          (SELECT SUM(CAST(unexpected AS INTEGER)) FROM imported_transactions WHERE user_id = ?),
           (SELECT COUNT(*) FROM transaction_splits WHERE user_id = ?),
           (SELECT COUNT(*) FROM expected_reconciliations WHERE user_id = ?),
           (SELECT COUNT(*) FROM accounts WHERE user_id = ?),

@@ -29,6 +29,7 @@
         }
 
         document.documentElement.setAttribute('data-theme', preferredTheme);
+        document.documentElement.classList.add('has-script');
       })();
     </script>
     <link rel="stylesheet" href="{{ base_path() }}/static/styles.css?v=20261114a" />
@@ -103,6 +104,7 @@
         {{ message }}
         {% if undo_id and not is_error %}
         <form method="post" action="{{ base_path() }}/inbox/undo/{{ undo_id }}" class="inline-form flash-undo">
+          <input type="hidden" name="next" value="{{ page_address(request) }}" />
           <button type="submit" class="button-link">undo</button>
         </form>
         {% endif %}
@@ -117,6 +119,7 @@
     <script src="{{ base_path() }}/static/date-range.js?v=20261113h" defer></script>
     <script src="{{ base_path() }}/static/theme.js?v=20261113a" defer></script>
     <script src="{{ base_path() }}/static/category-picker.js?v=20261114a" defer></script>
+    <script src="{{ base_path() }}/static/partial.js?v=20261114a" defer></script>
     {% endif %}
     <script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js"></script>
     <script>

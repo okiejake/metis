@@ -274,11 +274,31 @@ def _bill_source_type(conn: duckdb.DuckDBPyConnection) -> None:
         conn.execute(f"UPDATE {table} SET source_type = 'bill' WHERE source_type = 'recurring'")
 
 
+CATEGORIES_TABLE = """
+    CREATE TABLE categories (
+        id BIGINT PRIMARY KEY DEFAULT nextval('categories_id_seq'),
+        name TEXT NOT NULL,
+        color TEXT NOT NULL DEFAULT '#64748b',
+        user_id BIGINT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        parent_id BIGINT
+    )
+"""
+
+
 def _category_parents(conn: duckdb.DuckDBPyConnection) -> None:
-    """A category may sit under one parent (#100). Every existing category
-    stays top-level."""
-    if "parent_id" not in _columns(conn, "categories"):
-        conn.execute("ALTER TABLE categories ADD COLUMN parent_id BIGINT")
+    """A category may sit under one parent (#100); every existing category stays
+    top-level. A category's budget is now its expected transactions (#104), so
+    the hand-set budget goes, with the recorded actions that set one and the
+    inbox's budget dismissals."""
+    if "budget_amount" in _columns(conn, "categories"):
+        _replace(conn, "categories", "categories", CATEGORIES_TABLE,
+                 "INSERT INTO categories (id, name, color, user_id, created_at) "
+                 "SELECT id, name, COALESCE(color, '#64748b'), user_id, created_at FROM {source}")
+    if _exists(conn, "inbox_actions"):
+        conn.execute("DELETE FROM inbox_actions WHERE kind = 'budget'")
+    if _exists(conn, "dismissed_suggestions"):
+        conn.execute("DELETE FROM dismissed_suggestions WHERE suggestion_key LIKE 'budget:%'")
 
 
 TRANSFER_RULES_TABLE = """
