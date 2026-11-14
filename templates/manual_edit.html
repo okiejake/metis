@@ -37,7 +37,7 @@
       <select name="category_id">
         <option value="">no category</option>
         {% for category in categories %}
-        <option value="{{ category.id }}" {{ 'selected' if tx.category_id == category.id else '' }}>{{ category.name }}</option>
+        <option value="{{ category.id }}" {{ 'selected' if tx.category_id == category.id else '' }}>{% filter lower %}{{ category.name }}{% endfilter %}</option>
         {% endfor %}
       </select>
     </label>

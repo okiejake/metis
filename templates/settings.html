@@ -135,7 +135,7 @@
       form.addEventListener('submit', (event) => {
         const expectedName = form.dataset.userName || '';
         const typedName = window.prompt(
-          `type "${expectedName}" to permanently delete this user and all of their data.`,
+          `type "${expectedName.toLowerCase()}" to permanently delete this user and all of their data.`,
           '',
         );
         if (typedName === null) {
@@ -143,7 +143,8 @@
           return;
         }
         const normalizedTypedName = typedName.trim();
-        if (normalizedTypedName !== expectedName) {
+        // Names show in lower case, so the check ignores case.
+        if (normalizedTypedName.toLowerCase() !== expectedName.toLowerCase()) {
           event.preventDefault();
           window.alert('name did not match. user was not deleted.');
           return;

@@ -51,7 +51,7 @@
       <select name="category_id">
         <option value="">no category</option>
         {% for category in categories %}
-        <option value="{{ category.id }}" {{ 'selected' if item.category_id == category.id else '' }}>{{ category.name }}</option>
+        <option value="{{ category.id }}" {{ 'selected' if item.category_id == category.id else '' }}>{% filter lower %}{{ category.name }}{% endfilter %}</option>
         {% endfor %}
       </select>
     </label>
@@ -61,7 +61,7 @@
       <select name="account_id">
         <option value="">unassigned (immediate)</option>
         {% for account in accounts %}
-        <option value="{{ account.id }}" {{ 'selected' if item.account_id == account.id else '' }}>{{ account.name }}{{ ' (card)' if account.account_type == 'credit_card' else '' }}</option>
+        <option value="{{ account.id }}" {{ 'selected' if item.account_id == account.id else '' }}>{% filter lower %}{{ account.name }}{{ ' (card)' if account.account_type == 'credit_card' else '' }}{% endfilter %}</option>
         {% endfor %}
       </select>
     </label>

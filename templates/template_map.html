@@ -42,7 +42,7 @@
         <select name="date_format">
           <option value="">choose…</option>
           {% for fmt, example in date_formats %}
-          <option value="{{ fmt }}"{{ ' selected' if fmt == v.date_format else '' }}>{{ example }}</option>
+          <option value="{{ fmt }}"{{ ' selected' if fmt == v.date_format else '' }}>{% filter lower %}{{ example }}{% endfilter %}</option>
           {% endfor %}
         </select>
       </label>

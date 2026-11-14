@@ -76,10 +76,25 @@ body {
 
 body {
   margin: 0;
+  /* Lower case everything shown, data included (#24). Display only: what is
+     stored keeps its case. Passwords are the one exception. */
+  text-transform: lowercase;
   font-family: "Manrope", "Segoe UI", sans-serif;
   color: var(--text);
   background: linear-gradient(168deg, var(--surface-solid) 0%, var(--bg) 48%, var(--bg-soft) 100%);
   position: relative;
+}
+
+/* Form controls don't inherit text-transform by default. */
+input,
+select,
+textarea,
+button {
+  text-transform: inherit;
+}
+
+input[type="password"] {
+  text-transform: none;
 }
 
 body.is-ready .container > * {
@@ -243,7 +258,6 @@ body.is-ready .container > *:nth-child(4) {
   font-size: 0.72rem;
   font-weight: 700;
   letter-spacing: 0.08em;
-  text-transform: none;
 }
 
 .range-segments {
@@ -642,7 +656,6 @@ body.is-ready .container > *:nth-child(4) {
   margin: 0;
   font-size: 0.74rem;
   letter-spacing: 0.09em;
-  text-transform: none;
   font-weight: 700;
   color: var(--muted);
 }
@@ -795,7 +808,6 @@ body.is-ready .container > *:nth-child(4) {
   margin: 0;
   font-size: 0.73rem;
   letter-spacing: 0.08em;
-  text-transform: none;
   font-weight: 800;
   color: var(--primary);
 }
@@ -916,7 +928,6 @@ body.is-ready .container > *:nth-child(4) {
   font-size: 0.81rem;
   font-weight: 700;
   letter-spacing: 0.012em;
-  text-transform: none;
 }
 
 .card p {
@@ -1403,7 +1414,6 @@ tbody tr:hover {
   color: var(--primary-ink);
   font-size: 0.74rem;
   font-weight: 700;
-  text-transform: none;
 }
 
 .table-pill.success {
@@ -2252,7 +2262,6 @@ body.amounts-hidden .amount-sensitive {
   color: var(--muted);
   font-size: 0.8rem;
   font-weight: 700;
-  text-transform: none;
   letter-spacing: 0.02em;
 }
 
@@ -2313,7 +2322,6 @@ body.amounts-hidden .amount-sensitive {
   font-size: 0.78rem;
   font-weight: 700;
   color: var(--muted);
-  text-transform: none;
   letter-spacing: 0.02em;
 }
 .inline-balance-label input {
@@ -2358,7 +2366,6 @@ body.amounts-hidden .amount-sensitive {
   font-size: 0.76rem;
   font-weight: 800;
   letter-spacing: 0.04em;
-  text-transform: none;
   color: var(--accent);
 }
 .panel-hint {

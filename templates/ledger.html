@@ -180,7 +180,7 @@
                 <select name="category_id">
                   <option value="">no category</option>
                   {% for category in categories %}
-                  <option value="{{ category.id }}">{{ category.name }}</option>
+                  <option value="{{ category.id }}">{% filter lower %}{{ category.name }}{% endfilter %}</option>
                   {% endfor %}
                 </select>
               </label>

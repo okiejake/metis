@@ -37,7 +37,7 @@
               <select name="category_id">
                 <option value="">remove this part</option>
                 {% for category in categories %}
-                <option value="{{ category.id }}" {{ 'selected' if category.id == split.category_id else '' }}>{{ category.name }}</option>
+                <option value="{{ category.id }}" {{ 'selected' if category.id == split.category_id else '' }}>{% filter lower %}{{ category.name }}{% endfilter %}</option>
                 {% endfor %}
               </select>
             </td>
@@ -50,7 +50,7 @@
               <select name="category_id">
                 <option value="">choose a category</option>
                 {% for category in categories %}
-                <option value="{{ category.id }}">{{ category.name }}</option>
+                <option value="{{ category.id }}">{% filter lower %}{{ category.name }}{% endfilter %}</option>
                 {% endfor %}
               </select>
             </td>

@@ -25,7 +25,7 @@
 <select name="{{ field }}" class="category-picker"{% if extras %} data-category-picker{% endif %}>
   <option value="">no category</option>
   {% for category in categories %}
-  <option value="{{ category.id }}" {{ 'selected' if category.id == selected else '' }}>{{ category.name }}</option>
+  <option value="{{ category.id }}" {{ 'selected' if category.id == selected else '' }}>{% filter lower %}{{ category.name }}{% endfilter %}</option>
   {% endfor %}
   {% if extras and transfer %}
   <option value="transfer">transfer</option>
@@ -82,7 +82,7 @@
     <option value="semimonthly" {{ 'selected' if s.frequency_type == 'semimonthly' else '' }}>semi-monthly</option>
     <option value="monthly" {{ 'selected' if s.frequency_type == 'monthly' else '' }}>monthly</option>
     <option value="yearly" {{ 'selected' if s.frequency_type == 'yearly' else '' }}>yearly</option>
-    <option value="every_x_months" {{ 'selected' if s.frequency_type == 'every_x_months' else '' }}>every {{ s.interval_months }} months</option>
+    <option value="every_x_months" {{ 'selected' if s.frequency_type == 'every_x_months' else '' }}>{% filter lower %}every {{ s.interval_months }} months{% endfilter %}</option>
   </select>
 </label>
 <label class="suggestion-field">
@@ -90,7 +90,7 @@
   <select name="account_id">
     <option value="">unassigned (immediate)</option>
     {% for account in accounts %}
-    <option value="{{ account.id }}" {{ 'selected' if account.id == s.account_id else '' }}>{{ account.name }}{{ ' (card)' if account.account_type == 'credit_card' else '' }}</option>
+    <option value="{{ account.id }}" {{ 'selected' if account.id == s.account_id else '' }}>{% filter lower %}{{ account.name }}{{ ' (card)' if account.account_type == 'credit_card' else '' }}{% endfilter %}</option>
     {% endfor %}
   </select>
 </label>
@@ -112,9 +112,9 @@
 {# A picker of a CSV's columns, for mapping a template. #}
 {% macro column_select(field, header, selected=None, optional=False, required=False) -%}
 <select name="{{ field }}"{{ ' required' if required else '' }}>
-  <option value="">{{ 'none' if optional else 'choose…' }}</option>
+  <option value="">{% filter lower %}{{ 'none' if optional else 'choose…' }}{% endfilter %}</option>
   {% for column in header %}
-  <option value="{{ column }}"{{ ' selected' if column == selected else '' }}>{{ column }}</option>
+  <option value="{{ column }}"{{ ' selected' if column == selected else '' }}>{% filter lower %}{{ column }}{% endfilter %}</option>
   {% endfor %}
 </select>
 {%- endmacro %}
@@ -174,7 +174,7 @@
       <select name="template_id" required>
         <option value="">choose…</option>
         {% for t in templates %}
-        <option value="{{ t.id }}">{{ t.name }}</option>
+        <option value="{{ t.id }}">{% filter lower %}{{ t.name }}{% endfilter %}</option>
         {% endfor %}
       </select>
     </label>

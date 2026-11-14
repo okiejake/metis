@@ -16,7 +16,7 @@
         profile
         <select name="user_id" required>
           {% for candidate in pending_users %}
-          <option value="{{ candidate.id }}">{{ candidate.display_name }}</option>
+          <option value="{{ candidate.id }}">{% filter lower %}{{ candidate.display_name }}{% endfilter %}</option>
           {% endfor %}
         </select>
       </label>

@@ -119,7 +119,7 @@
               <input type="hidden" name="label" value="{{ item.label }}" />
               <select name="account_id" required>
                 <option value="" disabled selected>choose…</option>
-                {% for acct in accounts %}<option value="{{ acct.id }}">{{ acct.name }}</option>{% endfor %}
+                {% for acct in accounts %}<option value="{{ acct.id }}">{% filter lower %}{{ acct.name }}{% endfilter %}</option>{% endfor %}
               </select>
               <button type="submit" class="button-link">move</button>
             </form>

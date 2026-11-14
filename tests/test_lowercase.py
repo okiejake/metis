@@ -26,3 +26,27 @@ def copy_with_capitals(source):
 @pytest.mark.parametrize("template", TEMPLATES, ids=lambda path: path.name)
 def test_template_copy_is_lower_case(template):
     assert copy_with_capitals(template.read_text()) == []
+
+
+CSS = (Path(__file__).resolve().parent.parent / "static" / "styles.css").read_text()
+
+
+def test_everything_shown_is_lower_case_except_passwords():
+    """One CSS rule lowercases every displayed word (data included) without
+    changing what is stored; passwords keep their case."""
+    assert re.search(r"\nbody \{[^}]*text-transform:\s*lowercase", CSS)
+    assert re.search(r"input,\s*select,\s*textarea,\s*button \{[^}]*text-transform:\s*inherit", CSS)
+    assert re.search(r'input\[type="password"\] \{[^}]*text-transform:\s*none', CSS)
+
+
+def test_no_rule_turns_lower_case_back_off():
+    rules = re.findall(r"([^{}]+)\{[^}]*text-transform:\s*(none|uppercase|capitalize)", CSS)
+    assert [selector.strip() for selector, _ in rules] == ['input[type="password"]']
+
+
+@pytest.mark.parametrize("template", TEMPLATES, ids=lambda path: path.name)
+def test_dropdown_options_showing_data_are_lowered_at_the_source(template):
+    """Native dropdown menus ignore CSS text-transform."""
+    for text in re.findall(r"<option[^>]*>(.*?)</option>", template.read_text(), re.S):
+        if "{{" in text:
+            assert text.startswith("{% filter lower %}") and text.endswith("{% endfilter %}"), text

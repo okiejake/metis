@@ -42,7 +42,7 @@
       <select name="default_template_id">
         <option value="">none</option>
         {% for t in templates %}
-        <option value="{{ t.id }}"{{ ' selected' if t.id == account.default_template_id else '' }}>{{ t.name }}</option>
+        <option value="{{ t.id }}"{{ ' selected' if t.id == account.default_template_id else '' }}>{% filter lower %}{{ t.name }}{% endfilter %}</option>
         {% endfor %}
       </select>
     </label>

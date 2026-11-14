@@ -417,14 +417,14 @@
         for (let y = firstYear; y <= lastYear; y += 1) {
           const group = el('optgroup', { label: String(y) });
           MONTH_SHORT.forEach((name, i) => {
-            group.appendChild(el('option', { value: `${y}-${pad(i + 1)}`, text: `${name} ${y}` }));
+            group.appendChild(el('option', { value: `${y}-${pad(i + 1)}`, text: `${name} ${y}`.toLowerCase() }));
           });
           groups.push(group);
         }
       } else if (grain === 'quarter') {
         for (let y = firstYear; y <= lastYear; y += 1) {
           const group = el('optgroup', { label: String(y) });
-          [1, 2, 3, 4].forEach((q) => group.appendChild(el('option', { value: `${y}-Q${q}`, text: `Q${q} ${y}` })));
+          [1, 2, 3, 4].forEach((q) => group.appendChild(el('option', { value: `${y}-Q${q}`, text: `q${q} ${y}` })));
           groups.push(group);
         }
       } else if (grain === 'year') {
@@ -550,7 +550,7 @@
         const response = await fetch(`${base}/window/saved`, { method: 'POST', body });
         const data = await response.json();
         if (!response.ok) {
-          window.alert(data.error || 'that filter could not be saved');
+          window.alert((data.error || 'that filter could not be saved').toLowerCase());
           return;
         }
         savedFilters = [data, ...savedFilters];
@@ -561,7 +561,7 @@
     }
 
     async function deleteSaved(item) {
-      if (!window.confirm(`delete "${item.name}"?`)) return;
+      if (!window.confirm(`delete "${item.name}"?`.toLowerCase())) return;
       try {
         const response = await fetch(`${base}/window/saved/${item.id}/delete`, { method: 'POST' });
         if (!response.ok && response.status !== 404) {

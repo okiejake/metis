@@ -116,4 +116,4 @@ Mark these off as we complete them.
          Metis properties.
          - Open question: do we need different properties for different account types?
 
-- [ ] **Lower case everything.**
+- [x] **Lower case everything.**

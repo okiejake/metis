@@ -184,7 +184,7 @@
       <select name="category_id">
         <option value="">no category</option>
         {% for category in categories %}
-        <option value="{{ category.id }}">{{ category.name }}</option>
+        <option value="{{ category.id }}">{% filter lower %}{{ category.name }}{% endfilter %}</option>
         {% endfor %}
       </select>
     </label>
@@ -193,7 +193,7 @@
       <select name="account_id">
         <option value="">unassigned (immediate)</option>
         {% for account in accounts %}
-        <option value="{{ account.id }}">{{ account.name }}{{ ' (card)' if account.account_type == 'credit_card' else '' }}</option>
+        <option value="{{ account.id }}">{% filter lower %}{{ account.name }}{{ ' (card)' if account.account_type == 'credit_card' else '' }}{% endfilter %}</option>
         {% endfor %}
       </select>
     </label>
@@ -259,7 +259,7 @@
       <select name="category_id">
         <option value="">no category</option>
         {% for category in categories %}
-        <option value="{{ category.id }}">{{ category.name }}</option>
+        <option value="{{ category.id }}">{% filter lower %}{{ category.name }}{% endfilter %}</option>
         {% endfor %}
       </select>
     </label>
@@ -268,7 +268,7 @@
       <select name="account_id">
         <option value="">unassigned (immediate)</option>
         {% for account in accounts %}
-        <option value="{{ account.id }}">{{ account.name }}{{ ' (card)' if account.account_type == 'credit_card' else '' }}</option>
+        <option value="{{ account.id }}">{% filter lower %}{{ account.name }}{{ ' (card)' if account.account_type == 'credit_card' else '' }}{% endfilter %}</option>
         {% endfor %}
       </select>
     </label>
