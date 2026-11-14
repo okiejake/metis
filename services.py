@@ -415,6 +415,7 @@ def delete_user_and_data(user_id: int) -> None:
         conn.execute("DELETE FROM expected_match_rules WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM category_rules WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM transaction_splits WHERE user_id = ?", [user_id])
+        conn.execute("DELETE FROM saved_ranges WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM sessions WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM card_statements WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM accounts WHERE user_id = ?", [user_id])
@@ -442,6 +443,7 @@ def init_db() -> None:
         conn.execute("CREATE SEQUENCE IF NOT EXISTS card_statements_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS merchant_decisions_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS review_actions_id_seq START 1")
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS saved_ranges_id_seq START 1")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -588,6 +590,17 @@ def init_db() -> None:
                 created_at TIMESTAMP NOT NULL DEFAULT NOW(),
                 expires_at TIMESTAMP NOT NULL,
                 last_seen_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS saved_ranges (
+                id BIGINT PRIMARY KEY DEFAULT nextval('saved_ranges_id_seq'),
+                user_id BIGINT NOT NULL,
+                name TEXT NOT NULL,
+                rule TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW()
             )
             """
         )
@@ -1388,6 +1401,50 @@ def resolve_forecast_window(
     if window_end < window_start:
         window_start, window_end = window_end, window_start
     return window_start, window_end, invalid_filter
+
+
+def _saved_range_row(row: tuple) -> Optional[Dict[str, Any]]:
+    range_id, name, raw_rule, created_at = row
+    try:
+        rule = rule_from_saved(json.loads(raw_rule))
+    except json.JSONDecodeError:
+        rule = None
+    if not rule:
+        return None
+    return {"id": int(range_id), "name": name, "created": created_at.date().isoformat(), "rule": rule_to_saved(rule)}
+
+
+def load_saved_ranges(user_id: int) -> List[Dict[str, Any]]:
+    """A user's saved date filters, newest first. Rows whose rule no longer
+    reads are left out rather than breaking the picker."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, name, rule, created_at FROM saved_ranges WHERE user_id = ? ORDER BY created_at DESC, id DESC",
+            [user_id],
+        ).fetchall()
+    return [saved for saved in map(_saved_range_row, rows) if saved]
+
+
+def saved_range_name_taken(user_id: int, name: str) -> bool:
+    row = fetch_one("SELECT 1 FROM saved_ranges WHERE user_id = ? AND lower(name) = lower(?)", [user_id, name])
+    return row is not None
+
+
+def save_saved_range(user_id: int, name: str, rule: RangeRule) -> Dict[str, Any]:
+    with get_connection() as conn:
+        row = conn.execute(
+            "INSERT INTO saved_ranges (user_id, name, rule) VALUES (?, ?, ?) RETURNING id, name, rule, created_at",
+            [user_id, name, json.dumps(rule_to_saved(rule))],
+        ).fetchone()
+    return _saved_range_row(row)
+
+
+def delete_saved_range(user_id: int, range_id: int) -> bool:
+    with get_connection() as conn:
+        row = conn.execute(
+            "DELETE FROM saved_ranges WHERE id = ? AND user_id = ? RETURNING id", [range_id, user_id]
+        ).fetchone()
+    return row is not None
 
 
 def range_first_year(user_id: int, today: date) -> int:

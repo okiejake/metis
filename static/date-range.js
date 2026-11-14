@@ -113,6 +113,13 @@
     return { grain, mode, start: relativeOffset(grain, start, today), end: relativeOffset(grain, end, today) };
   }
 
+  // Two rules are the same filter when grain, mode and both ends match.
+  function sameRule(a, b) {
+    if (!a || !b || a.grain !== b.grain || a.mode !== b.mode) return false;
+    if (a.mode === 'relative') return Number(a.start) === Number(b.start) && Number(a.end) === Number(b.end);
+    return String(a.start) === String(b.start) && String(a.end) === String(b.end);
+  }
+
   // A typed relative offset: "3", "+3", "-3" or "−3". Anything else is null.
   function parseOffset(text) {
     const match = /^([+\-−]?)(\d+)$/.exec(String(text).trim());
@@ -166,6 +173,7 @@
     convertRule,
     stepLabel,
     parseOffset,
+    sameRule,
     monthsTouched,
     previewView,
     quarterRows,
@@ -358,6 +366,15 @@
       savedRule = { grain: 'month', mode: 'relative', start: -3, end: 3 };
     }
     let rule = savedRule;
+    let savedFilters;
+    try {
+      savedFilters = JSON.parse(dialog.dataset.saved || '[]');
+    } catch (error) {
+      savedFilters = [];
+    }
+    const base = dialog.dataset.base || '';
+    const savedWrap = document.getElementById('range-saved');
+    const savedList = document.getElementById('range-saved-list');
 
     // A page reached through a dated link opens on that link's dates.
     function openingRule() {
@@ -481,7 +498,65 @@
       }
     }
 
+    // Saved filters: click to load (Apply still commits), delete in place.
+    function renderSaved() {
+      savedWrap.hidden = savedFilters.length === 0;
+      savedList.replaceChildren(...savedFilters.map((item) => {
+        const load = el('button', {
+          type: 'button', className: 'range-saved-name neu-press', 'aria-pressed': sameRule(item.rule, rule) ? 'true' : 'false',
+        }, [el('span', { text: item.name }), el('span', { className: 'range-saved-created', text: item.created })]);
+        load.addEventListener('click', () => {
+          rule = { ...item.rule };
+          render();
+        });
+        const remove = el('button', {
+          type: 'button', className: 'icon-button range-saved-delete', 'aria-label': `delete ${item.name}`, title: `delete ${item.name}`,
+        }, [el('i', { 'data-lucide': 'x', className: 'menu-icon', 'aria-hidden': 'true' })]);
+        remove.addEventListener('click', () => deleteSaved(item));
+        return el('li', { className: 'range-saved-row' }, [load, remove]);
+      }));
+      if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+    }
+
+    async function saveCurrent() {
+      const name = window.prompt('name this filter');
+      if (name === null || !name.trim()) return;
+      const body = new URLSearchParams({
+        name, grain: rule.grain, mode: rule.mode, start: String(rule.start), end: String(rule.end),
+      });
+      try {
+        const response = await fetch(`${base}/window/saved`, { method: 'POST', body });
+        const data = await response.json();
+        if (!response.ok) {
+          window.alert(data.error || 'that filter could not be saved');
+          return;
+        }
+        savedFilters = [data, ...savedFilters];
+        renderSaved();
+      } catch (error) {
+        window.alert('that filter could not be saved');
+      }
+    }
+
+    async function deleteSaved(item) {
+      if (!window.confirm(`delete "${item.name}"?`)) return;
+      try {
+        const response = await fetch(`${base}/window/saved/${item.id}/delete`, { method: 'POST' });
+        if (!response.ok && response.status !== 404) {
+          window.alert('that filter could not be deleted');
+          return;
+        }
+        savedFilters = savedFilters.filter((other) => other.id !== item.id);
+        renderSaved();
+      } catch (error) {
+        window.alert('that filter could not be deleted');
+      }
+    }
+
+    document.getElementById('range-save').addEventListener('click', saveCurrent);
+
     function render() {
+      renderSaved();
       segments.forEach((button) => button.setAttribute('aria-pressed', button.dataset.grain === rule.grain ? 'true' : 'false'));
       modeRadios.forEach((radio) => {
         radio.checked = radio.value === rule.mode;

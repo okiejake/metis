@@ -442,6 +442,56 @@ body.is-ready .container > *:nth-child(4) {
   color: var(--neu-text);
 }
 
+.range-saved-list {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.range-saved-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.range-saved-name {
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  padding: 0.4rem 0.7rem;
+  border-radius: 0.7rem;
+  font-size: 0.8rem;
+}
+
+.range-saved-name span:first-child {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.range-saved-created {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--neu-text);
+}
+
+.range-saved-delete {
+  width: 1.8rem;
+  height: 1.8rem;
+}
+
+.range-save {
+  justify-self: start;
+  padding: 0.45rem 1.2rem;
+  border-radius: 999px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .neu-press {
     transition: none;

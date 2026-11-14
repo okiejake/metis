@@ -1,7 +1,7 @@
 {# The header date range popup. static/date-range.js drives it; POST /window saves it. #}
 <dialog id="range-dialog" class="range-dialog neu-raised" aria-labelledby="range-label"
         data-rule='{{ range_rule|tojson }}' data-today="{{ range_today }}"
-        data-first-year="{{ range_first_year }}" data-start="{{ range_start }}" data-end="{{ range_end }}">
+        data-first-year="{{ range_first_year }}" data-saved='{{ range_saved|tojson }}' data-base="{{ base_path() }}" data-start="{{ range_start }}" data-end="{{ range_end }}">
   <form method="post" action="{{ base_path() }}/window" class="range-form">
     <input type="hidden" name="grain" value="{{ range_rule.grain }}" />
     <input type="hidden" name="start" value="{{ range_rule.start }}" />
@@ -20,6 +20,11 @@
 
     <div class="range-body">
       <div class="range-panel" id="range-panel">
+        <div class="range-fieldset" id="range-saved" hidden>
+          <span class="range-legend">saved</span>
+          <ul class="range-saved-list" id="range-saved-list"></ul>
+        </div>
+
         <fieldset class="range-fieldset">
           <legend>grain</legend>
           <div class="range-segments" role="group" aria-label="grain">
@@ -45,6 +50,8 @@
           <span class="range-legend">end</span>
           <div id="range-end-control"></div>
         </div>
+
+        <button type="button" class="range-save neu-press" id="range-save">save</button>
       </div>
 
       <div class="range-preview" id="range-preview" aria-hidden="true"></div>

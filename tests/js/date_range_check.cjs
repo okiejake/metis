@@ -68,6 +68,12 @@ check('parseOffset junk', dr.parseOffset('abc'), null);
 check('parseOffset empty', dr.parseOffset(''), null);
 check('parseOffset decimal', dr.parseOffset('1.5'), null);
 
+const rel = { grain: 'month', mode: 'relative', start: -3, end: 3 };
+check('sameRule equal', dr.sameRule(rel, { grain: 'month', mode: 'relative', start: -3, end: 3 }), true);
+check('sameRule string vs number offsets', dr.sameRule(rel, { grain: 'month', mode: 'relative', start: '-3', end: '3' }), true);
+check('sameRule different mode', dr.sameRule(rel, { grain: 'month', mode: 'absolute', start: '2026-08', end: '2027-02' }), false);
+check('sameRule different end', dr.sameRule(rel, { grain: 'month', mode: 'relative', start: -3, end: 4 }), false);
+
 if (failures) {
   process.exit(1);
 }

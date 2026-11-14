@@ -7,7 +7,7 @@ from fastapi.templating import Jinja2Templates
 from review import review_waiting_count
 from date_range import format_range, resolve_rule, rule_to_saved
 from services import parse_iso_date
-from services import get_current_user, load_range_rule, range_first_year, template_context
+from services import get_current_user, load_range_rule, load_saved_ranges, range_first_year, template_context
 
 templates = Jinja2Templates(directory="templates")
 
@@ -46,4 +46,5 @@ def range_context(user_id: int, context: Dict[str, Any]) -> Dict[str, Any]:
         "range_label": format_range(parse_iso_date(range_start), parse_iso_date(range_end)),
         "range_today": today.isoformat(),
         "range_first_year": range_first_year(user_id, today),
+        "range_saved": load_saved_ranges(user_id),
     }
