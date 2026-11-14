@@ -17,6 +17,7 @@ import duckdb
 from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
 
+import migrations
 from base_path import configured_base_path
 from date_range import DEFAULT_RULE, RangeRule, resolve_rule, rule_from_saved, rule_to_saved
 from merchants import legacy_merchant_key, merchant_key
@@ -426,6 +427,10 @@ def delete_user_and_data(user_id: int) -> None:
 
 def init_db() -> None:
     with get_connection() as conn:
+        # A database with no users table was made just now, by this version.
+        new_database = not conn.execute(
+            "SELECT 1 FROM duckdb_tables() WHERE table_name = 'users'"
+        ).fetchone()
         conn.execute("CREATE SEQUENCE IF NOT EXISTS users_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS categories_id_seq START 1")
         conn.execute("CREATE SEQUENCE IF NOT EXISTS recurring_items_id_seq START 1")
@@ -883,6 +888,11 @@ def init_db() -> None:
                 """,
                 [f"user:{default_user_id}:{key}", value],
             )
+
+        if new_database:
+            migrations.record(conn, migrations.STEPS)
+        else:
+            migrations.run(conn, migrations.STEPS)
 
 
 def load_all_users() -> List[Dict[str, Any]]:

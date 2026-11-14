@@ -169,3 +169,33 @@ def quiet_imports(user_id):
 
     for row in review.stale_accounts(user_id, date.today()):
         review.dismiss(user_id, row["key"])
+
+
+V0_4_0_FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "schema_v0_4_0.sql")
+
+
+@pytest.fixture
+def v040(tmp_path, monkeypatch):
+    """A database in the v0.4.0 shape, holding the synthetic rows in
+    tests/fixtures/schema_v0_4_0.sql. init_db() has not run on it yet."""
+    monkeypatch.setattr(services, "DB_PATH", str(tmp_path / "v040.duckdb"))
+    with services.get_connection() as conn:
+        with open(V0_4_0_FIXTURE, encoding="utf-8") as handle:
+            conn.execute(handle.read())
+    return services
+
+
+def table_names(db):
+    return {row[0] for row in db.fetch_all("SELECT table_name FROM duckdb_tables()")}
+
+
+def snapshot(db):
+    """Everything in the database: each table's columns and rows, and the
+    indexes. Two equal snapshots mean nothing changed."""
+    tables = {}
+    for table in sorted(table_names(db)):
+        columns = [row[1] for row in db.fetch_all(f"PRAGMA table_info('{table}')")]
+        rows = db.fetch_all(f'SELECT * FROM "{table}"')
+        tables[table] = (columns, sorted(rows, key=repr))
+    indexes = sorted(row[0] for row in db.fetch_all("SELECT sql FROM duckdb_indexes()"))
+    return tables, indexes
