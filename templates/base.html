@@ -31,7 +31,7 @@
         document.documentElement.setAttribute('data-theme', preferredTheme);
       })();
     </script>
-    <link rel="stylesheet" href="{{ base_path() }}/static/styles.css?v=20261113h" />
+    <link rel="stylesheet" href="{{ base_path() }}/static/styles.css?v=20261113i" />
   </head>
   <body>
     <div class="app-glow app-glow-one" aria-hidden="true"></div>
@@ -55,6 +55,9 @@
           <button type="button" class="icon-button" id="amount-toggle-button" aria-label="hide amounts" title="hide amounts">
             <i data-lucide="eye-off" class="menu-icon" aria-hidden="true"></i>
           </button>
+          <button type="button" class="icon-button" id="theme-toggle" aria-label="theme: system" title="theme: system">
+            <i data-lucide="sun-moon" class="menu-icon" aria-hidden="true"></i>
+          </button>
         </div>
       </div>
     </header>
@@ -73,25 +76,6 @@
             <i data-lucide="x" class="menu-icon" aria-hidden="true"></i>
           </button>
         </div>
-
-        <label class="user-menu-theme">
-          theme
-          <select name="theme" id="theme-select" aria-label="theme selection">
-            <option value="light">light</option>
-            <option value="dark">dark</option>
-          </select>
-        </label>
-
-        <a href="{{ base_path() }}/settings?section=user-management" class="user-menu-action">
-          <i data-lucide="settings-2" class="menu-icon" aria-hidden="true"></i>
-          settings
-        </a>
-        <form method="post" action="{{ base_path() }}/logout">
-          <button type="submit" class="user-menu-action buttonless">
-            <i data-lucide="log-out" class="menu-icon" aria-hidden="true"></i>
-            sign out
-          </button>
-        </form>
       </div>
 
       <nav class="site-nav" aria-label="primary">
@@ -102,6 +86,19 @@
         <a href="{{ base_path() }}/budget" class="{{ 'active' if active_path.startswith('/budget') or active_path.startswith('/expected') or active_path.startswith('/recurring') or active_path.startswith('/categories') else '' }}">budget</a>
         <a href="{{ base_path() }}/accounts" class="{{ 'active' if active_path.startswith('/accounts') else '' }}">accounts</a>
       </nav>
+
+      <div class="site-nav nav-drawer-footer">
+        <a href="{{ base_path() }}/settings?section=user-management" class="{{ 'active' if active_path.startswith('/settings') else '' }}">
+          <i data-lucide="settings-2" class="menu-icon" aria-hidden="true"></i>
+          settings
+        </a>
+        <form method="post" action="{{ base_path() }}/logout">
+          <button type="submit">
+            <i data-lucide="log-out" class="menu-icon" aria-hidden="true"></i>
+            sign out
+          </button>
+        </form>
+      </div>
     </dialog>
     {% include "_date_range.html" %}
     {% endif %}
@@ -125,63 +122,16 @@
 
     {% if chrome %}
     <script src="{{ base_path() }}/static/date-range.js?v=20261113e" defer></script>
+    <script src="{{ base_path() }}/static/theme.js?v=20261113a" defer></script>
     {% endif %}
     <script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js"></script>
     <script>
       (() => {
         document.body.classList.add('is-ready');
 
-        const themeStorageKey = 'metis_theme';
-        const themeSelect = document.getElementById('theme-select');
         const amountToggleButton = document.getElementById('amount-toggle-button');
         const amountToggleStorageKey = 'metis_hide_amounts';
         let amountsHidden = window.localStorage.getItem(amountToggleStorageKey) === '1';
-
-        function isThemeValue(value) {
-          return value === 'light' || value === 'dark';
-        }
-
-        function systemTheme() {
-          if (typeof window.matchMedia !== 'function') {
-            return 'light';
-          }
-          return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-        }
-
-        function readStoredTheme() {
-          try {
-            const value = window.localStorage.getItem(themeStorageKey);
-            return isThemeValue(value) ? value : null;
-          } catch (error) {
-            return null;
-          }
-        }
-
-        function writeStoredTheme(value) {
-          try {
-            window.localStorage.setItem(themeStorageKey, value);
-          } catch (error) {
-            // Ignore localStorage failures (private mode, disabled storage, etc).
-          }
-        }
-
-        function applyTheme(value) {
-          const nextTheme = isThemeValue(value) ? value : systemTheme();
-          document.documentElement.setAttribute('data-theme', nextTheme);
-          if (themeSelect) {
-            themeSelect.value = nextTheme;
-          }
-        }
-
-        applyTheme(readStoredTheme() || document.documentElement.getAttribute('data-theme') || systemTheme());
-
-        if (themeSelect) {
-          themeSelect.addEventListener('change', () => {
-            const nextTheme = themeSelect.value === 'dark' ? 'dark' : 'light';
-            writeStoredTheme(nextTheme);
-            applyTheme(nextTheme);
-          });
-        }
 
         function renderAmountToggle() {
           if (!amountToggleButton) {

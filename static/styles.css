@@ -607,15 +607,22 @@ body.is-ready .container > *:nth-child(4) {
   gap: 0.35rem;
 }
 
-/* .nav-drawer lifts these above the shared button and link rules further down. */
+/* .nav-drawer lifts these above the shared button and link rules further down.
+   The footer's settings and sign out are styled exactly like the page links. */
 .nav-drawer .site-nav a,
-.nav-drawer .user-menu-action {
+.nav-drawer .site-nav button {
   justify-content: flex-start;
-}
-
-.nav-drawer .site-nav a {
+  width: 100%;
   padding: 0.6rem 0.9rem;
   font-size: 0.95rem;
+}
+
+.nav-drawer .site-nav form {
+  margin: 0;
+}
+
+.nav-drawer-footer {
+  margin-top: auto;
 }
 
 /* ---- Side panel (menu button) ---- */
@@ -633,8 +640,8 @@ body.is-ready .container > *:nth-child(4) {
 }
 
 .nav-drawer[open] {
-  display: grid;
-  align-content: start;
+  display: flex;
+  flex-direction: column;
   gap: 1.4rem;
   animation: nav-drawer-in 150ms ease-out;
 }
@@ -698,37 +705,9 @@ body.is-ready .container > *:nth-child(4) {
   overflow-wrap: anywhere;
 }
 
-.user-menu-theme {
-  display: grid;
-  gap: 0.28rem;
-  margin-top: 0.25rem;
-}
 
-.user-menu-action {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  padding: 0.46rem 0.56rem;
-  background: var(--surface);
-  color: var(--text);
-  text-decoration: none;
-  display: inline-flex;
-  gap: 0.45rem;
-  align-items: center;
-  width: 100%;
-  cursor: pointer;
-  transition: border-color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
-}
 
-.user-menu-action:hover {
-  border-color: var(--line-strong);
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-sm);
-}
 
-.user-menu-action.buttonless {
-  font: inherit;
-  text-align: left;
-}
 
 .menu-icon {
   width: 1.08rem;
@@ -1978,14 +1957,12 @@ body.amounts-hidden .amount-sensitive {
   background: linear-gradient(160deg, var(--primary) 0%, var(--primary) 60%, var(--line-strong) 100%);
 }
 
-:root[data-theme="dark"] .user-menu-action,
 :root[data-theme="dark"] .row-action-item {
   border-color: var(--line-strong);
   background: var(--surface-muted);
   color: var(--text);
 }
 
-:root[data-theme="dark"] .user-menu-action:hover,
 :root[data-theme="dark"] .row-action-item:hover {
   border-color: var(--primary);
 }

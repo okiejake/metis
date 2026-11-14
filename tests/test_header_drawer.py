@@ -42,13 +42,23 @@ def test_the_header_holds_the_menu_button_before_metis_and_no_page_links(client)
     assert not any(f'href="{page}"' in top for page in PAGES)
 
 
-def test_the_drawer_lists_the_user_first_then_inbox_then_the_pages(client):
+def test_the_drawer_lists_the_user_then_the_pages_then_settings_and_sign_out(client):
     panel = drawer(client.get("/dashboard").text)
     links = re.findall(r'<a href="(/[a-z]+)"[^>]*>', re.search(r'<nav class="site-nav".*?</nav>', panel, re.S).group(0))
+    footer = re.search(r'<div class="site-nav nav-drawer-footer">(.*?)\n      </div>', panel, re.S)
 
-    assert panel.index("user-menu-name") < panel.index('class="site-nav"')
-    assert 'id="theme-select"' in panel and "/settings" in panel and "/logout" in panel
     assert links == PAGES
+    assert panel.index("user-menu-name") < panel.index('<nav class="site-nav"') < panel.index("nav-drawer-footer")
+    assert footer and "/settings" in footer.group(1) and "/logout" in footer.group(1)
+    assert "theme" not in panel
+
+
+def test_the_theme_toggle_sits_right_of_hide_amounts(client):
+    top = header(client.get("/dashboard").text)
+
+    assert re.search(r'id="theme-toggle"[^>]*aria-label="theme: system"', top)
+    assert top.index('id="amount-toggle-button"') < top.index('id="theme-toggle"')
+    assert 'data-lucide="sun-moon"' in top
 
 
 def test_the_current_page_is_marked_in_the_drawer(client):
