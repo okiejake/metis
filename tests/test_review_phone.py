@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 from datetime import date
+from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
@@ -38,11 +39,42 @@ def test_every_row_has_skip_and_every_list_has_a_position_line(page):
     assert page.count('<ol class="review-list"') == len(re.findall(r"<p[^>]*data-review-position", page)) >= 1
 
 
+class _InlineScripts(HTMLParser):
+    """Collects the body of every <script> that has no src."""
+
+    def __init__(self):
+        super().__init__()
+        self.scripts = []
+        self._current = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "script" and "src" not in dict(attrs):
+            self._current = []
+
+    def handle_data(self, data):
+        if self._current is not None:
+            self._current.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "script" and self._current is not None:
+            self.scripts.append("".join(self._current))
+            self._current = None
+
+
+def inline_scripts(html):
+    parser = _InlineScripts()
+    parser.feed(html)
+    parser.close()
+    return parser.scripts
+
+
 def test_the_page_scripts_parse(page, tmp_path):
     node = shutil.which("node")
     if not node:
         pytest.skip("node is not installed")
-    for index, script in enumerate(re.findall(r"<script(?![^>]*src)[^>]*>(.*?)</script>", page, re.S)):
+    scripts = inline_scripts(page)
+    assert scripts, "no inline scripts found"
+    for index, script in enumerate(scripts):
         path = tmp_path / f"script{index}.js"
         path.write_text(script)
         result = subprocess.run([node, "--check", str(path)], capture_output=True, text=True)
