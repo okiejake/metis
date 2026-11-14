@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
-{% if review_line.waiting %}
-<p class="review-line">
-  <a href="{{ base_path() }}/inbox" class="button-link">{% if review_line.percent is not none %}categorized {{ review_line.percent }}%{% else %}review{% endif %}</a>
+{% if inbox_line.waiting %}
+<p class="inbox-line">
+  <a href="{{ base_path() }}/inbox" class="button-link">{% if inbox_line.percent is not none %}categorized {{ inbox_line.percent }}%{% else %}inbox{% endif %}</a>
 </p>
 {% endif %}
 

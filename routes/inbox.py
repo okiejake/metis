@@ -1,5 +1,5 @@
-"""The Inbox page (served at /inbox; it was Review at /review) and its actions. Every action lands back on its list with
-a message that carries an Undo."""
+"""The inbox page and its actions. Every action lands back on its list with a
+message that carries an Undo."""
 
 from typing import Optional, Tuple, Union
 
@@ -7,7 +7,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 import import_templates as it
-import review
+import inbox
 from services import (
     count_dismissed_suggestions,
     create_category,
@@ -22,7 +22,7 @@ from web import CurrentUser, render
 
 router = APIRouter()
 
-LISTS = ("imports", "transfers", "categories", "budgets", "recurring")
+LISTS = ("imports", "transfers", "categories", "budgets", "bills")
 
 
 def _back(list_name: str, message: str, action_id: Optional[int]):
@@ -40,7 +40,7 @@ def _choice(user_id: int, choice: str, new_category_name: str) -> Tuple[Union[in
     if choice == "transfer":
         return "transfer", False
     if choice == "new":
-        existing = review.find_category_id(user_id, new_category_name)
+        existing = inbox.find_category_id(user_id, new_category_name)
         if existing:
             return existing, False
         return create_category(user_id, new_category_name), True
@@ -49,24 +49,24 @@ def _choice(user_id: int, choice: str, new_category_name: str) -> Tuple[Union[in
     return int(choice), False
 
 
-@router.get("/review")
-def review_moved(request: Request):
-    """Old links and bookmarks: Review is now Inbox."""
+@router.get("/review")  # the inbox's old address
+def old_address(request: Request):
+    """Old links and bookmarks still land on the inbox."""
     query = f"?{request.url.query}" if request.url.query else ""
     return RedirectResponse(url=f"/inbox{query}", status_code=308)
 
 
 @router.get("/inbox", response_class=HTMLResponse)
-def review_page(request: Request, user: CurrentUser, start: str = "", end: str = "", msg: str = "", err: int = 0):
+def inbox_page(request: Request, user: CurrentUser, start: str = "", end: str = "", msg: str = "", err: int = 0):
     window_start, window_end, invalid_filter = resolve_forecast_window(user["id"], start, end)
     if invalid_filter:
         msg, err = "Invalid date filter. Using saved/default range.", 1
     return render(
         request,
-        "review.html",
+        "inbox.html",
         msg,
         err,
-        review=review.build_review(user["id"], window_start, window_end),
+        inbox=inbox.build_inbox(user["id"], window_start, window_end),
         categories=load_categories(user["id"]),
         accounts=load_accounts(user["id"]),
         templates=it.load_templates(user["id"]),
@@ -81,29 +81,29 @@ def confirm_merchant(
     request: Request, user: CurrentUser,
     key: str = Form(...), choice: str = Form(""), new_category_name: str = Form(""), list: str = Form("categories"),
 ):
-    if choice != "transfer" and not review.has_uncategorized(user["id"], key):
+    if choice != "transfer" and not inbox.has_uncategorized(user["id"], key):
         return _back(list, "Confirmed", None)
     try:
         picked, created = _choice(user["id"], choice, new_category_name)
     except ValueError as exc:
         return redirect_with_message(f"/inbox#{list}", str(exc), is_error=True)
     if picked == "transfer":
-        action = review.confirm_transfer(user["id"], key)
+        action = inbox.confirm_transfer(user["id"], key)
     else:
-        action = review.confirm_category(user["id"], key, picked, created=created)
+        action = inbox.confirm_category(user["id"], key, picked, created=created)
     return _back(list, "Confirmed", action)
 
 
 @router.post("/inbox/imports/dismiss")
 def dismiss_import(request: Request, user: CurrentUser, key: str = Form(...)):
-    if not key.startswith(review.STALE_DISMISS_PREFIX):
+    if not key.startswith(inbox.STALE_DISMISS_PREFIX):
         return redirect_with_message("/inbox#imports", "Nothing to dismiss", is_error=True)
-    return _back("imports", "Dismissed", review.dismiss(user["id"], key))
+    return _back("imports", "Dismissed", inbox.dismiss(user["id"], key))
 
 
 @router.post("/inbox/merchants/dismiss")
 def dismiss_merchant(request: Request, user: CurrentUser, key: str = Form(...)):
-    return _back("transfers", "Dismissed", review.dismiss(user["id"], review.TRANSFER_DISMISS_PREFIX + key))
+    return _back("transfers", "Dismissed", inbox.dismiss(user["id"], inbox.TRANSFER_DISMISS_PREFIX + key))
 
 
 @router.post("/inbox/charges/{tx_id}")
@@ -114,7 +114,7 @@ def set_charge(
         return _back("categories", "Confirmed", None)
     try:
         picked, created = _choice(user["id"], choice, new_category_name)
-        action = review.set_charge(user["id"], tx_id, picked, created=created)
+        action = inbox.set_charge(user["id"], tx_id, picked, created=created)
     except ValueError as exc:
         return redirect_with_message("/inbox#categories", str(exc), is_error=True)
     return _back("categories", "Confirmed", action)
@@ -128,22 +128,22 @@ def confirm_budget(request: Request, user: CurrentUser, category_id: int = Form(
             raise ValueError
     except ValueError:
         return redirect_with_message("/inbox#budgets", "Enter a monthly amount", is_error=True)
-    return _back("budgets", "Confirmed", review.confirm_budget(user["id"], category_id, monthly))
+    return _back("budgets", "Confirmed", inbox.confirm_budget(user["id"], category_id, monthly))
 
 
 @router.post("/inbox/budgets/dismiss")
 def dismiss_budget(request: Request, user: CurrentUser, category_id: int = Form(...)):
-    return _back("budgets", "Dismissed", review.dismiss(user["id"], f"{review.BUDGET_DISMISS_PREFIX}{category_id}"))
+    return _back("budgets", "Dismissed", inbox.dismiss(user["id"], f"{inbox.BUDGET_DISMISS_PREFIX}{category_id}"))
 
 
-@router.post("/inbox/recurring/dismiss")
-def dismiss_recurring(request: Request, user: CurrentUser, suggestion_key: str = Form(...)):
-    return _back("recurring", "Dismissed", review.dismiss(user["id"], suggestion_key))
+@router.post("/inbox/bills/dismiss")
+def dismiss_bill(request: Request, user: CurrentUser, suggestion_key: str = Form(...)):
+    return _back("bills", "Dismissed", inbox.dismiss(user["id"], suggestion_key))
 
 
 @router.post("/inbox/undo/{action_id}")
 def undo_action(request: Request, user: CurrentUser, action_id: int):
-    return redirect_with_message("/inbox", review.undo(user["id"], action_id))
+    return redirect_with_message("/inbox", inbox.undo(user["id"], action_id))
 
 
 @router.post("/inbox/restore")

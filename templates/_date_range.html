@@ -6,7 +6,7 @@
     <input type="hidden" name="grain" value="{{ range_rule.grain }}" />
     <input type="hidden" name="start" value="{{ range_rule.start }}" />
     <input type="hidden" name="end" value="{{ range_rule.end }}" />
-    <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}" />
+    <input type="hidden" name="next" value="{% if range_next is defined %}{{ range_next }}{% else %}{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}{% endif %}" />
 
     <div class="range-top">
       <button type="button" class="icon-button range-panel-toggle neu-press" id="range-panel-toggle"

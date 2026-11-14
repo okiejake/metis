@@ -1,6 +1,6 @@
 """The header is a menu button, metis, the date range and hide amounts. The menu
 button opens a side panel: the user block first, then the pages with inbox at
-the top. Review is called inbox and lives at /inbox.
+the top. The inbox is called inbox and lives at /inbox.
 
 All data here is synthetic.
 """
@@ -87,7 +87,7 @@ def test_inbox_shows_its_waiting_count(client, db, user_id, accounts):
     assert re.search(r'<a href="/inbox"[^>]*>\s*inbox\s*<span class="nav-badge">1</span>', panel)
 
 
-def test_review_moved_to_inbox(client):
+def test_the_old_review_address_moves_to_inbox(client):
     assert client.get("/inbox").status_code == 200
     moved = client.get("/review?x=1", follow_redirects=False)
     assert moved.status_code in (301, 307, 308)

@@ -4,7 +4,7 @@
 <span class="category-pill"><span class="category-dot" style="background: {{ color if color else 'var(--muted)' }};"></span>{{ name }}</span>
 {%- endmacro %}
 
-{# A horizontal bar on Budget's shared scale; also Review's meter. #}
+{# A horizontal bar on Budget's shared scale; also the inbox's meter. #}
 {% macro bar(fill_pct=0, over_pct=0, neutral_pct=0, title="") -%}
 <div class="budget-bar-track"{% if title %} title="{{ title }}"{% endif %}>
   {% if neutral_pct > 0 %}
@@ -39,65 +39,19 @@
 {% endif %}
 {%- endmacro %}
 
-{# One row in a Review list: a name, one line of facts, and what the caller
+{# One row in an inbox list: a name, one line of facts, and what the caller
    puts after them (the input and Confirm / Dismiss). Skip shows on phones. #}
-{% macro review_row(name, facts, key) -%}
-<li class="review-row" data-key="{{ key }}">
-  <div class="review-row-text">
-    <strong class="review-row-name">{{ name }}</strong>
-    <span class="review-row-facts">{{ facts }}</span>
+{% macro inbox_row(name, facts, key) -%}
+<li class="inbox-row" data-key="{{ key }}">
+  <div class="inbox-row-text">
+    <strong class="inbox-row-name">{{ name }}</strong>
+    <span class="inbox-row-facts">{{ facts }}</span>
   </div>
-  <div class="review-row-body">
+  <div class="inbox-row-body">
     {{ caller() }}
-    <button type="button" class="button-link review-skip" data-review-skip>skip</button>
+    <button type="button" class="button-link inbox-skip" data-inbox-skip>skip</button>
   </div>
 </li>
-{%- endmacro %}
-
-{# The fields that turn a detected recurring suggestion into a recurring item. #}
-{% macro recurring_fields(s, accounts, categories) -%}
-<input type="hidden" name="kind" value="{{ s.kind }}" />
-<input type="hidden" name="suggestion_key" value="{{ s.key }}" />
-<input type="hidden" name="start_date" value="{{ s.start_date }}" />
-<input type="hidden" name="end_date" value="" />
-<input type="hidden" name="day_of_month" value="{{ s.day_of_month }}" />
-<input type="hidden" name="day_of_month_touched" value="1" />
-<input type="hidden" name="interval_months" value="{{ s.interval_months }}" />
-<input type="hidden" name="semimonthly_day1" value="{{ s.semimonthly_day1 }}" />
-<input type="hidden" name="semimonthly_day2" value="{{ s.semimonthly_day2 }}" />
-
-<label class="suggestion-field suggestion-field-name">
-  name
-  <input type="text" name="name" value="{{ s.name }}" required />
-</label>
-<label class="suggestion-field suggestion-field-amount">
-  amount
-  <input type="number" step="0.01" min="0.01" name="amount" value="{{ '%.2f'|format(s.amount) }}" required />
-</label>
-<label class="suggestion-field">
-  frequency
-  <select name="frequency_type">
-    <option value="weekly" {{ 'selected' if s.frequency_type == 'weekly' else '' }}>weekly</option>
-    <option value="biweekly" {{ 'selected' if s.frequency_type == 'biweekly' else '' }}>bi-weekly</option>
-    <option value="semimonthly" {{ 'selected' if s.frequency_type == 'semimonthly' else '' }}>semi-monthly</option>
-    <option value="monthly" {{ 'selected' if s.frequency_type == 'monthly' else '' }}>monthly</option>
-    <option value="yearly" {{ 'selected' if s.frequency_type == 'yearly' else '' }}>yearly</option>
-    <option value="every_x_months" {{ 'selected' if s.frequency_type == 'every_x_months' else '' }}>{% filter lower %}every {{ s.interval_months }} months{% endfilter %}</option>
-  </select>
-</label>
-<label class="suggestion-field">
-  account
-  <select name="account_id">
-    <option value="">unassigned (immediate)</option>
-    {% for account in accounts %}
-    <option value="{{ account.id }}" {{ 'selected' if account.id == s.account_id else '' }}>{% filter lower %}{{ account.name }}{{ ' (card)' if account.account_type == 'credit_card' else '' }}{% endfilter %}</option>
-    {% endfor %}
-  </select>
-</label>
-<label class="suggestion-field">
-  category
-  {{ category_picker("category_id", categories, s.category_id) }}
-</label>
 {%- endmacro %}
 
 {# One choice in a set of cards; a radio underneath, so it works without script. #}

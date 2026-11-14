@@ -10,13 +10,14 @@ import secrets
 import threading
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, Iterator, List, Optional, Sequence
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 from urllib.parse import quote_plus
 
 import duckdb
 from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
 
+import legacy_schema
 import migrations
 from base_path import configured_base_path
 from date_range import DEFAULT_RULE, RangeRule, resolve_rule, rule_from_saved, rule_to_saved
@@ -409,490 +410,394 @@ def create_user_record(display_name: str, email: str) -> str:
 
 def delete_user_and_data(user_id: int) -> None:
     with get_connection() as conn:
-        conn.execute("DELETE FROM recurring_items WHERE user_id = ?", [user_id])
-        conn.execute("DELETE FROM manual_transactions WHERE user_id = ?", [user_id])
-        conn.execute("DELETE FROM imported_transactions WHERE user_id = ?", [user_id])
-        conn.execute("DELETE FROM expected_reconciliations WHERE user_id = ?", [user_id])
-        conn.execute("DELETE FROM expected_match_rules WHERE user_id = ?", [user_id])
-        conn.execute("DELETE FROM category_rules WHERE user_id = ?", [user_id])
-        conn.execute("DELETE FROM transaction_splits WHERE user_id = ?", [user_id])
-        conn.execute("DELETE FROM saved_ranges WHERE user_id = ?", [user_id])
-        conn.execute("DELETE FROM sessions WHERE user_id = ?", [user_id])
-        conn.execute("DELETE FROM card_statements WHERE user_id = ?", [user_id])
-        conn.execute("DELETE FROM accounts WHERE user_id = ?", [user_id])
-        conn.execute("DELETE FROM categories WHERE user_id = ?", [user_id])
+        conn.execute("DELETE FROM amount_overrides WHERE bill_id IN (SELECT id FROM bills WHERE user_id = ?)", [user_id])
+        for table in (
+            "bills", "one_time_items", "imported_transactions", "expected_reconciliations", "expected_match_rules",
+            "category_rules", "transaction_splits", "saved_ranges", "sessions", "card_statements",
+            "merchant_decisions", "inbox_actions", "dismissed_suggestions", "import_templates", "import_uploads",
+            "import_account_links", "accounts", "categories",
+        ):
+            conn.execute(f"DELETE FROM {table} WHERE user_id = ?", [user_id])
         conn.execute("DELETE FROM settings WHERE key LIKE ?", [f"user:{user_id}:%"])
         conn.execute("DELETE FROM users WHERE id = ?", [user_id])
 
 
+def _table_exists(conn: duckdb.DuckDBPyConnection, table_name: str) -> bool:
+    return bool(conn.execute("SELECT 1 FROM duckdb_tables() WHERE table_name = ?", [table_name]).fetchone())
+
+
+# Every table and index of this version. A new database is made from this; an
+# older one is brought to it by legacy_schema.py and then the steps in
+# migrations.py, after which this only fills in indexes.
+SEQUENCES = (
+    "users", "categories", "bills", "one_time_items", "amount_overrides", "imported_transactions",
+    "expected_reconciliations", "expected_match_rules", "accounts", "import_templates", "import_uploads",
+    "category_rules", "transaction_splits", "sessions", "card_statements", "merchant_decisions",
+    "inbox_actions", "saved_ranges",
+)
+SCHEMA = (
+    """
+    CREATE TABLE IF NOT EXISTS users (
+        id BIGINT PRIMARY KEY DEFAULT nextval('users_id_seq'),
+        slug TEXT NOT NULL UNIQUE,
+        display_name TEXT NOT NULL,
+        email TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        -- NULL means "not set yet", which puts the app into first-run setup.
+        password_hash TEXT,
+        failed_attempts INTEGER DEFAULT 0,
+        locked_until TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS categories (
+        id BIGINT PRIMARY KEY DEFAULT nextval('categories_id_seq'),
+        name TEXT NOT NULL,
+        color TEXT NOT NULL DEFAULT '#64748b',
+        user_id BIGINT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        budget_amount DOUBLE
+    )
+    """,
+    # Scheduled money out (kind 'expense') and in (kind 'income'). A bill recurs
+    # on the day of first_due_date. balance, interest_rate, biller_url and the
+    # charge_ columns belong to bills in depth.
+    """
+    CREATE TABLE IF NOT EXISTS bills (
+        id BIGINT PRIMARY KEY DEFAULT nextval('bills_id_seq'),
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        amount DOUBLE NOT NULL,
+        first_due_date DATE NOT NULL,
+        end_date DATE,
+        frequency_type TEXT NOT NULL,
+        interval_months INTEGER,
+        semimonthly_day1 INTEGER,
+        semimonthly_day2 INTEGER,
+        category_id BIGINT,
+        account_id BIGINT,
+        user_id BIGINT NOT NULL,
+        active BOOLEAN NOT NULL DEFAULT TRUE,
+        balance DOUBLE,
+        balance_as_of DATE,
+        interest_rate DOUBLE,
+        biller_url TEXT,
+        charge_frequency TEXT,
+        charge_first_date DATE,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+    """,
+    # A single expected transaction.
+    """
+    CREATE TABLE IF NOT EXISTS one_time_items (
+        id BIGINT PRIMARY KEY DEFAULT nextval('one_time_items_id_seq'),
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        amount DOUBLE NOT NULL,
+        expected_date DATE NOT NULL,
+        category_id BIGINT,
+        account_id BIGINT,
+        user_id BIGINT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+    """,
+    # A bill's amount from a date on.
+    """
+    CREATE TABLE IF NOT EXISTS amount_overrides (
+        id BIGINT PRIMARY KEY DEFAULT nextval('amount_overrides_id_seq'),
+        bill_id BIGINT NOT NULL,
+        effective_date DATE NOT NULL,
+        amount DOUBLE NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+    """,
+    # category_via says how a row got its category: 'rule' (set by a rule, so
+    # safe to work out again) or NULL (picked by hand; a rule never changes it).
+    """
+    CREATE TABLE IF NOT EXISTS imported_transactions (
+        id BIGINT PRIMARY KEY DEFAULT nextval('imported_transactions_id_seq'),
+        user_id BIGINT NOT NULL,
+        account TEXT NOT NULL,
+        tx_date DATE NOT NULL,
+        description TEXT NOT NULL,
+        merchant TEXT NOT NULL DEFAULT '',
+        amount DOUBLE NOT NULL,
+        flow TEXT NOT NULL,
+        is_transfer BOOLEAN NOT NULL DEFAULT FALSE,
+        raw_type TEXT NOT NULL DEFAULT '',
+        category_id BIGINT,
+        source_file TEXT NOT NULL DEFAULT '',
+        fingerprint TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        account_id BIGINT,
+        category_via TEXT,
+        decision_id BIGINT,
+        transfer_decision_id BIGINT
+    )
+    """,
+    # An actual linked to the expected transaction it settles. source_type is
+    # 'bill' or 'one_time'.
+    """
+    CREATE TABLE IF NOT EXISTS expected_reconciliations (
+        id BIGINT PRIMARY KEY DEFAULT nextval('expected_reconciliations_id_seq'),
+        user_id BIGINT NOT NULL,
+        imported_transaction_id BIGINT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_id BIGINT NOT NULL,
+        matched_via TEXT NOT NULL DEFAULT 'confirm',
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS expected_match_rules (
+        id BIGINT PRIMARY KEY DEFAULT nextval('expected_match_rules_id_seq'),
+        user_id BIGINT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_id BIGINT NOT NULL,
+        pattern TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        amount_min DOUBLE,
+        amount_max DOUBLE
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS sessions (
+        id BIGINT PRIMARY KEY DEFAULT nextval('sessions_id_seq'),
+        user_id BIGINT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        expires_at TIMESTAMP NOT NULL,
+        last_seen_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS saved_ranges (
+        id BIGINT PRIMARY KEY DEFAULT nextval('saved_ranges_id_seq'),
+        user_id BIGINT NOT NULL,
+        name TEXT NOT NULL,
+        rule TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS transaction_splits (
+        id BIGINT PRIMARY KEY DEFAULT nextval('transaction_splits_id_seq'),
+        user_id BIGINT NOT NULL,
+        imported_transaction_id BIGINT NOT NULL,
+        category_id BIGINT NOT NULL,
+        amount DOUBLE NOT NULL,
+        note TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS category_rules (
+        id BIGINT PRIMARY KEY DEFAULT nextval('category_rules_id_seq'),
+        user_id BIGINT NOT NULL,
+        category_id BIGINT NOT NULL,
+        pattern TEXT NOT NULL,
+        amount_min DOUBLE,
+        amount_max DOUBLE,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+    """,
+    # payment_pattern is how a payment to this card appears on the funding
+    # account's statement. Per account, so no issuer name lives in the code.
+    """
+    CREATE TABLE IF NOT EXISTS accounts (
+        id BIGINT PRIMARY KEY DEFAULT nextval('accounts_id_seq'),
+        user_id BIGINT NOT NULL,
+        name TEXT NOT NULL,
+        account_type TEXT NOT NULL,
+        statement_day INTEGER,
+        due_day INTEGER,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        payment_pattern TEXT,
+        default_template_id BIGINT
+    )
+    """,
+    # Templates stand alone, shared by any number of accounts; an account
+    # points at its default one.
+    """
+    CREATE TABLE IF NOT EXISTS import_templates (
+        id BIGINT PRIMARY KEY DEFAULT nextval('import_templates_id_seq'),
+        user_id BIGINT NOT NULL,
+        name TEXT NOT NULL,
+        account_id BIGINT,
+        date_field TEXT NOT NULL,
+        date_fallback_field TEXT,
+        date_format TEXT,
+        amount_field TEXT,
+        amount_in_field TEXT,
+        amount_out_field TEXT,
+        amount_sign TEXT NOT NULL DEFAULT 'standard',
+        type_field TEXT,
+        credit_value TEXT,
+        description_field TEXT NOT NULL,
+        merchant_field TEXT,
+        signature TEXT NOT NULL DEFAULT '[]',
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+    """,
+    # One-time data steps already taken on this database (see migrations.py).
+    """
+    CREATE TABLE IF NOT EXISTS applied_migrations (
+        name TEXT PRIMARY KEY,
+        applied_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+    """,
+    # A file uploaded while its template is being mapped. Deleted when the
+    # template is saved, or a day later.
+    """
+    CREATE TABLE IF NOT EXISTS import_uploads (
+        id BIGINT PRIMARY KEY DEFAULT nextval('import_uploads_id_seq'),
+        user_id BIGINT NOT NULL,
+        filename TEXT NOT NULL,
+        content BLOB NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+    """,
+    # One row per statement a card has closed (see sync_card_statements). Only
+    # the dates and the issuer's printed balance live here; every other figure
+    # is summed from imported rows so a re-import is never stale.
+    """
+    CREATE TABLE IF NOT EXISTS card_statements (
+        id BIGINT PRIMARY KEY DEFAULT nextval('card_statements_id_seq'),
+        user_id BIGINT NOT NULL,
+        account_id BIGINT NOT NULL,
+        close_date DATE NOT NULL,
+        due_date DATE NOT NULL,
+        issuer_balance DOUBLE,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, account_id, close_date)
+    )
+    """,
+    # Import labels are matched case-insensitively but shown back as written.
+    """
+    CREATE TABLE IF NOT EXISTS import_account_links (
+        user_id BIGINT NOT NULL,
+        label TEXT NOT NULL,
+        display_label TEXT,
+        account_id BIGINT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, label)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS dismissed_suggestions (
+        user_id BIGINT NOT NULL,
+        suggestion_key TEXT NOT NULL,
+        reason TEXT NOT NULL DEFAULT 'dismissed',
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, suggestion_key)
+    )
+    """,
+    # The inbox's per-merchant decisions (see inbox.py). kind is 'category' or
+    # 'transfer'; a merchant can hold one of each (a card part categorized, a
+    # checking part a transfer). Rows a category decision changed carry its id
+    # in imported_transactions.decision_id, and rows a transfer decision marked
+    # carry it in transfer_decision_id, so Undo finds every one of them.
+    """
+    CREATE TABLE IF NOT EXISTS merchant_decisions (
+        id BIGINT PRIMARY KEY DEFAULT nextval('merchant_decisions_id_seq'),
+        user_id BIGINT NOT NULL,
+        merchant_key TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        category_id BIGINT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, merchant_key, kind)
+    )
+    """,
+    # Every inbox action, with what Undo needs to reverse it (JSON).
+    """
+    CREATE TABLE IF NOT EXISTS inbox_actions (
+        id BIGINT PRIMARY KEY DEFAULT nextval('inbox_actions_id_seq'),
+        user_id BIGINT NOT NULL,
+        kind TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+    """,
+)
+INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_categories_user_id ON categories(user_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_user_name_unique ON categories(user_id, name)",
+    "CREATE INDEX IF NOT EXISTS idx_bills_user_id ON bills(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_bills_account ON bills(user_id, account_id)",
+    "CREATE INDEX IF NOT EXISTS idx_one_time_items_user_id ON one_time_items(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_one_time_items_account ON one_time_items(user_id, account_id)",
+    "CREATE INDEX IF NOT EXISTS idx_imported_user_date ON imported_transactions(user_id, tx_date)",
+    "CREATE INDEX IF NOT EXISTS idx_imported_user_account ON imported_transactions(user_id, account_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_imported_fingerprint ON imported_transactions(user_id, fingerprint)",
+    "CREATE INDEX IF NOT EXISTS idx_import_templates_user ON import_templates(user_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_reconciliation_import_unique "
+    "ON expected_reconciliations(user_id, imported_transaction_id)",
+    "CREATE INDEX IF NOT EXISTS idx_reconciliation_source ON expected_reconciliations(user_id, source_type, source_id)",
+    "CREATE INDEX IF NOT EXISTS idx_match_rules_source ON expected_match_rules(user_id, source_type, source_id)",
+    "CREATE INDEX IF NOT EXISTS idx_category_rules_user ON category_rules(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_category_rules_category ON category_rules(user_id, category_id)",
+    "CREATE INDEX IF NOT EXISTS idx_transaction_splits_tx ON transaction_splits(user_id, imported_transaction_id)",
+    "CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token_hash)",
+    "CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_user_name_unique ON accounts(user_id, name)",
+)
+
+
+def _create_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    for name in SEQUENCES:
+        conn.execute(f"CREATE SEQUENCE IF NOT EXISTS {name}_id_seq START 1")
+    for statement in SCHEMA:
+        conn.execute(statement)
+    for statement in INDEXES:
+        conn.execute(statement)
+
+
+def _seed_defaults(conn: duckdb.DuckDBPyConnection) -> None:
+    """The rows every database starts with: the default profile, an opening
+    balance, and a per-user copy of any setting saved before settings were
+    per user."""
+    conn.execute(
+        "INSERT INTO users (slug, display_name) VALUES (?, ?) ON CONFLICT DO NOTHING",
+        [DEFAULT_USER_SLUG, DEFAULT_USER_DISPLAY_NAME],
+    )
+    default_user_row = conn.execute("SELECT id FROM users WHERE slug = ? LIMIT 1", [DEFAULT_USER_SLUG]).fetchone()
+    if not default_user_row:
+        default_user_row = conn.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()
+    default_user_id = int(default_user_row[0])
+    conn.execute("INSERT INTO settings (key, value) VALUES ('starting_balance', '0') ON CONFLICT DO NOTHING")
+    for key, value in conn.execute("SELECT key, value FROM settings WHERE key NOT LIKE 'user:%:%'").fetchall():
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT DO NOTHING",
+            [f"user:{default_user_id}:{key}", value],
+        )
+
+
 def init_db() -> None:
+    """Bring the database to this version's shape, whatever version made it.
+
+    A new database is created in that shape. An older one is first brought to
+    the v0.4.0 shape by the steps that version ran at every start, and then
+    taken the rest of the way by the named steps in migrations.py, each of
+    which runs once, inside a transaction."""
     with get_connection() as conn:
-        # A database with no users table was made just now, by this version.
-        new_database = not conn.execute(
-            "SELECT 1 FROM duckdb_tables() WHERE table_name = 'users'"
-        ).fetchone()
-        conn.execute("CREATE SEQUENCE IF NOT EXISTS users_id_seq START 1")
-        conn.execute("CREATE SEQUENCE IF NOT EXISTS categories_id_seq START 1")
-        conn.execute("CREATE SEQUENCE IF NOT EXISTS recurring_items_id_seq START 1")
-        conn.execute("CREATE SEQUENCE IF NOT EXISTS manual_transactions_id_seq START 1")
-        conn.execute("CREATE SEQUENCE IF NOT EXISTS amount_overrides_id_seq START 1")
-        conn.execute("CREATE SEQUENCE IF NOT EXISTS imported_transactions_id_seq START 1")
-        conn.execute("CREATE SEQUENCE IF NOT EXISTS expected_reconciliations_id_seq START 1")
-        conn.execute("CREATE SEQUENCE IF NOT EXISTS expected_match_rules_id_seq START 1")
-        conn.execute("CREATE SEQUENCE IF NOT EXISTS accounts_id_seq START 1")
-        conn.execute("CREATE SEQUENCE IF NOT EXISTS import_templates_id_seq START 1")
-        conn.execute("CREATE SEQUENCE IF NOT EXISTS import_uploads_id_seq START 1")
-        conn.execute("CREATE SEQUENCE IF NOT EXISTS category_rules_id_seq START 1")
-        conn.execute("CREATE SEQUENCE IF NOT EXISTS transaction_splits_id_seq START 1")
-        conn.execute("CREATE SEQUENCE IF NOT EXISTS sessions_id_seq START 1")
-        conn.execute("CREATE SEQUENCE IF NOT EXISTS card_statements_id_seq START 1")
-        conn.execute("CREATE SEQUENCE IF NOT EXISTS merchant_decisions_id_seq START 1")
-        conn.execute("CREATE SEQUENCE IF NOT EXISTS review_actions_id_seq START 1")
-        conn.execute("CREATE SEQUENCE IF NOT EXISTS saved_ranges_id_seq START 1")
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id BIGINT PRIMARY KEY DEFAULT nextval('users_id_seq'),
-                slug TEXT NOT NULL UNIQUE,
-                display_name TEXT NOT NULL,
-                email TEXT NOT NULL DEFAULT '',
-                created_at TIMESTAMP NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-        conn.execute(
-            """
-            INSERT INTO users (slug, display_name)
-            VALUES (?, ?)
-            ON CONFLICT DO NOTHING
-            """,
-            [DEFAULT_USER_SLUG, DEFAULT_USER_DISPLAY_NAME],
-        )
-        default_user_row = conn.execute(
-            "SELECT id FROM users WHERE slug = ? LIMIT 1",
-            [DEFAULT_USER_SLUG],
-        ).fetchone()
-        if not default_user_row:
-            default_user_row = conn.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()
-        default_user_id = int(default_user_row[0])
-
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS categories (
-                id BIGINT PRIMARY KEY DEFAULT nextval('categories_id_seq'),
-                name TEXT NOT NULL,
-                color TEXT NOT NULL DEFAULT '#64748b',
-                user_id BIGINT NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS recurring_items (
-                id BIGINT PRIMARY KEY DEFAULT nextval('recurring_items_id_seq'),
-                name TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                amount DOUBLE NOT NULL,
-                start_date DATE NOT NULL,
-                end_date DATE,
-                frequency_type TEXT NOT NULL,
-                interval_months INTEGER,
-                semimonthly_day1 INTEGER,
-                semimonthly_day2 INTEGER,
-                day_of_month INTEGER,
-                category_id BIGINT,
-                user_id BIGINT NOT NULL,
-                active BOOLEAN NOT NULL DEFAULT TRUE,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS manual_transactions (
-                id BIGINT PRIMARY KEY DEFAULT nextval('manual_transactions_id_seq'),
-                name TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                amount DOUBLE NOT NULL,
-                tx_date DATE NOT NULL,
-                category_id BIGINT,
-                user_id BIGINT NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS amount_overrides (
-                id BIGINT PRIMARY KEY DEFAULT nextval('amount_overrides_id_seq'),
-                recurring_item_id BIGINT NOT NULL,
-                effective_date DATE NOT NULL,
-                amount DOUBLE NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS imported_transactions (
-                id BIGINT PRIMARY KEY DEFAULT nextval('imported_transactions_id_seq'),
-                user_id BIGINT NOT NULL,
-                account TEXT NOT NULL,
-                tx_date DATE NOT NULL,
-                description TEXT NOT NULL,
-                merchant TEXT NOT NULL DEFAULT '',
-                amount DOUBLE NOT NULL,
-                flow TEXT NOT NULL,
-                is_transfer BOOLEAN NOT NULL DEFAULT FALSE,
-                raw_type TEXT NOT NULL DEFAULT '',
-                category_id BIGINT,
-                source_file TEXT NOT NULL DEFAULT '',
-                fingerprint TEXT NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS expected_reconciliations (
-                id BIGINT PRIMARY KEY DEFAULT nextval('expected_reconciliations_id_seq'),
-                user_id BIGINT NOT NULL,
-                imported_transaction_id BIGINT NOT NULL,
-                source_type TEXT NOT NULL,
-                source_id BIGINT NOT NULL,
-                matched_via TEXT NOT NULL DEFAULT 'confirm',
-                created_at TIMESTAMP NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS expected_match_rules (
-                id BIGINT PRIMARY KEY DEFAULT nextval('expected_match_rules_id_seq'),
-                user_id BIGINT NOT NULL,
-                source_type TEXT NOT NULL,
-                source_id BIGINT NOT NULL,
-                pattern TEXT NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS sessions (
-                id BIGINT PRIMARY KEY DEFAULT nextval('sessions_id_seq'),
-                user_id BIGINT NOT NULL,
-                token_hash TEXT NOT NULL UNIQUE,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                expires_at TIMESTAMP NOT NULL,
-                last_seen_at TIMESTAMP NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS saved_ranges (
-                id BIGINT PRIMARY KEY DEFAULT nextval('saved_ranges_id_seq'),
-                user_id BIGINT NOT NULL,
-                name TEXT NOT NULL,
-                rule TEXT NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS transaction_splits (
-                id BIGINT PRIMARY KEY DEFAULT nextval('transaction_splits_id_seq'),
-                user_id BIGINT NOT NULL,
-                imported_transaction_id BIGINT NOT NULL,
-                category_id BIGINT NOT NULL,
-                amount DOUBLE NOT NULL,
-                note TEXT,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS category_rules (
-                id BIGINT PRIMARY KEY DEFAULT nextval('category_rules_id_seq'),
-                user_id BIGINT NOT NULL,
-                category_id BIGINT NOT NULL,
-                pattern TEXT NOT NULL,
-                amount_min DOUBLE,
-                amount_max DOUBLE,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS accounts (
-                id BIGINT PRIMARY KEY DEFAULT nextval('accounts_id_seq'),
-                user_id BIGINT NOT NULL,
-                name TEXT NOT NULL,
-                account_type TEXT NOT NULL,
-                statement_day INTEGER,
-                due_day INTEGER,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS import_templates (
-                id BIGINT PRIMARY KEY DEFAULT nextval('import_templates_id_seq'),
-                user_id BIGINT NOT NULL,
-                name TEXT NOT NULL,
-                account_id BIGINT,
-                date_field TEXT NOT NULL,
-                date_fallback_field TEXT,
-                date_format TEXT,
-                amount_field TEXT,
-                amount_in_field TEXT,
-                amount_out_field TEXT,
-                amount_sign TEXT NOT NULL DEFAULT 'standard',
-                type_field TEXT,
-                credit_value TEXT,
-                description_field TEXT NOT NULL,
-                merchant_field TEXT,
-                signature TEXT NOT NULL DEFAULT '[]',
-                created_at TIMESTAMP NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-        # One-time data steps already taken on this database.
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS applied_migrations "
-            "(name TEXT PRIMARY KEY, applied_at TIMESTAMP NOT NULL DEFAULT NOW())"
-        )
-        # A file uploaded while its template is being mapped. Deleted when the
-        # template is saved, or a day later.
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS import_uploads (
-                id BIGINT PRIMARY KEY DEFAULT nextval('import_uploads_id_seq'),
-                user_id BIGINT NOT NULL,
-                filename TEXT NOT NULL,
-                content BLOB NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-        # One row per statement a card has closed (see sync_card_statements). Only
-        # the dates and the issuer's printed balance live here; every other
-        # figure is summed from imported rows so a re-import is never stale.
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS card_statements (
-                id BIGINT PRIMARY KEY DEFAULT nextval('card_statements_id_seq'),
-                user_id BIGINT NOT NULL,
-                account_id BIGINT NOT NULL,
-                close_date DATE NOT NULL,
-                due_date DATE NOT NULL,
-                issuer_balance DOUBLE,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                UNIQUE (user_id, account_id, close_date)
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS import_account_links (
-                user_id BIGINT NOT NULL,
-                label TEXT NOT NULL,
-                display_label TEXT,
-                account_id BIGINT NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                PRIMARY KEY (user_id, label)
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS dismissed_suggestions (
-                user_id BIGINT NOT NULL,
-                suggestion_key TEXT NOT NULL,
-                reason TEXT NOT NULL DEFAULT 'dismissed',
-                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                PRIMARY KEY (user_id, suggestion_key)
-            )
-            """
-        )
-        # Review's per-merchant decisions (see review.py). kind is 'category' or
-        # 'transfer'; a merchant can hold one of each (a card part categorized,
-        # a checking part a transfer). Rows a category decision changed carry
-        # its id in imported_transactions.decision_id, and rows a transfer
-        # decision marked carry it in transfer_decision_id, so Undo finds every
-        # one of them.
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS merchant_decisions (
-                id BIGINT PRIMARY KEY DEFAULT nextval('merchant_decisions_id_seq'),
-                user_id BIGINT NOT NULL,
-                merchant_key TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                category_id BIGINT,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                UNIQUE (user_id, merchant_key, kind)
-            )
-            """
-        )
-        # Every Review action, with what Undo needs to reverse it (JSON).
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS review_actions (
-                id BIGINT PRIMARY KEY DEFAULT nextval('review_actions_id_seq'),
-                user_id BIGINT NOT NULL,
-                kind TEXT NOT NULL,
-                payload TEXT NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-
-        conn.execute(
-            """
-            INSERT INTO settings (key, value)
-            VALUES ('starting_balance', '0')
-            ON CONFLICT DO NOTHING
-            """
-        )
-
-        if not table_has_column(conn, "recurring_items", "category_id"):
-            conn.execute("ALTER TABLE recurring_items ADD COLUMN category_id BIGINT")
-        if not table_has_column(conn, "manual_transactions", "category_id"):
-            conn.execute("ALTER TABLE manual_transactions ADD COLUMN category_id BIGINT")
-        if not table_has_column(conn, "expected_match_rules", "amount_min"):
-            conn.execute("ALTER TABLE expected_match_rules ADD COLUMN amount_min DOUBLE")
-        if not table_has_column(conn, "expected_match_rules", "amount_max"):
-            conn.execute("ALTER TABLE expected_match_rules ADD COLUMN amount_max DOUBLE")
-        if not table_has_column(conn, "categories", "color"):
-            conn.execute("ALTER TABLE categories ADD COLUMN color TEXT")
-        if not table_has_column(conn, "categories", "user_id"):
-            conn.execute("ALTER TABLE categories ADD COLUMN user_id BIGINT")
-        # Optional explicit monthly budget for a category. NULL = derive the budget
-        # from the category's expected items, as before.
-        if not table_has_column(conn, "categories", "budget_amount"):
-            conn.execute("ALTER TABLE categories ADD COLUMN budget_amount DOUBLE")
-        if not table_has_column(conn, "recurring_items", "user_id"):
-            conn.execute("ALTER TABLE recurring_items ADD COLUMN user_id BIGINT")
-        if not table_has_column(conn, "manual_transactions", "user_id"):
-            conn.execute("ALTER TABLE manual_transactions ADD COLUMN user_id BIGINT")
-        if not table_has_column(conn, "recurring_items", "account_id"):
-            conn.execute("ALTER TABLE recurring_items ADD COLUMN account_id BIGINT")
-        if not table_has_column(conn, "manual_transactions", "account_id"):
-            conn.execute("ALTER TABLE manual_transactions ADD COLUMN account_id BIGINT")
-        if not table_has_column(conn, "imported_transactions", "account_id"):
-            conn.execute("ALTER TABLE imported_transactions ADD COLUMN account_id BIGINT")
-        # How a payment to this card appears on the funding account's statement.
-        # Per-account so no issuer name has to live in the code.
-        if not table_has_column(conn, "accounts", "payment_pattern"):
-            conn.execute("ALTER TABLE accounts ADD COLUMN payment_pattern TEXT")
-        # How an imported row got its category: 'rule' (set by a category rule, and
-        # therefore safe to recompute) vs 'manual' (you chose it — rules never clobber it).
-        if not table_has_column(conn, "imported_transactions", "category_via"):
-            conn.execute("ALTER TABLE imported_transactions ADD COLUMN category_via TEXT")
-        if not table_has_column(conn, "users", "email"):
-            conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
-        # Import labels are matched case-insensitively but shown back as written.
-        if not table_has_column(conn, "import_account_links", "display_label"):
-            conn.execute("ALTER TABLE import_account_links ADD COLUMN display_label TEXT")
-        if not table_has_column(conn, "imported_transactions", "decision_id"):
-            conn.execute("ALTER TABLE imported_transactions ADD COLUMN decision_id BIGINT")
-        if not table_has_column(conn, "imported_transactions", "transfer_decision_id"):
-            conn.execute("ALTER TABLE imported_transactions ADD COLUMN transfer_decision_id BIGINT")
-        # Credentials. NULL password_hash means "not set yet", which puts the app
-        # into first-run setup rather than letting anyone in.
-        if not table_has_column(conn, "users", "password_hash"):
-            conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
-        if not table_has_column(conn, "users", "failed_attempts"):
-            conn.execute("ALTER TABLE users ADD COLUMN failed_attempts INTEGER DEFAULT 0")
-        if not table_has_column(conn, "users", "locked_until"):
-            conn.execute("ALTER TABLE users ADD COLUMN locked_until TIMESTAMP")
-        # Templates stand alone, shared by any number of accounts; an account
-        # points at its default one. DuckDB will not relax a column while an index
-        # depends on the table, so that index is dropped and recreated below.
-        for column in ("account_id", "amount_field"):
-            if not column_is_nullable(conn, "import_templates", column):
-                conn.execute("DROP INDEX IF EXISTS idx_import_templates_user")
-                conn.execute(f"ALTER TABLE import_templates ALTER COLUMN {column} DROP NOT NULL")
-        for column in ("date_fallback_field", "amount_in_field", "amount_out_field"):
-            if not table_has_column(conn, "import_templates", column):
-                conn.execute(f"ALTER TABLE import_templates ADD COLUMN {column} TEXT")
-        if not table_has_column(conn, "accounts", "default_template_id"):
-            conn.execute("ALTER TABLE accounts ADD COLUMN default_template_id BIGINT")
-        migrate_categories_to_user_scoped_uniqueness(conn, default_user_id)
-        migrate_legacy_import_templates(conn)
-        migrate_card_payment_signs(conn)
-        migrate_card_payment_fingerprints(conn)
-        conn.execute(
-            "UPDATE categories SET color = ? WHERE color IS NULL OR TRIM(color) = ''",
-            [DEFAULT_CATEGORY_COLOR],
-        )
-        conn.execute("UPDATE categories SET user_id = ? WHERE user_id IS NULL", [default_user_id])
-        conn.execute("UPDATE recurring_items SET user_id = ? WHERE user_id IS NULL", [default_user_id])
-        conn.execute("UPDATE manual_transactions SET user_id = ? WHERE user_id IS NULL", [default_user_id])
-        conn.execute("UPDATE users SET email = '' WHERE email IS NULL")
-        # Anchor imported rows to accounts by id. Backfill exact name matches;
-        # the rest are placed by hand from Accounts (map_import_label_to_account).
-        conn.execute(
-            """
-            UPDATE imported_transactions SET account_id = (
-                SELECT a.id FROM accounts a
-                WHERE a.user_id = imported_transactions.user_id
-                  AND LOWER(a.name) = LOWER(imported_transactions.account)
-            )
-            WHERE account_id IS NULL
-            """
-        )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_categories_user_id ON categories(user_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_recurring_items_user_id ON recurring_items(user_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_manual_transactions_user_id ON manual_transactions(user_id)")
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_user_name_unique ON categories(user_id, name)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_imported_user_date ON imported_transactions(user_id, tx_date)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_imported_user_account ON imported_transactions(user_id, account_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_import_templates_user ON import_templates(user_id)")
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_imported_fingerprint ON imported_transactions(user_id, fingerprint)")
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reconciliation_import_unique ON expected_reconciliations(user_id, imported_transaction_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_reconciliation_source ON expected_reconciliations(user_id, source_type, source_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_match_rules_source ON expected_match_rules(user_id, source_type, source_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_category_rules_user ON category_rules(user_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_category_rules_category ON category_rules(user_id, category_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_transaction_splits_tx ON transaction_splits(user_id, imported_transaction_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token_hash)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)")
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_user_name_unique ON accounts(user_id, name)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_recurring_items_account ON recurring_items(user_id, account_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_manual_transactions_account ON manual_transactions(user_id, account_id)")
-
-        legacy_settings = conn.execute(
-            "SELECT key, value FROM settings WHERE key NOT LIKE 'user:%:%'"
-        ).fetchall()
-        for key, value in legacy_settings:
-            conn.execute(
-                """
-                INSERT INTO settings (key, value)
-                VALUES (?, ?)
-                ON CONFLICT DO NOTHING
-                """,
-                [f"user:{default_user_id}:{key}", value],
-            )
-
+        new_database = not _table_exists(conn, "users")
+        if not new_database:
+            step_names = {name for name, _step in migrations.STEPS}
+            if not migrations.applied(conn) & step_names:
+                legacy_schema.bring_to_v0_4_0(conn)
+            migrations.run(conn, migrations.STEPS)
+            # Guarded by its own record, and reads only tables no step renames.
+            migrate_legacy_import_templates(conn)
+        _create_schema(conn)
         if new_database:
             migrations.record(conn, migrations.STEPS)
-        else:
-            migrations.run(conn, migrations.STEPS)
+        _seed_defaults(conn)
 
 
 def load_all_users() -> List[Dict[str, Any]]:
@@ -1480,8 +1385,8 @@ def load_categories(user_id: int) -> List[Dict[str, Any]]:
 def load_categories_with_usage(user_id: int) -> List[Dict[str, Any]]:
     rows = query_all("""
             SELECT c.id, c.name, c.color,
-                   (SELECT COUNT(*) FROM recurring_items r WHERE r.category_id = c.id AND r.user_id = c.user_id) AS recurring_count,
-                   (SELECT COUNT(*) FROM manual_transactions m WHERE m.category_id = c.id AND m.user_id = c.user_id) AS manual_count
+                   (SELECT COUNT(*) FROM bills b WHERE b.category_id = c.id AND b.user_id = c.user_id) AS bill_count,
+                   (SELECT COUNT(*) FROM one_time_items o WHERE o.category_id = c.id AND o.user_id = c.user_id) AS one_time_count
             FROM categories c
             WHERE c.user_id = ?
             ORDER BY LOWER(c.name), c.id
@@ -1664,228 +1569,225 @@ def _resolve_amount(
     return effective
 
 
-def generate_recurring_transactions(
-    item: Dict[str, Any],
+def bill_due_dates(
+    bill: Dict[str, Any],
     window_start: date,
     window_end: date,
     overrides: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
-    item_start = item["start_date"]
-    item_end = item["end_date"]
+    """A bill's due dates inside the window, each with the amount due that day:
+    {date, amount}. This is the one definition of a bill's schedule. Budget,
+    the ledger forecast, card statements, the negative balance alert and the
+    reconcile page all read it.
 
-    if isinstance(item_start, datetime):
-        item_start = item_start.date()
-    if isinstance(item_end, datetime):
-        item_end = item_end.date()
-
-    effective_start = max(window_start, item_start)
-    effective_end = min(window_end, item_end) if item_end else window_end
+    Due dates run from first_due_date by the bill's frequency until its end
+    date. Monthly, every-N-months and yearly bills fall on the first due
+    date's day, or on the last day of a month too short to hold it."""
+    first = _as_date(bill["first_due_date"])
+    end_date = _as_date(bill["end_date"]) if bill.get("end_date") else None
+    effective_start = max(window_start, first)
+    effective_end = min(window_end, end_date) if end_date else window_end
     if effective_start > effective_end:
         return []
 
-    kind = item["kind"]
-    base_amount = float(item["amount"])
-    frequency = item["frequency_type"]
-
+    frequency = bill["frequency_type"]
     if frequency == "weekly":
-        occurrences = iter_every_n_days(item_start, effective_start, effective_end, 7)
+        dates = iter_every_n_days(first, effective_start, effective_end, 7)
     elif frequency == "biweekly":
-        occurrences = iter_every_n_days(item_start, effective_start, effective_end, 14)
+        dates = iter_every_n_days(first, effective_start, effective_end, 14)
     elif frequency == "semimonthly":
-        day1 = int(item.get("semimonthly_day1") or 1)
-        day2 = int(item.get("semimonthly_day2") or 15)
-        occurrences = iter_semimonthly(item_start, effective_start, effective_end, day1, day2)
-    elif frequency == "monthly":
-        day = int(item.get("day_of_month") or item_start.day)
-        occurrences = iter_monthly(item_start, effective_start, effective_end, 1, day)
-    elif frequency == "yearly":
-        day = int(item.get("day_of_month") or item_start.day)
-        occurrences = iter_monthly(item_start, effective_start, effective_end, 12, day)
+        day1 = int(bill.get("semimonthly_day1") or 1)
+        day2 = int(bill.get("semimonthly_day2") or 15)
+        dates = iter_semimonthly(first, effective_start, effective_end, day1, day2)
     else:
-        interval_months = int(item.get("interval_months") or 1)
-        day = int(item.get("day_of_month") or item_start.day)
-        occurrences = iter_monthly(item_start, effective_start, effective_end, interval_months, day)
+        step = {"monthly": 1, "yearly": 12}.get(frequency) or int(bill.get("interval_months") or 1)
+        dates = iter_monthly(first, effective_start, effective_end, step, first.day)
 
+    base_amount = float(bill["amount"])
+    return [
+        {"date": due, "amount": _resolve_amount(base_amount, overrides or [], due)}
+        for due in dates
+    ]
+
+
+def bill_item_type(bill: Dict[str, Any]) -> str:
+    """What a scheduled row is called on the ledger: income, or a bill."""
+    return "income" if bill["kind"] == "income" else "bill"
+
+
+def generate_bill_transactions(
+    bill: Dict[str, Any],
+    window_start: date,
+    window_end: date,
+    overrides: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    """A bill's due dates in the window as ledger rows."""
+    kind = bill["kind"]
     rows: List[Dict[str, Any]] = []
-    for occurrence_date in occurrences:
-        amount = _resolve_amount(base_amount, overrides or [], occurrence_date)
-        delta = amount if kind == "income" else -amount
+    for due in bill_due_dates(bill, window_start, window_end, overrides):
+        amount = due["amount"]
         rows.append(
             {
-                "date": occurrence_date,
-                "description": item["name"],
-                "source": "recurring",
-                "income": amount if kind == "income" else 0.0,
-                "expense": amount if kind == "expense" else 0.0,
-                "delta": delta,
-                "kind": kind,
-                "category_name": item.get("category_name") or "",
-                "category_color": item.get("category_color") or "",
-                "account_id": item.get("account_id"),
-            }
-        )
-
-    return rows
-
-
-def load_all_recurring(user_id: int) -> List[Dict[str, Any]]:
-    rows = query_all("""
-            SELECT r.id, r.name, r.kind, r.amount, r.start_date, r.end_date, r.frequency_type,
-                   r.interval_months, r.semimonthly_day1, r.semimonthly_day2, r.day_of_month,
-                   r.active, r.created_at, r.category_id, r.account_id, c.name AS category_name, c.color AS category_color
-            FROM recurring_items r
-            LEFT JOIN categories c ON c.id = r.category_id AND c.user_id = r.user_id
-            WHERE r.user_id = ?
-            ORDER BY r.active DESC, r.kind, r.name, r.id
-            """, [user_id])
-    for row in rows:
-        row["category_color"] = safe_hex_color(row.get("category_color"))
-    return rows
-
-
-def load_active_recurring(user_id: int) -> List[Dict[str, Any]]:
-    rows = query_all("""
-            SELECT r.id, r.name, r.kind, r.amount, r.start_date, r.end_date, r.frequency_type,
-                   r.interval_months, r.semimonthly_day1, r.semimonthly_day2, r.day_of_month,
-                   r.active, r.created_at, r.category_id, r.account_id, c.name AS category_name, c.color AS category_color
-            FROM recurring_items r
-            LEFT JOIN categories c ON c.id = r.category_id AND c.user_id = r.user_id
-            WHERE r.active = TRUE AND r.user_id = ?
-            ORDER BY r.kind, r.name, r.id
-            """, [user_id])
-    for row in rows:
-        row["category_color"] = safe_hex_color(row.get("category_color"))
-    return rows
-
-
-def load_manual_transactions(user_id: int, window_start: date, window_end: date) -> List[Dict[str, Any]]:
-    rows = query_all("""
-            SELECT m.id, m.name, m.kind, m.amount, m.tx_date, m.category_id, m.account_id,
-                   c.name AS category_name, c.color AS category_color
-            FROM manual_transactions m
-            LEFT JOIN categories c ON c.id = m.category_id AND c.user_id = m.user_id
-            WHERE m.user_id = ? AND m.tx_date >= ? AND m.tx_date <= ?
-            ORDER BY m.tx_date, m.id
-            """, [user_id, window_start, window_end])
-
-    transactions: List[Dict[str, Any]] = []
-    for row in rows:
-        kind = row["kind"]
-        amount = float(row["amount"])
-        tx_date = row["tx_date"]
-        if isinstance(tx_date, datetime):
-            tx_date = tx_date.date()
-
-        transactions.append(
-            {
-                "date": tx_date,
-                "description": row["name"],
-                "source": "manual",
+                "date": due["date"],
+                "description": bill["name"],
+                "source": bill_item_type(bill),
                 "income": amount if kind == "income" else 0.0,
                 "expense": amount if kind == "expense" else 0.0,
                 "delta": amount if kind == "income" else -amount,
                 "kind": kind,
-                "id": row["id"],
-                "category_name": row.get("category_name") or "",
-                "category_color": safe_hex_color(row.get("category_color")),
-                "account_id": row.get("account_id"),
+                "id": bill["id"],
+                "category_name": bill.get("category_name") or "",
+                "category_color": bill.get("category_color") or "",
+                "account_id": bill.get("account_id"),
+            }
+        )
+    return rows
+
+
+BILL_COLUMNS = (
+    "b.id, b.name, b.kind, b.amount, b.first_due_date, b.end_date, b.frequency_type, b.interval_months, "
+    "b.semimonthly_day1, b.semimonthly_day2, b.active, b.created_at, b.category_id, b.account_id, "
+    "b.balance, b.balance_as_of, b.interest_rate, b.biller_url, b.charge_frequency, b.charge_first_date, "
+    "c.name AS category_name, c.color AS category_color"
+)
+
+
+def _load_bills(user_id: int, where: str = "", params: Sequence[Any] = (), order: str = "b.kind, b.name, b.id") -> List[Dict[str, Any]]:
+    rows = query_all(f"""
+            SELECT {BILL_COLUMNS}
+            FROM bills b
+            LEFT JOIN categories c ON c.id = b.category_id AND c.user_id = b.user_id
+            WHERE b.user_id = ? {where}
+            ORDER BY {order}
+            """, [user_id, *params])
+    for row in rows:
+        row["id"] = int(row["id"])
+        row["category_color"] = safe_hex_color(row.get("category_color"))
+        for key in ("first_due_date", "end_date", "balance_as_of", "charge_first_date"):
+            if row.get(key) is not None:
+                row[key] = _as_date(row[key])
+    return rows
+
+
+def load_all_bills(user_id: int) -> List[Dict[str, Any]]:
+    """Every bill and scheduled income, active ones first."""
+    return _load_bills(user_id, order="b.active DESC, b.kind, b.name, b.id")
+
+
+def load_active_bills(user_id: int) -> List[Dict[str, Any]]:
+    return _load_bills(user_id, "AND b.active = TRUE")
+
+
+def load_bill_by_id(user_id: int, bill_id: int) -> Optional[Dict[str, Any]]:
+    rows = _load_bills(user_id, "AND b.id = ?", [bill_id])
+    return rows[0] if rows else None
+
+
+ONE_TIME_COLUMNS = (
+    "o.id, o.name, o.kind, o.amount, o.expected_date, o.category_id, o.account_id, "
+    "c.name AS category_name, c.color AS category_color"
+)
+
+
+def _load_one_time_items(user_id: int, where: str = "", params: Sequence[Any] = (),
+                         order: str = "o.expected_date, o.id") -> List[Dict[str, Any]]:
+    rows = query_all(f"""
+            SELECT {ONE_TIME_COLUMNS}
+            FROM one_time_items o
+            LEFT JOIN categories c ON c.id = o.category_id AND c.user_id = o.user_id
+            WHERE o.user_id = ? {where}
+            ORDER BY {order}
+            """, [user_id, *params])
+    for row in rows:
+        row["id"] = int(row["id"])
+        row["amount"] = float(row["amount"])
+        row["expected_date"] = _as_date(row["expected_date"])
+        row["category_name"] = row.get("category_name") or ""
+        row["category_color"] = safe_hex_color(row.get("category_color"))
+    return rows
+
+
+def load_all_one_time_items(user_id: int) -> List[Dict[str, Any]]:
+    """Every one-time item, newest first."""
+    return _load_one_time_items(user_id, order="o.expected_date DESC, o.id DESC")
+
+
+def load_one_time_item_by_id(user_id: int, item_id: int) -> Optional[Dict[str, Any]]:
+    rows = _load_one_time_items(user_id, "AND o.id = ?", [item_id])
+    return rows[0] if rows else None
+
+
+def load_one_time_transactions(user_id: int, window_start: date, window_end: date) -> List[Dict[str, Any]]:
+    """One-time items expected in the window, as ledger rows."""
+    transactions: List[Dict[str, Any]] = []
+    for item in _load_one_time_items(user_id, "AND o.expected_date >= ? AND o.expected_date <= ?", [window_start, window_end]):
+        kind, amount = item["kind"], item["amount"]
+        transactions.append(
+            {
+                "date": item["expected_date"],
+                "description": item["name"],
+                "source": "one-time",
+                "income": amount if kind == "income" else 0.0,
+                "expense": amount if kind == "expense" else 0.0,
+                "delta": amount if kind == "income" else -amount,
+                "kind": kind,
+                "id": item["id"],
+                "category_name": item["category_name"],
+                "category_color": item["category_color"],
+                "account_id": item.get("account_id"),
             }
         )
     return transactions
 
 
-def load_manual_transaction_by_id(user_id: int, tx_id: int) -> Optional[Dict[str, Any]]:
-    row = fetch_one("""
-            SELECT m.id, m.name, m.kind, m.amount, m.tx_date, m.category_id, c.name AS category_name, c.color AS category_color
-            FROM manual_transactions m
-            LEFT JOIN categories c ON c.id = m.category_id AND c.user_id = m.user_id
-            WHERE m.id = ? AND m.user_id = ?
-            """, [tx_id, user_id])
-
-    if not row:
-        return None
-
-    tx_date = row[4]
-    if isinstance(tx_date, datetime):
-        tx_date = tx_date.date()
-
-    return {
-        "id": row[0],
-        "name": row[1],
-        "kind": row[2],
-        "amount": float(row[3]),
-        "tx_date": tx_date,
-        "category_id": row[5],
-        "category_name": row[6] or "",
-        "category_color": safe_hex_color(row[7]),
-    }
+def load_amount_overrides(bill_id: int) -> List[Dict[str, Any]]:
+    return query_all("SELECT id, bill_id, effective_date, amount FROM amount_overrides "
+            "WHERE bill_id = ? ORDER BY effective_date ASC", [bill_id])
 
 
-def load_recurring_item_by_id(user_id: int, item_id: int) -> Optional[Dict[str, Any]]:
-    rows = query_all("""
-            SELECT r.id, r.name, r.kind, r.amount, r.start_date, r.end_date, r.frequency_type,
-                   r.interval_months, r.semimonthly_day1, r.semimonthly_day2, r.day_of_month,
-                   r.active, r.category_id, r.account_id, c.name AS category_name, c.color AS category_color
-            FROM recurring_items r
-            LEFT JOIN categories c ON c.id = r.category_id AND c.user_id = r.user_id
-            WHERE r.id = ? AND r.user_id = ?
-            """, [item_id, user_id])
-    if not rows:
-        return None
-    rows[0]["category_color"] = safe_hex_color(rows[0].get("category_color"))
-    return rows[0]
-
-
-def load_amount_overrides(recurring_item_id: int) -> List[Dict[str, Any]]:
-    return query_all("SELECT id, recurring_item_id, effective_date, amount FROM amount_overrides "
-            "WHERE recurring_item_id = ? ORDER BY effective_date ASC", [recurring_item_id])
-
-
-def load_amount_overrides_for_items(item_ids: List[int]) -> Dict[int, List[Dict[str, Any]]]:
-    if not item_ids:
+def load_amount_overrides_for_bills(bill_ids: List[int]) -> Dict[int, List[Dict[str, Any]]]:
+    if not bill_ids:
         return {}
-    placeholders = ", ".join("?" for _ in item_ids)
-    rows = query_all(f"SELECT id, recurring_item_id, effective_date, amount FROM amount_overrides "
-            f"WHERE recurring_item_id IN ({placeholders}) ORDER BY effective_date ASC", item_ids)
+    placeholders = ", ".join("?" for _ in bill_ids)
+    rows = query_all(f"SELECT id, bill_id, effective_date, amount FROM amount_overrides "
+            f"WHERE bill_id IN ({placeholders}) ORDER BY effective_date ASC", bill_ids)
     result: Dict[int, List[Dict[str, Any]]] = {}
     for row in rows:
-        rid = int(row["recurring_item_id"])
-        result.setdefault(rid, []).append(row)
+        result.setdefault(int(row["bill_id"]), []).append(row)
     return result
 
 
-def save_amount_override(recurring_item_id: int, effective_date: date, amount: float) -> None:
+def save_amount_override(bill_id: int, effective_date: date, amount: float) -> None:
     with get_connection() as conn:
         conn.execute(
-            "DELETE FROM amount_overrides WHERE recurring_item_id = ? AND effective_date = ?",
-            [recurring_item_id, effective_date],
+            "DELETE FROM amount_overrides WHERE bill_id = ? AND effective_date = ?",
+            [bill_id, effective_date],
         )
         conn.execute(
-            "INSERT INTO amount_overrides (recurring_item_id, effective_date, amount) VALUES (?, ?, ?)",
-            [recurring_item_id, effective_date, amount],
+            "INSERT INTO amount_overrides (bill_id, effective_date, amount) VALUES (?, ?, ?)",
+            [bill_id, effective_date, amount],
         )
 
 
-def delete_overrides_for_item(recurring_item_id: int) -> None:
-    execute("DELETE FROM amount_overrides WHERE recurring_item_id = ?", [recurring_item_id])
+def delete_overrides_for_bill(bill_id: int) -> None:
+    execute("DELETE FROM amount_overrides WHERE bill_id = ?", [bill_id])
 
 
-def summarize_frequency(item: Dict[str, Any]) -> str:
-    frequency = item["frequency_type"]
-    start = item["start_date"]
-    day = item.get("day_of_month") or start.day
+def summarize_frequency(bill: Dict[str, Any]) -> str:
+    frequency = bill["frequency_type"]
+    first = _as_date(bill["first_due_date"])
     if frequency == "weekly":
         return "Every week"
     if frequency == "biweekly":
         return "Every 2 weeks"
     if frequency == "semimonthly":
-        return f"Twice monthly ({item.get('semimonthly_day1') or 1}, {item.get('semimonthly_day2') or 15})"
+        return f"Twice monthly ({bill.get('semimonthly_day1') or 1}, {bill.get('semimonthly_day2') or 15})"
     if frequency == "monthly":
-        return f"Monthly (day {day})"
+        return f"Monthly (day {first.day})"
     if frequency == "yearly":
-        return f"Yearly ({start.strftime('%b')} {day})"
-    interval = item.get("interval_months") or 1
-    return f"Every {interval} month(s) (day {day})"
+        return f"Yearly ({first.strftime('%b')} {first.day})"
+    interval = bill.get("interval_months") or 1
+    return f"Every {interval} month(s) (day {first.day})"
 
 
 # How close (in days) a checking payment and a card's own payment row must be to
@@ -2070,18 +1972,18 @@ def load_actual_checking_transactions(user_id: int, window_start: date, window_e
     scope_clause, scope_params = _checking_scope_sql(user_id, "i.")
     rows = query_all(f"""
                 SELECT i.id, i.tx_date, i.description, i.merchant, i.amount,
-                       COALESCE(ri.name, mt.name) AS expected_name,
+                       COALESCE(b.name, ot.name) AS expected_name,
                        ec.name AS expected_category_name, ec.color AS expected_category_color,
                        ic.name AS import_category_name, ic.color AS import_category_color
                 FROM imported_transactions i
                 LEFT JOIN expected_reconciliations r
                        ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
-                LEFT JOIN recurring_items ri
-                       ON r.source_type = 'recurring' AND ri.id = r.source_id AND ri.user_id = i.user_id
-                LEFT JOIN manual_transactions mt
-                       ON r.source_type = 'one_time' AND mt.id = r.source_id AND mt.user_id = i.user_id
+                LEFT JOIN bills b
+                       ON r.source_type = 'bill' AND b.id = r.source_id AND b.user_id = i.user_id
+                LEFT JOIN one_time_items ot
+                       ON r.source_type = 'one_time' AND ot.id = r.source_id AND ot.user_id = i.user_id
                 LEFT JOIN categories ec
-                       ON ec.id = COALESCE(ri.category_id, mt.category_id) AND ec.user_id = i.user_id
+                       ON ec.id = COALESCE(b.category_id, ot.category_id) AND ec.user_id = i.user_id
                 LEFT JOIN categories ic
                        ON ic.id = i.category_id AND ic.user_id = i.user_id
                 WHERE i.user_id = ? AND {scope_clause}
@@ -2150,28 +2052,27 @@ def card_actual_cutover(user_id: int, card: Dict[str, Any]) -> Optional[date]:
 def _card_expected_charges(
     user_id: int, card_id: int, window_start: date, window_end: date
 ) -> List[Dict[str, Any]]:
-    """Expected (recurring + one-time) charges assigned to a card as {date, delta}."""
+    """Expected (bill and one-time) charges assigned to a card as {date, delta}."""
     charges: List[Dict[str, Any]] = []
-    active_items = load_active_recurring(user_id)
-    item_ids = [int(item["id"]) for item in active_items]
-    overrides_by_id = load_amount_overrides_for_items(item_ids)
-    for item in active_items:
-        if item.get("account_id") != card_id:
+    active_bills = load_active_bills(user_id)
+    overrides_by_id = load_amount_overrides_for_bills([bill["id"] for bill in active_bills])
+    for bill in active_bills:
+        if bill.get("account_id") != card_id:
             continue
-        for row in generate_recurring_transactions(
-            item, window_start, window_end, overrides=overrides_by_id.get(int(item["id"]), [])
+        for row in generate_bill_transactions(
+            bill, window_start, window_end, overrides=overrides_by_id.get(bill["id"], [])
         ):
             charges.append(
                 {
                     "date": row["date"],
                     "delta": float(row["delta"]),
                     "description": row.get("description") or "",
-                    "kind": "recurring",
-                    "category_name": item.get("category_name") or "",
-                    "category_color": safe_hex_color(item.get("category_color")),
+                    "kind": "bill",
+                    "category_name": bill.get("category_name") or "",
+                    "category_color": safe_hex_color(bill.get("category_color")),
                 }
             )
-    for row in load_manual_transactions(user_id, window_start, window_end):
+    for row in load_one_time_transactions(user_id, window_start, window_end):
         if row.get("account_id") == card_id:
             charges.append(
                 {
@@ -2648,7 +2549,7 @@ def card_balance_summary(
 def spending_parts(user_id: int, window_start: date, window_end: date) -> List[Dict[str, Any]]:
     """Every piece of spending in the window: one row per transaction remainder
     and one per split part. This is the one definition of spending that Budget
-    and Review both read.
+    and the inbox both read.
 
     Spending is money going out that is not a transfer. Money coming in on a
     card is a refund and reduces spending in its category; money coming in on
@@ -2671,12 +2572,12 @@ def spending_parts(user_id: int, window_start: date, window_end: date) -> List[D
                        ON acct.id = i.account_id AND acct.user_id = i.user_id
                 LEFT JOIN expected_reconciliations r
                        ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
-                LEFT JOIN recurring_items ri
-                       ON r.source_type = 'recurring' AND ri.id = r.source_id AND ri.user_id = i.user_id
-                LEFT JOIN manual_transactions mt
-                       ON r.source_type = 'one_time' AND mt.id = r.source_id AND mt.user_id = i.user_id
+                LEFT JOIN bills b
+                       ON r.source_type = 'bill' AND b.id = r.source_id AND b.user_id = i.user_id
+                LEFT JOIN one_time_items ot
+                       ON r.source_type = 'one_time' AND ot.id = r.source_id AND ot.user_id = i.user_id
                 LEFT JOIN categories ec
-                       ON ec.id = COALESCE(ri.category_id, mt.category_id) AND ec.user_id = i.user_id
+                       ON ec.id = COALESCE(b.category_id, ot.category_id) AND ec.user_id = i.user_id
                 LEFT JOIN categories ic
                        ON ic.id = i.category_id AND ic.user_id = i.user_id
                 WHERE i.user_id = ? AND NOT i.is_transfer
@@ -2802,7 +2703,7 @@ def _apply_bar_geometry(categories: List[Dict[str, Any]]) -> None:
 
 def build_budget_summary(user_id: int, window_start: date, window_end: date) -> Dict[str, Any]:
     """Budget vs actual vs difference by category for the window. Budgeted =
-    recurring occurrences + one-time items in the window; actual = imported spend
+    bill due dates + one-time items in the window; actual = imported spend
     grouped by effective category. Expense-focused, with income shown separately."""
     # --- Budgeted, grouped by category ---
     budget_cats: Dict[str, Dict[str, Any]] = {}
@@ -2820,26 +2721,23 @@ def build_budget_summary(user_id: int, window_start: date, window_end: date) -> 
             },
         )
 
-    active_items = load_active_recurring(user_id)
-    item_ids = [int(item["id"]) for item in active_items]
-    overrides_by_id = load_amount_overrides_for_items(item_ids)
-    for item in active_items:
-        occurrences = generate_recurring_transactions(
-            item, window_start, window_end, overrides=overrides_by_id.get(int(item["id"]), [])
-        )
-        total = sum(abs(float(row["delta"])) for row in occurrences)
+    active_bills = load_active_bills(user_id)
+    overrides_by_id = load_amount_overrides_for_bills([bill["id"] for bill in active_bills])
+    for bill in active_bills:
+        due_dates = bill_due_dates(bill, window_start, window_end, overrides=overrides_by_id.get(bill["id"], []))
+        total = sum(due["amount"] for due in due_dates)
         if total <= 0:
             continue
-        if item["kind"] == "income":
+        if bill["kind"] == "income":
             income_budgeted += total
             continue
-        bucket = _cat_bucket(item.get("category_name"), item.get("category_color"))
+        bucket = _cat_bucket(bill.get("category_name"), bill.get("category_color"))
         bucket["budgeted"] += total
         bucket["line_items"].append(
-            {"id": int(item["id"]), "name": item["name"], "budgeted": round(total, 2), "source": "recurring"}
+            {"id": bill["id"], "name": bill["name"], "budgeted": round(total, 2), "source": "bill"}
         )
 
-    for row in load_manual_transactions(user_id, window_start, window_end):
+    for row in load_one_time_transactions(user_id, window_start, window_end):
         amount = abs(float(row["delta"]))
         if amount <= 0:
             continue
@@ -2996,35 +2894,32 @@ def collect_window_transactions(
     window_end: date,
     paid_through: Optional[date] = None,
 ) -> List[Dict[str, Any]]:
-    """Expected (recurring + one-off) rows for a window. `paid_through` is the
-    actuals cutover: occurrences already settled by an actual on/before it are
-    dropped, so an item paid ahead of its due date is not counted twice."""
+    """Expected (bill and one-time) rows for a window. `paid_through` is the
+    actuals cutover: due dates already settled by an actual on/before it are
+    dropped, so a bill paid ahead of its due date is not counted twice."""
     accounts = load_accounts_map(user_id)
-    gen_start = window_start
 
     raw: List[Dict[str, Any]] = []
-    active_items = load_active_recurring(user_id)
-    item_ids = [int(item["id"]) for item in active_items]
-    overrides_by_id = load_amount_overrides_for_items(item_ids)
+    active_bills = load_active_bills(user_id)
+    overrides_by_id = load_amount_overrides_for_bills([bill["id"] for bill in active_bills])
     settled_dates = (
-        reconciled_occurrence_dates(user_id, active_items, paid_through, window_end)
+        reconciled_occurrence_dates(user_id, active_bills, paid_through, window_end)
         if paid_through is not None
         else {}
     )
-    for item in active_items:
-        item_overrides = overrides_by_id.get(int(item["id"]), [])
-        rows = generate_recurring_transactions(item, gen_start, window_end, overrides=item_overrides)
-        settled = settled_dates.get(int(item["id"]))
+    for bill in active_bills:
+        rows = generate_bill_transactions(bill, window_start, window_end, overrides=overrides_by_id.get(bill["id"], []))
+        settled = settled_dates.get(bill["id"])
         if settled:
             rows = [row for row in rows if row["date"] not in settled]
         raw.extend(rows)
 
-    manual_rows = load_manual_transactions(user_id, gen_start, window_end)
+    one_time_rows = load_one_time_transactions(user_id, window_start, window_end)
     if paid_through is not None:
         settled_one_time = settled_one_time_ids(user_id, paid_through)
         if settled_one_time:
-            manual_rows = [row for row in manual_rows if int(row["id"]) not in settled_one_time]
-    raw.extend(manual_rows)
+            one_time_rows = [row for row in one_time_rows if int(row["id"]) not in settled_one_time]
+    raw.extend(one_time_rows)
 
     transactions = _apply_cash_flow_deferral(raw, accounts, window_start, window_end)
 
@@ -3114,7 +3009,6 @@ def add_month_summary_rows(
             row = {
                 **ledger_rows[row_index],
                 "row_type": "transaction",
-                "insert_default_date": row_date,
             }
             month_rows.append(row)
             month_income += float(row["income"])
@@ -3137,7 +3031,6 @@ def add_month_summary_rows(
                 "expense": month_expense,
                 "month_net": month_net,
                 "running_balance": month_ending_balance,
-                "insert_default_date": month_cursor,
             }
         )
 
@@ -3472,59 +3365,41 @@ def map_import_label_to_account(user_id: int, label: str, account_id: int) -> in
 # ---------------------------------------------------------------------------
 # Expected transactions + reconciliation
 #
-# "Expected transactions" = recurring_items (recurring) + manual_transactions
-# (one-time). Reconciliation links an imported (actual) transaction to an
-# expected item. A confirmed link seeds an editable description substring rule
-# (expected_match_rules) that auto-links matching actuals, both historical and
-# on future imports. Beyond status/audit, this layer feeds the ledger one fact:
-# which forecast occurrences are already settled by an actual (see
-# reconciled_occurrence_dates / settled_one_time_ids) so they are not counted twice.
+# "Expected transactions" = bills (scheduled money out and in) + one_time_items
+# (a single expected transaction). Reconciliation links an imported (actual)
+# transaction to an expected item. A confirmed link seeds an editable
+# description substring rule (expected_match_rules) that auto-links matching
+# actuals, both historical and on future imports. Beyond status/audit, this
+# layer feeds the ledger one fact: which forecast due dates are already settled
+# by an actual (see reconciled_occurrence_dates / settled_one_time_ids) so they
+# are not counted twice.
 # ---------------------------------------------------------------------------
 
-EXPECTED_SOURCE_TYPES = {"recurring", "one_time"}
+EXPECTED_SOURCE_TYPES = {"bill", "one_time"}
 RECONCILE_OCCURRENCE_TOLERANCE_DAYS = 10
 RECONCILE_OCCURRENCE_LOOKBACK_DAYS = 400
 
 
-def occurrence_history_start(item: Dict[str, Any]) -> date:
-    """Where to begin generating a recurring item's occurrences when matching them
-    against linked actuals. Shared by the reconcile view and the ledger so both
-    walk the same occurrences and can never disagree about what is paid."""
-    item_start = item["start_date"]
-    if isinstance(item_start, datetime):
-        item_start = item_start.date()
-    return max(item_start, date.today() - timedelta(days=RECONCILE_OCCURRENCE_LOOKBACK_DAYS))
+def occurrence_history_start(bill: Dict[str, Any]) -> date:
+    """Where to begin generating a bill's due dates when matching them against
+    linked actuals. Shared by the reconcile view and the ledger so both walk
+    the same due dates and can never disagree about what is paid."""
+    first = _as_date(bill["first_due_date"])
+    return max(first, date.today() - timedelta(days=RECONCILE_OCCURRENCE_LOOKBACK_DAYS))
 
 
-def load_all_manual_transactions(user_id: int) -> List[Dict[str, Any]]:
-    """Raw one-off (manual) transactions for a user, newest first."""
-    rows = query_all("""
-                SELECT m.id, m.name, m.kind, m.amount, m.tx_date, m.category_id, m.account_id,
-                       c.name AS category_name, c.color AS category_color
-                FROM manual_transactions m
-                LEFT JOIN categories c ON c.id = m.category_id AND c.user_id = m.user_id
-                WHERE m.user_id = ?
-                ORDER BY m.tx_date DESC, m.id DESC
-                """, [user_id])
-    for row in rows:
-        if isinstance(row["tx_date"], datetime):
-            row["tx_date"] = row["tx_date"].date()
-        row["category_color"] = safe_hex_color(row.get("category_color"))
-    return rows
-
-
-def recurring_status(item: Dict[str, Any], today: Optional[date] = None) -> str:
-    """"completed" once the end date has passed, whether or not the item was
-    paused, since it will not occur again; otherwise "paused" or "active"."""
+def bill_status(bill: Dict[str, Any], today: Optional[date] = None) -> str:
+    """"completed" once the end date has passed, whether or not the bill was
+    paused, since it will not fall due again; otherwise "paused" or "active"."""
     today = today or date.today()
-    end_date = item.get("end_date")
+    end_date = bill.get("end_date")
     if end_date is not None and _as_date(end_date) < today:
         return "completed"
-    return "active" if item.get("active") else "paused"
+    return "active" if bill.get("active") else "paused"
 
 
 def load_expected_items(user_id: int) -> List[Dict[str, Any]]:
-    """Unified expected-transaction list: recurring items + one-time items."""
+    """Every expected transaction: bills and income, then one-time items."""
     accounts = load_accounts_map(user_id)
     today = date.today()
 
@@ -3533,87 +3408,86 @@ def load_expected_items(user_id: int) -> List[Dict[str, Any]]:
         return account["name"] if account else ""
 
     items: List[Dict[str, Any]] = []
-    for item in load_all_recurring(user_id):
+    for bill in load_all_bills(user_id):
         items.append(
             {
-                "source_type": "recurring",
-                "id": int(item["id"]),
-                "name": item["name"],
-                "kind": item["kind"],
-                "amount": float(item["amount"]),
-                "category_name": item.get("category_name") or "",
-                "category_color": safe_hex_color(item.get("category_color")),
-                "account_name": account_name(item.get("account_id")),
-                "active": bool(item["active"]),
-                "status": recurring_status(item, today),
-                "cadence": summarize_frequency(item),
-                "date": item["start_date"].date() if isinstance(item.get("start_date"), datetime) else item.get("start_date"),
+                "source_type": "bill",
+                "id": bill["id"],
+                "name": bill["name"],
+                "kind": bill["kind"],
+                "amount": float(bill["amount"]),
+                "category_name": bill.get("category_name") or "",
+                "category_color": safe_hex_color(bill.get("category_color")),
+                "account_name": account_name(bill.get("account_id")),
+                "active": bool(bill["active"]),
+                "status": bill_status(bill, today),
+                "cadence": summarize_frequency(bill),
+                "date": bill["first_due_date"],
             }
         )
-    for row in load_all_manual_transactions(user_id):
+    for item in load_all_one_time_items(user_id):
         items.append(
             {
                 "source_type": "one_time",
-                "id": int(row["id"]),
-                "name": row["name"],
-                "kind": row["kind"],
-                "amount": float(row["amount"]),
-                "category_name": row.get("category_name") or "",
-                "category_color": safe_hex_color(row.get("category_color")),
-                "account_name": account_name(row.get("account_id")),
+                "id": item["id"],
+                "name": item["name"],
+                "kind": item["kind"],
+                "amount": item["amount"],
+                "category_name": item["category_name"],
+                "category_color": item["category_color"],
+                "account_name": account_name(item.get("account_id")),
                 "active": True,
                 "cadence": "One-time",
-                "date": row["tx_date"],
+                "date": item["expected_date"],
             }
         )
     return items
 
 
 def load_expected_item(user_id: int, source_type: str, source_id: int) -> Optional[Dict[str, Any]]:
-    if source_type == "recurring":
-        item = load_recurring_item_by_id(user_id, source_id)
+    if source_type == "bill":
+        bill = load_bill_by_id(user_id, source_id)
+        if not bill:
+            return None
+        return {
+            "source_type": "bill",
+            "id": bill["id"],
+            "name": bill["name"],
+            "kind": bill["kind"],
+            "amount": float(bill["amount"]),
+            "category_name": bill.get("category_name") or "",
+            "category_color": safe_hex_color(bill.get("category_color")),
+            "active": bool(bill["active"]),
+            "cadence": summarize_frequency(bill),
+            "raw": bill,
+        }
+    if source_type == "one_time":
+        item = load_one_time_item_by_id(user_id, source_id)
         if not item:
             return None
         return {
-            "source_type": "recurring",
-            "id": int(item["id"]),
+            "source_type": "one_time",
+            "id": item["id"],
             "name": item["name"],
             "kind": item["kind"],
-            "amount": float(item["amount"]),
-            "category_name": item.get("category_name") or "",
-            "category_color": safe_hex_color(item.get("category_color")),
-            "active": bool(item["active"]),
-            "cadence": summarize_frequency(item),
-            "raw": item,
-        }
-    if source_type == "one_time":
-        row = load_manual_transaction_by_id(user_id, source_id)
-        if not row:
-            return None
-        return {
-            "source_type": "one_time",
-            "id": int(row["id"]),
-            "name": row["name"],
-            "kind": row["kind"],
-            "amount": float(row["amount"]),
-            "category_name": row.get("category_name") or "",
-            "category_color": safe_hex_color(row.get("category_color")),
+            "amount": item["amount"],
+            "category_name": item["category_name"],
+            "category_color": item["category_color"],
             "active": True,
             "cadence": "One-time",
-            "date": row["tx_date"],
-            "raw": row,
+            "date": item["expected_date"],
+            "raw": item,
         }
     return None
 
 
 # ---------------------------------------------------------------------------
-# Recurring-transaction suggestions
+# Bill suggestions
 #
 # Scan a user's imported (actual) transactions, group them by a normalized
-# merchant key, and infer which groups look like real recurring items —
+# merchant key, and infer which groups look like a bill or scheduled income —
 # regular cadence + stable amount. Each surviving group becomes a suggestion
-# the user can confirm (create a recurring item on the detected account) or
-# dismiss. Dismissed/added keys are remembered so they don't reappear.
+# the user can confirm (add a bill on the detected account) or dismiss. Dismissed/added keys are remembered so they don't reappear.
 # ---------------------------------------------------------------------------
 
 # Map a median day-gap between occurrences to a human cadence and the Metis
@@ -3631,7 +3505,7 @@ _SUGGEST_CADENCES = [
 
 
 def _suggest_clean_name(text: Any) -> str:
-    """Turn a raw merchant string into a friendlier default recurring name."""
+    """Turn a raw merchant string into a friendlier default name."""
     value = _import_squash(text)
     value = re.sub(r"\s{2,}.*$", "", value)             # drop trailing address block
     value = re.sub(r"\bWWW\.[^\s]+", "", value, flags=re.IGNORECASE)  # drop URLs
@@ -3643,7 +3517,7 @@ def _suggest_clean_name(text: Any) -> str:
     # Title-case ALL-CAPS bank/ACH text; leave mixed-case merchant names alone.
     if value.isupper():
         value = value.title()
-    return value[:40] or "Recurring item"
+    return value[:40] or "Bill"
 
 
 def _classify_suggest_cadence(median_gap: float):
@@ -3670,15 +3544,15 @@ def dismiss_suggestion(user_id: int, suggestion_key: str, reason: str = "dismiss
 
 
 def count_dismissed_suggestions(user_id: int) -> int:
-    """How many suggestions the user manually dismissed (restorable). Excludes
+    """How many suggestions the user dismissed by hand (restorable). Excludes
     'added' rows, which suppress already-confirmed items and should stay hidden."""
     row = fetch_one("SELECT COUNT(*) FROM dismissed_suggestions WHERE user_id = ? AND reason = 'dismissed'", [user_id])
     return int(row[0]) if row else 0
 
 
 def reset_dismissed_suggestions(user_id: int) -> None:
-    """Restore manually-dismissed suggestions. Leaves 'added' suppressions intact
-    so items already turned into recurring rules are not re-suggested."""
+    """Restore suggestions dismissed by hand. Leaves 'added' suppressions intact
+    so a suggestion already turned into a bill is not made again."""
     execute("DELETE FROM dismissed_suggestions WHERE user_id = ? AND reason = 'dismissed'", [user_id])
 
 
@@ -3708,7 +3582,7 @@ def _mode(values: List[Any]) -> Any:
     return max(counts.items(), key=lambda kv: kv[1])[0] if counts else None
 
 
-def detect_recurring_suggestions(
+def detect_bill_suggestions(
     user_id: int,
     min_occurrences: int = 3,
     amount_cv_max: float = 0.35,
@@ -3716,12 +3590,12 @@ def detect_recurring_suggestions(
     lookback_days: int = 1200,
     limit: int = 24,
 ) -> List[Dict[str, Any]]:
-    """Infer likely recurring items from a user's imported transactions.
+    """Infer likely bills and scheduled income from a user's imported transactions.
 
     A group of same-merchant transactions qualifies when it recurs at least
     `min_occurrences` times at a regular spacing (mapping to a Metis cadence)
     and its amount is reasonably stable. Transfers, dismissed/added keys, and
-    groups already reconciled to a recurring item are excluded."""
+    groups already reconciled to a bill are excluded."""
     since = date.today() - timedelta(days=lookback_days)
     accounts = load_accounts(user_id)
     account_id_by_name = {a["name"]: int(a["id"]) for a in accounts}
@@ -3731,7 +3605,7 @@ def detect_recurring_suggestions(
     rows = query_all("""
                 SELECT i.id, i.account, i.tx_date, i.description, i.merchant,
                        i.amount, i.category_id,
-                       CASE WHEN r.source_type = 'recurring' THEN 1 ELSE 0 END AS recon_recurring
+                       CASE WHEN r.source_type = 'bill' THEN 1 ELSE 0 END AS on_a_bill
                 FROM imported_transactions i
                 LEFT JOIN expected_reconciliations r
                        ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
@@ -3757,8 +3631,8 @@ def detect_recurring_suggestions(
     for key, group in groups.items():
         if len(group) < min_occurrences:
             continue
-        # Skip groups already tracked by a recurring item (majority reconciled).
-        reconciled = sum(1 for r in group if r["recon_recurring"])
+        # Skip groups already tracked by a bill (majority reconciled).
+        reconciled = sum(1 for r in group if r["on_a_bill"])
         if reconciled * 2 >= len(group):
             continue
 
@@ -3790,12 +3664,16 @@ def detect_recurring_suggestions(
         account_name = _mode([r["account"] for r in group])
         modal_category = _mode([r["category_id"] for r in group if r.get("category_id")])
         category = categories.get(int(modal_category)) if modal_category else None
-        day_of_month = int(_mode([r["tx_date"].day for r in group]) or dates[-1].day)
+        # The first due date sets the day a monthly bill falls on, so it is the
+        # latest charge that fell on the usual day, not simply the latest charge.
+        usual_day = _mode([when.day for when in dates])
+        first_due = max(when for when in dates if when.day == usual_day)
         interval = int(interval_months or 1)
 
         suggestions.append(
             {
                 "key": key,
+                "token": suggestion_token(user_id, key),
                 "name": _suggest_clean_name(_mode([r["merchant"] for r in group]) or key),
                 "kind": kind,
                 "amount": round(_median(amounts), 2),
@@ -3807,10 +3685,7 @@ def detect_recurring_suggestions(
                 "frequency_type": frequency_type,
                 "frequency_label": cadence_label,
                 "interval_months": interval,
-                "day_of_month": day_of_month,
-                "semimonthly_day1": 1,
-                "semimonthly_day2": 15,
-                "start_date": dates[-1].isoformat(),
+                "first_due_date": first_due.isoformat(),
                 "count": len(group),
                 "confidence": confidence,
                 "first_date": dates[0].isoformat(),
@@ -3820,6 +3695,19 @@ def detect_recurring_suggestions(
 
     suggestions.sort(key=lambda s: (s["confidence"], s["amount"]), reverse=True)
     return suggestions[:limit]
+
+
+def suggestion_token(user_id: int, key: str) -> str:
+    """A short name for a suggestion that is safe to put in a URL: a hash, so
+    the merchant it is about is not in the address."""
+    return hashlib.sha256(f"{user_id}:{key}".encode("utf-8")).hexdigest()[:16]
+
+
+def find_bill_suggestion(user_id: int, token: str) -> Optional[Dict[str, Any]]:
+    """The current suggestion with this token, or None."""
+    if not token:
+        return None
+    return next((s for s in detect_bill_suggestions(user_id) if s["token"] == token), None)
 
 
 def find_amount_suggestions(user_id: int, kind: str, amount: float, limit: int = 25) -> List[Dict[str, Any]]:
@@ -3920,7 +3808,7 @@ def load_match_rules_for_item(user_id: int, source_type: str, source_id: int) ->
 
 
 def _expected_item_kind(conn: duckdb.DuckDBPyConnection, user_id: int, source_type: str, source_id: int) -> Optional[str]:
-    table = "recurring_items" if source_type == "recurring" else "manual_transactions"
+    table = "bills" if source_type == "bill" else "one_time_items"
     row = conn.execute(f"SELECT kind FROM {table} WHERE id = ? AND user_id = ?", [source_id, user_id]).fetchone()
     return row[0] if row else None
 
@@ -4133,16 +4021,16 @@ def load_reconciliation_counts(user_id: int) -> Dict[tuple, int]:
     return {(row[0], int(row[1])): int(row[2]) for row in rows}
 
 
-def recurring_occurrence_status(
-    item: Dict[str, Any], window_start: date, window_end: date, linked_imports: List[Dict[str, Any]]
+def bill_occurrence_status(
+    bill: Dict[str, Any], window_start: date, window_end: date, linked_imports: List[Dict[str, Any]],
+    overrides: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
-    """Map each generated occurrence of a recurring item to a linked actual
-    within a tolerance window → paid / expected, for the reconcile view."""
-    occurrences = generate_recurring_transactions(item, window_start, window_end)
+    """Map each due date of a bill to a linked actual within a tolerance
+    window → paid / expected, for the reconcile view."""
     used: set = set()
     result: List[Dict[str, Any]] = []
-    for occurrence in occurrences:
-        occ_date = occurrence["date"]
+    for due in bill_due_dates(bill, window_start, window_end, overrides):
+        occ_date = due["date"]
         best = None
         best_days = RECONCILE_OCCURRENCE_TOLERANCE_DAYS + 1
         for linked in linked_imports:
@@ -4157,7 +4045,7 @@ def recurring_occurrence_status(
         result.append(
             {
                 "date": occ_date,
-                "amount": occurrence["income"] if occurrence["kind"] == "income" else occurrence["expense"],
+                "amount": due["amount"],
                 "paid": best is not None,
                 "match": best,
             }
@@ -4166,35 +4054,35 @@ def recurring_occurrence_status(
 
 
 def reconciled_occurrence_dates(
-    user_id: int, items: List[Dict[str, Any]], through: date, window_end: date
+    user_id: int, bills: List[Dict[str, Any]], through: date, window_end: date
 ) -> Dict[int, set]:
-    """recurring item id -> occurrence dates already settled by a linked actual
-    dated on/before `through` (the checking actuals cutover).
+    """bill id -> due dates already settled by a linked actual dated on/before
+    `through` (the checking actuals cutover).
 
     A bill paid early straddles the cutover: the actual lands in the actuals half
-    of the ledger while its scheduled occurrence still falls in the forecast half,
-    so the ledger would count the same money twice. Matching mirrors
-    recurring_occurrence_status, so the occurrence the reconcile page calls paid is
+    of the ledger while its due date still falls in the forecast half, so the
+    ledger would count the same money twice. Matching mirrors
+    bill_occurrence_status, so the due date the reconcile page calls paid is
     exactly the one dropped from the forecast."""
-    linked_by_item = load_reconciliations_by_item(user_id, "recurring")
-    if not linked_by_item:
+    linked_by_bill = load_reconciliations_by_item(user_id, "bill")
+    if not linked_by_bill:
         return {}
 
     settled: Dict[int, set] = {}
-    for item in items:
-        item_id = int(item["id"])
-        linked = linked_by_item.get(item_id)
+    for bill in bills:
+        bill_id = int(bill["id"])
+        linked = linked_by_bill.get(bill_id)
         if not linked:
             continue
         dates = {
             occurrence["date"]
-            for occurrence in recurring_occurrence_status(
-                item, occurrence_history_start(item), window_end, linked
+            for occurrence in bill_occurrence_status(
+                bill, occurrence_history_start(bill), window_end, linked
             )
             if occurrence["paid"] and occurrence["match"]["tx_date"] <= through
         }
         if dates:
-            settled[item_id] = dates
+            settled[bill_id] = dates
     return settled
 
 
@@ -4217,20 +4105,20 @@ def load_imported_transaction_by_id(user_id: int, tx_id: int) -> Optional[Dict[s
     """One imported transaction with its effective category (a reconciled expected
     item's category wins over the import's own, matching the ledger and budget)."""
     rows = query_all("""
-                SELECT i.id, i.tx_date, i.description, i.merchant, i.amount, i.account,
+                SELECT i.id, i.tx_date, i.description, i.merchant, i.amount, i.account, i.account_id,
                        i.is_transfer, i.category_id, i.category_via,
                        COALESCE(ec.name, ic.name) AS category_name,
                        COALESCE(ec.color, ic.color) AS category_color,
-                       COALESCE(ri.name, mt.name) AS expected_name
+                       COALESCE(b.name, ot.name) AS expected_name
                 FROM imported_transactions i
                 LEFT JOIN expected_reconciliations r
                        ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
-                LEFT JOIN recurring_items ri
-                       ON r.source_type = 'recurring' AND ri.id = r.source_id AND ri.user_id = i.user_id
-                LEFT JOIN manual_transactions mt
-                       ON r.source_type = 'one_time' AND mt.id = r.source_id AND mt.user_id = i.user_id
+                LEFT JOIN bills b
+                       ON r.source_type = 'bill' AND b.id = r.source_id AND b.user_id = i.user_id
+                LEFT JOIN one_time_items ot
+                       ON r.source_type = 'one_time' AND ot.id = r.source_id AND ot.user_id = i.user_id
                 LEFT JOIN categories ec
-                       ON ec.id = COALESCE(ri.category_id, mt.category_id) AND ec.user_id = i.user_id
+                       ON ec.id = COALESCE(b.category_id, ot.category_id) AND ec.user_id = i.user_id
                 LEFT JOIN categories ic
                        ON ic.id = i.category_id AND ic.user_id = i.user_id
                 WHERE i.id = ? AND i.user_id = ?
@@ -4335,8 +4223,8 @@ def split_counts_by_transaction(user_id: int) -> Dict[int, int]:
 # Category rules
 #
 # Name-match rules that categorize imported transactions directly, with no
-# budget or recurring item behind them — for the things that never follow a
-# schedule (card payments, ATM withdrawals, one-off spend you still want named).
+# budget or bill behind them — for the things that never follow a
+# schedule (card payments, ATM withdrawals, occasional spend you still want named).
 #
 # A rule only ever writes rows it owns (category_via = 'rule'), so a category you
 # picked by hand is never overwritten. Transfers are eligible on purpose: card
@@ -4505,3 +4393,84 @@ def settled_one_time_ids(user_id: int, through: date) -> set:
                 """, [user_id, through])
     return {int(row[0]) for row in rows}
 
+
+
+# ---------------------------------------------------------------------------
+# One-time items settle themselves (#101)
+#
+# A one-time item is paid by an actual with its sign, dated near its expected
+# date, on its account when it has one. Metis links the two only when it is
+# certain: exactly one candidate for the same amount to the cent, which no other
+# unsettled item also matches exactly. Anything less is uncertain, and the item
+# is listed for the owner instead.
+# ---------------------------------------------------------------------------
+
+ONE_TIME_SETTLE_DAYS = 10
+ONE_TIME_NEAR_SHARE = 0.02
+
+
+def _one_time_settlement(user_id: int) -> Tuple[List[Tuple[Dict[str, Any], int]], List[Dict[str, Any]]]:
+    """(certain, uncertain): each certain item with the actual that pays it, and
+    the unsettled items whose match is uncertain."""
+    items = _load_one_time_items(
+        user_id,
+        "AND o.id NOT IN (SELECT source_id FROM expected_reconciliations "
+        "WHERE user_id = ? AND source_type = 'one_time')",
+        [user_id],
+    )
+    if not items:
+        return [], []
+    window = timedelta(days=ONE_TIME_SETTLE_DAYS)
+    actuals = query_all("""
+            SELECT i.id, i.tx_date, i.amount, i.account_id
+            FROM imported_transactions i
+            WHERE i.user_id = ? AND NOT i.is_transfer AND i.tx_date >= ? AND i.tx_date <= ?
+              AND i.id NOT IN (SELECT imported_transaction_id FROM expected_reconciliations WHERE user_id = ?)
+            """, [user_id, min(item["expected_date"] for item in items) - window,
+                  max(item["expected_date"] for item in items) + window, user_id])
+
+    exact: Dict[int, List[int]] = {}
+    near: Dict[int, List[int]] = {}
+    for item in items:
+        target = round(item["amount"], 2)
+        for actual in actuals:
+            amount = float(actual["amount"])
+            if (amount > 0) != (item["kind"] == "income") or amount == 0:
+                continue
+            if item.get("account_id") and actual["account_id"] != item["account_id"]:
+                continue
+            if abs((_as_date(actual["tx_date"]) - item["expected_date"]).days) > ONE_TIME_SETTLE_DAYS:
+                continue
+            gap = abs(round(abs(amount), 2) - target)
+            if gap < 0.005:
+                exact.setdefault(item["id"], []).append(int(actual["id"]))
+            elif gap <= target * ONE_TIME_NEAR_SHARE + 0.005:
+                near.setdefault(item["id"], []).append(int(actual["id"]))
+
+    claims: Dict[int, int] = {}
+    for found in exact.values():
+        for tx_id in found:
+            claims[tx_id] = claims.get(tx_id, 0) + 1
+    certain, uncertain = [], []
+    for item in items:
+        found = exact.get(item["id"], [])
+        if len(found) == 1 and claims[found[0]] == 1:
+            certain.append((item, found[0]))
+        elif found or near.get(item["id"]):
+            uncertain.append(item)
+    return certain, uncertain
+
+
+def settle_one_time_items(user_id: int) -> Dict[str, Any]:
+    """Link each one-time item to the actual that certainly pays it. Returns how
+    many were linked and the ids of the items left uncertain."""
+    certain, uncertain = _one_time_settlement(user_id)
+    linked = sum(
+        1 for item, tx_id in certain if confirm_reconciliation(user_id, "one_time", item["id"], tx_id, matched_via="auto")
+    )
+    return {"linked": linked, "uncertain": [item["id"] for item in uncertain]}
+
+
+def uncertain_one_time_matches(user_id: int) -> List[Dict[str, Any]]:
+    """Unsettled one-time items with a possible match Metis is not sure of."""
+    return _one_time_settlement(user_id)[1]

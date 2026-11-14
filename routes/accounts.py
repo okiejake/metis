@@ -47,9 +47,9 @@ def _load_account_usage(user_id: int):
         rows = conn.execute(
             """
             SELECT account_id, COUNT(*) FROM (
-                SELECT account_id FROM recurring_items WHERE user_id = ? AND account_id IS NOT NULL
+                SELECT account_id FROM bills WHERE user_id = ? AND account_id IS NOT NULL
                 UNION ALL
-                SELECT account_id FROM manual_transactions WHERE user_id = ? AND account_id IS NOT NULL
+                SELECT account_id FROM one_time_items WHERE user_id = ? AND account_id IS NOT NULL
             ) GROUP BY account_id
             """,
             [user_id, user_id],
@@ -139,12 +139,12 @@ def add_account(
     due_day: str = Form(""),
     statement_eom: str = Form(""),
     due_eom: str = Form(""),
-    method: str = Form("manual"),
+    method: str = Form("csv"),
     template: str = Form("new"),
 ):
     try:
-        if method != "manual":
-            raise ValueError("Plaid is coming soon. Choose Manual Import.")
+        if method != "csv":
+            raise ValueError("plaid is coming soon. choose csv.")
         chosen = None if template == "new" else it.load_template(user["id"], template)
         if template != "new" and not chosen:
             raise ValueError("Choose a template")
@@ -232,11 +232,11 @@ def delete_account(request: Request, user: CurrentUser, account_id: int):
 
     with get_connection() as conn:
         conn.execute(
-            "UPDATE recurring_items SET account_id = NULL WHERE account_id = ? AND user_id = ?",
+            "UPDATE bills SET account_id = NULL WHERE account_id = ? AND user_id = ?",
             [account_id, user["id"]],
         )
         conn.execute(
-            "UPDATE manual_transactions SET account_id = NULL WHERE account_id = ? AND user_id = ?",
+            "UPDATE one_time_items SET account_id = NULL WHERE account_id = ? AND user_id = ?",
             [account_id, user["id"]],
         )
         conn.execute(

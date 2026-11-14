@@ -9,7 +9,7 @@ from datetime import date
 
 import pytest
 
-from conftest import add_imported, add_recurring
+from conftest import add_bill, add_imported
 from tools import leak_check
 
 
@@ -29,7 +29,7 @@ def database(db, user_id, accounts):
                  "WOMBAT WAREHOUSE #0042 SPRINGFIELD", -137.46)
     add_imported(db, user_id, accounts["Example Checking"], "Example Checking", date(2026, 3, 5),
                  "TARGET", -20.0)
-    add_recurring(db, user_id, "Larkspur Daycare", 310.0, 5, date(2026, 1, 5))
+    add_bill(db, user_id, "Larkspur Daycare", 310.0, date(2026, 1, 5))
     path = db.DB_PATH
     db.close_database()
     return path

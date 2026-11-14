@@ -1,12 +1,12 @@
-"""Review: the page where everything Metis cannot yet account for is listed and
+"""The inbox: the page where everything Metis cannot yet account for is listed and
 settled, one decision per merchant.
 
 A decision is stored per merchant (merchant_decisions) and applied to every
-matching row, past and future: apply_review_decisions runs after each import.
+matching row, past and future: apply_inbox_decisions runs after each import.
 A merchant can hold one decision of each kind. Rows a category decision set
 carry its id in imported_transactions.decision_id; rows a transfer decision
 marked carry it in transfer_decision_id. Every action is recorded
-(review_actions) so Undo can reverse it completely.
+(inbox_actions) so Undo can reverse it completely.
 
 This module reads and writes through services; services never imports it.
 """
@@ -32,7 +32,7 @@ def record_action(user_id: int, kind: str, payload: Dict[str, Any]) -> int:
     """Remember an action and what reversing it takes. Returns its id."""
     with db.get_connection() as conn:
         return int(conn.execute(
-            "INSERT INTO review_actions (user_id, kind, payload) VALUES (?, ?, ?) RETURNING id",
+            "INSERT INTO inbox_actions (user_id, kind, payload) VALUES (?, ?, ?) RETURNING id",
             [user_id, kind, json.dumps(payload)],
         ).fetchone()[0])
 
@@ -41,7 +41,7 @@ def undo(user_id: int, action_id: int) -> str:
     """Reverse one recorded action completely and forget it. Returns the message
     to show."""
     row = db.fetch_one(
-        "SELECT kind, payload FROM review_actions WHERE id = ? AND user_id = ?", [action_id, user_id]
+        "SELECT kind, payload FROM inbox_actions WHERE id = ? AND user_id = ?", [action_id, user_id]
     )
     if not row:
         return "Nothing to undo"
@@ -49,7 +49,7 @@ def undo(user_id: int, action_id: int) -> str:
     handler = _UNDO.get(kind)
     if handler:
         handler(user_id, payload)
-    db.execute("DELETE FROM review_actions WHERE id = ? AND user_id = ?", [action_id, user_id])
+    db.execute("DELETE FROM inbox_actions WHERE id = ? AND user_id = ?", [action_id, user_id])
     return "Undone"
 
 
@@ -83,8 +83,8 @@ def _remove_created_category(user_id: int, category_id: Optional[int]) -> None:
         SELECT (SELECT COUNT(*) FROM imported_transactions WHERE user_id = ? AND category_id = ?)
              + (SELECT COUNT(*) FROM transaction_splits WHERE user_id = ? AND category_id = ?)
              + (SELECT COUNT(*) FROM category_rules WHERE user_id = ? AND category_id = ?)
-             + (SELECT COUNT(*) FROM recurring_items WHERE user_id = ? AND category_id = ?)
-             + (SELECT COUNT(*) FROM manual_transactions WHERE user_id = ? AND category_id = ?)
+             + (SELECT COUNT(*) FROM bills WHERE user_id = ? AND category_id = ?)
+             + (SELECT COUNT(*) FROM one_time_items WHERE user_id = ? AND category_id = ?)
              + (SELECT COUNT(*) FROM merchant_decisions WHERE user_id = ? AND category_id = ?)
         """,
         [user_id, category_id] * 6,
@@ -111,7 +111,7 @@ _UNDO = {"decision": _undo_decision, "charge": _undo_charge}
 
 def _uncategorized_ids_by_key(user_id: int) -> Dict[str, Set[int]]:
     """Every transaction with uncategorized spending, all history, by merchant.
-    Built from spending_parts, so it counts exactly what Review counts."""
+    Built from spending_parts, so it counts exactly what the inbox counts."""
     found: Dict[str, Set[int]] = {}
     for part in db.spending_parts(user_id, *ALL_TIME):
         if part["category_id"] is None:
@@ -336,7 +336,7 @@ def load_decisions(user_id: int) -> List[Dict[str, Any]]:
     )
 
 
-def apply_review_decisions(user_id: int) -> int:
+def apply_inbox_decisions(user_id: int) -> int:
     """Apply every stored decision to the rows it covers that are not yet
     changed. Idempotent; runs after each import. Returns how many rows changed."""
     decisions = load_decisions(user_id)
@@ -358,14 +358,14 @@ def apply_review_decisions(user_id: int) -> int:
 
 # --- Dismiss and budgets ----------------------------------------------------
 
-# Review's own dismissals share dismissed_suggestions with the recurring
-# detector, so one "Restore dismissed" brings every list's rows back.
+# The inbox's own dismissals share dismissed_suggestions with the bill
+# suggestions, so one "Restore dismissed" brings every list's rows back.
 TRANSFER_DISMISS_PREFIX = "transfer:"
 BUDGET_DISMISS_PREFIX = "budget:"
 
 
 def suggestion_added(user_id: int, key: str) -> bool:
-    """Whether a recurring suggestion was already turned into a recurring item."""
+    """Whether a bill suggestion was already added as a bill."""
     return bool(db.fetch_one(
         "SELECT 1 FROM dismissed_suggestions WHERE user_id = ? AND suggestion_key = ? AND reason = 'added'",
         [user_id, key],
@@ -410,24 +410,27 @@ def _undo_budget(user_id: int, payload: Dict[str, Any]) -> None:
     db.set_category_budget(user_id, int(payload["category_id"]), payload["before"])
 
 
-def _undo_recurring(user_id: int, payload: Dict[str, Any]) -> None:
-    """Remove a recurring item added from a suggestion, so it is suggested again."""
-    item_id = int(payload["item_id"])
+def _undo_bill(user_id: int, payload: Dict[str, Any]) -> None:
+    """Remove a bill added from a suggestion, so it is suggested again."""
+    bill_id = int(payload["bill_id"])
     with db.get_connection() as conn:
-        conn.execute("DELETE FROM amount_overrides WHERE recurring_item_id = ?", [item_id])
+        conn.execute(
+            "DELETE FROM amount_overrides WHERE bill_id IN (SELECT id FROM bills WHERE id = ? AND user_id = ?)",
+            [bill_id, user_id],
+        )
         for table in ("expected_match_rules", "expected_reconciliations"):
             conn.execute(
-                f"DELETE FROM {table} WHERE user_id = ? AND source_type = 'recurring' AND source_id = ?",
-                [user_id, item_id],
+                f"DELETE FROM {table} WHERE user_id = ? AND source_type = 'bill' AND source_id = ?",
+                [user_id, bill_id],
             )
-        conn.execute("DELETE FROM recurring_items WHERE id = ? AND user_id = ?", [item_id, user_id])
+        conn.execute("DELETE FROM bills WHERE id = ? AND user_id = ?", [bill_id, user_id])
         conn.execute(
             "DELETE FROM dismissed_suggestions WHERE user_id = ? AND suggestion_key = ? AND reason = 'added'",
             [user_id, payload["suggestion_key"]],
         )
 
 
-_UNDO.update({"dismiss": _undo_dismiss, "budget": _undo_budget, "recurring": _undo_recurring})
+_UNDO.update({"dismiss": _undo_dismiss, "budget": _undo_budget, "bill": _undo_bill})
 
 
 def suggested_budget(monthly: List[float]) -> Optional[float]:
@@ -619,8 +622,8 @@ def stale_accounts(user_id: int, today: date) -> List[Dict[str, Any]]:
     return rows
 
 
-def build_review(user_id: int, window_start: date, window_end: date) -> Dict[str, Any]:
-    """Everything Review shows for the date range: the meter and the lists, in
+def build_inbox(user_id: int, window_start: date, window_end: date) -> Dict[str, Any]:
+    """Everything the inbox shows for the date range: the meter and the lists, in
     working order, with no row in two lists."""
     parts = db.spending_parts(user_id, window_start, window_end)
     spending = round(sum(p["spent"] for p in parts), 2)
@@ -633,7 +636,7 @@ def build_review(user_id: int, window_start: date, window_end: date) -> Dict[str
     transfers = _transfer_rows(user_id, window_start, window_end, decided, dismissed)
     categories = _category_rows(user_id, parts, {row["key"] for row in transfers})
     budgets = _budget_rows(user_id, window_start, window_end, dismissed)
-    recurring = db.detect_recurring_suggestions(user_id)
+    bills = db.detect_bill_suggestions(user_id)
     imports = stale_accounts(user_id, date.today())
     negative = db.first_projected_negative(user_id, window_start, window_end)
     alerts = [{"kind": "negative", "date": negative.isoformat()}] if negative else []
@@ -644,8 +647,8 @@ def build_review(user_id: int, window_start: date, window_end: date) -> Dict[str
         "transfers": transfers,
         "categories": categories,
         "budgets": budgets,
-        "recurring": recurring,
-        "waiting": len(alerts) + len(imports) + len(transfers) + len(categories) + len(budgets) + len(recurring),
+        "bills": bills,
+        "waiting": len(alerts) + len(imports) + len(transfers) + len(categories) + len(budgets) + len(bills),
     }
 
 
@@ -665,17 +668,17 @@ def _data_stamp(user_id: int) -> tuple:
           (SELECT SUM(CAST(is_transfer AS INTEGER)) FROM imported_transactions WHERE user_id = ?),
           (SELECT COUNT(*) FROM merchant_decisions WHERE user_id = ?),
           (SELECT COUNT(*) FROM dismissed_suggestions WHERE user_id = ?),
-          (SELECT COUNT(*) FROM recurring_items WHERE user_id = ?),
+          (SELECT COUNT(*) FROM bills WHERE user_id = ?),
           (SELECT COUNT(*) FROM categories WHERE user_id = ?),
           (SELECT SUM(budget_amount) FROM categories WHERE user_id = ?),
           (SELECT COUNT(*) FROM transaction_splits WHERE user_id = ?),
           (SELECT COUNT(*) FROM expected_reconciliations WHERE user_id = ?),
           (SELECT COUNT(*) FROM accounts WHERE user_id = ?),
           -- the forecast behind the negative-balance alert
-          (SELECT SUM(amount) FROM recurring_items WHERE user_id = ?),
-          (SELECT SUM(CAST(active AS INTEGER)) FROM recurring_items WHERE user_id = ?),
-          (SELECT COUNT(*) FROM manual_transactions WHERE user_id = ?),
-          (SELECT SUM(amount) FROM manual_transactions WHERE user_id = ?),
+          (SELECT SUM(amount) FROM bills WHERE user_id = ?),
+          (SELECT SUM(CAST(active AS INTEGER)) FROM bills WHERE user_id = ?),
+          (SELECT COUNT(*) FROM one_time_items WHERE user_id = ?),
+          (SELECT SUM(amount) FROM one_time_items WHERE user_id = ?),
           (SELECT value FROM settings WHERE key = ?),
           CURRENT_DATE
         """,
@@ -683,14 +686,14 @@ def _data_stamp(user_id: int) -> tuple:
     ))
 
 
-def review_waiting_count(user_id: int) -> int:
-    """How many rows Review lists for the shared date range. Remembered until
+def inbox_waiting_count(user_id: int) -> int:
+    """How many rows the inbox lists for the shared date range. Remembered until
     the data or the range changes, since every page shows it."""
     window_start, window_end, _invalid = db.resolve_forecast_window(user_id)
     stamp = (_data_stamp(user_id), window_start, window_end)
     cached = _WAITING.get(user_id)
     if cached and cached[0] == stamp:
         return cached[1]
-    count = build_review(user_id, window_start, window_end)["waiting"]
+    count = build_inbox(user_id, window_start, window_end)["waiting"]
     _WAITING[user_id] = (stamp, count)
     return count

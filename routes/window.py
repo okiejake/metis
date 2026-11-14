@@ -17,13 +17,13 @@ from web import CurrentUser
 
 router = APIRouter()
 
-# A link's one-off dates and an old message must not survive Apply, or the page
+# A link's own dates and an old message must not survive Apply, or the page
 # would come back showing the range the user just replaced.
 _DROPPED_KEYS = {"start", "end", "msg", "err", "undo"}
 
 
 def clean_window_next(target: str) -> str:
-    """The same-site page to return to, without one-off dates or messages."""
+    """The same-site page to return to, without a link's own dates or messages."""
     path, _, fragment = resolve_safe_redirect_target(target).partition("#")
     path, _, query = path.partition("?")
     kept = [(key, value) for key, value in parse_qsl(query, keep_blank_values=True) if key not in _DROPPED_KEYS]

@@ -1,21 +1,27 @@
+"""Budget, and what bills and one-time items share: the expected form, saving
+it, and the reconcile page."""
+
 from datetime import date, timedelta
+from typing import Any, Dict, Optional
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+import expected_form as ef
+from inbox import record_action
 from services import (
     DEFAULT_CATEGORY_COLOR,
     EXPECTED_SOURCE_TYPES,
-    VALID_KINDS,
+    bill_occurrence_status,
     build_budget_summary,
     confirm_reconciliation,
     create_match_rule,
     delete_match_rule,
-    detect_recurring_suggestions,
+    detect_bill_suggestions,
     dismiss_suggestion,
     find_amount_suggestions,
-    get_connection,
+    find_bill_suggestion,
     load_accounts,
     load_categories,
     load_expected_item,
@@ -24,14 +30,11 @@ from services import (
     load_reconciliation_counts,
     load_reconciliations_for_item,
     occurrence_history_start,
-    parse_iso_date,
-    parse_optional_account_id,
-    parse_optional_category_id,
-    parse_positive_float,
-    recurring_occurrence_status,
     redirect_with_message,
     reset_dismissed_suggestions,
     resolve_forecast_window,
+    resolve_safe_redirect_target,
+    settle_one_time_items,
     suggest_rule_pattern,
     unlink_reconciliation,
     update_match_rule,
@@ -43,9 +46,105 @@ router = APIRouter()
 
 def _reconcile_path(source_type: str, source_id: int) -> str:
     """Built only from a known item type, so form input never shapes a redirect."""
-    if source_type not in EXPECTED_SOURCE_TYPES:
-        return "/budget"
-    return f"/expected/{source_type}/{int(source_id)}/reconcile"
+    if source_type == "bill":
+        return f"/bills/{int(source_id)}/reconcile"
+    if source_type == "one_time":
+        return f"/one-time/{int(source_id)}/reconcile"
+    return "/budget"
+
+
+def form_path(source_type: str, source_id: Optional[int] = None) -> str:
+    base = "/bills" if source_type == "bill" else "/one-time"
+    return f"{base}/{int(source_id)}/edit" if source_id else f"{base}/new"
+
+
+# --- The expected form ----------------------------------------------------------
+
+
+def render_form(request: Request, user: Dict[str, Any], values: Dict[str, Any], action: str,
+                editing: Optional[str], next_path: str, msg: str, err: int):
+    """The expected form. `editing` is the item's source type when editing, so
+    the kind of item is fixed."""
+    return render(
+        request,
+        "expected_form.html",
+        msg,
+        err,
+        values=values,
+        action=action,
+        editing=editing,
+        heading=ef.heading(values, bool(editing)),
+        repeats_options=[r for r in ef.REPEATS if not (editing == "bill" and r == ef.ONE_TIME)],
+        repeats_labels=ef.REPEATS_LABELS,
+        categories=load_categories(user["id"]),
+        accounts=load_accounts(user["id"]),
+        next_path=resolve_safe_redirect_target(next_path) if next_path else "",
+        # The page's own address, without anything but the prefill ids and enums.
+        range_next=request.url.path + ef.form_query(request.query_params),
+    )
+
+
+def new_form(request: Request, user: Dict[str, Any], form_base: str, msg: str, err: int):
+    """The form for a new item, opened from /bills/new or /one-time/new."""
+    query = dict(request.query_params)
+    values = ef.blank(user["id"], query, ef.ONE_TIME if form_base == "/one-time" else "monthly")
+    return render_form(request, user, values, form_base, None, query.get("next", ""), msg, err)
+
+
+async def save_new(request: Request, user: Dict[str, Any], form_base: str):
+    """Add a bill or a one-time item, whichever `repeats` says."""
+    form = await request.form()
+    next_path = str(form.get("next", "")) or "/budget"
+    token = str(form.get("from_suggestion", "")).strip()
+    if token and ef.added_suggestion_key(user["id"], token):
+        return redirect_with_message(next_path, "Nothing left to change")
+    try:
+        values = ef.parse(user["id"], form)
+    except ValueError as exc:
+        return redirect_with_message(f"{form_base}/new{ef.form_query(form)}", str(exc), is_error=True)
+
+    suggestion = find_bill_suggestion(user["id"], token) if token else None
+    source_type, item_id = ef.create(user["id"], values)
+    ef.link_transaction(user["id"], source_type, item_id, ef._int(form.get("from_tx")))
+    if source_type == "one_time":
+        settle_one_time_items(user["id"])
+    if suggestion and source_type == "bill":
+        dismiss_suggestion(user["id"], suggestion["key"], reason="added")
+        action = record_action(user["id"], "bill", {"bill_id": item_id, "suggestion_key": suggestion["key"]})
+        return redirect_with_message(next_path, f"added {values['name']}", undo=action)
+    return redirect_with_message(next_path, f"added {values['name']}")
+
+
+def render_reconcile(request: Request, user: Dict[str, Any], source_type: str, source_id: int,
+                     rule_seed: str, msg: str, err: int):
+    item = load_expected_item(user["id"], source_type, source_id)
+    if not item:
+        return redirect_with_message("/budget", "not found", is_error=True)
+
+    rules = load_match_rules_for_item(user["id"], source_type, source_id)
+    linked = load_reconciliations_for_item(user["id"], source_type, source_id)
+    suggestions = find_amount_suggestions(user["id"], item["kind"], item["amount"])
+
+    occurrences = None
+    if source_type == "bill":
+        raw = item["raw"]
+        occurrences = bill_occurrence_status(raw, occurrence_history_start(raw), date.today() + timedelta(days=90), linked)
+
+    return render(
+        request,
+        "reconcile.html",
+        msg,
+        err,
+        item=item,
+        rules=rules,
+        linked=linked,
+        suggestions=suggestions,
+        occurrences=occurrences,
+        rule_seed=rule_seed,
+    )
+
+
+# --- Budget -----------------------------------------------------------------------
 
 
 @router.get("/expected")
@@ -67,19 +166,15 @@ def budget_page(request: Request, user: CurrentUser, start: str = "", end: str =
     for item in items:
         item["recon_count"] = counts.get((item["source_type"], item["id"]), 0)
 
-    recurring_items = [item for item in items if item["source_type"] == "recurring"]
-    one_time_items = [item for item in items if item["source_type"] == "one_time"]
-    suggestion_count = len(detect_recurring_suggestions(user["id"]))
-
     return render(
         request,
         "budget.html",
         msg,
         err,
         budget_summary=budget_summary,
-        recurring_items=recurring_items,
-        one_time_items=one_time_items,
-        suggestion_count=suggestion_count,
+        bills=[item for item in items if item["source_type"] == "bill"],
+        one_time_items=[item for item in items if item["source_type"] == "one_time"],
+        suggestion_count=len(detect_bill_suggestions(user["id"])),
         categories=load_categories(user["id"]),
         accounts=load_accounts(user["id"]),
         default_color=DEFAULT_CATEGORY_COLOR,
@@ -101,81 +196,11 @@ def reset_suggestions_route(request: Request, user: CurrentUser):
     return redirect_with_message("/budget", "Dismissed suggestions restored")
 
 
-@router.post("/expected/one-time")
-def create_one_time_expected(
-    request: Request, user: CurrentUser,
-    name: str = Form(...),
-    kind: str = Form(...),
-    amount: str = Form(...),
-    category_id: str = Form(""),
-    account_id: str = Form(""),
-    tx_date: str = Form(...),
-):
-    try:
-        cleaned_name = name.strip()
-        if not cleaned_name:
-            raise ValueError("Name is required")
-        if kind not in VALID_KINDS:
-            raise ValueError("Kind must be income or expense")
-        parsed_amount = parse_positive_float(amount)
-        parsed_date = parse_iso_date(tx_date)
-        parsed_category_id = parse_optional_category_id(user["id"], category_id)
-        parsed_account_id = parse_optional_account_id(user["id"], account_id)
-
-        with get_connection() as conn:
-            conn.execute(
-                """
-                INSERT INTO manual_transactions (name, kind, amount, tx_date, category_id, account_id, user_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                [cleaned_name, kind, parsed_amount, parsed_date, parsed_category_id, parsed_account_id, user["id"]],
-            )
-    except ValueError as exc:
-        return redirect_with_message("/budget", str(exc), is_error=True)
-
-    return redirect_with_message("/budget", "One-time expected transaction added")
+# --- Matching an expected transaction to actuals ----------------------------------
 
 
-@router.get("/expected/{source_type}/{source_id}/reconcile", response_class=HTMLResponse)
-def reconcile_page(
-    request: Request, user: CurrentUser,
-    source_type: str,
-    source_id: int,
-    rule_seed: str = "",
-    msg: str = "",
-    err: int = 0,
-):
-    if source_type not in EXPECTED_SOURCE_TYPES:
-        return redirect_with_message("/budget", "Unknown expected item type", is_error=True)
-
-    item = load_expected_item(user["id"], source_type, source_id)
-    if not item:
-        return redirect_with_message("/budget", "Expected item not found", is_error=True)
-
-    rules = load_match_rules_for_item(user["id"], source_type, source_id)
-    linked = load_reconciliations_for_item(user["id"], source_type, source_id)
-    suggestions = find_amount_suggestions(user["id"], item["kind"], item["amount"])
-
-    occurrences = None
-    if source_type == "recurring":
-        raw = item["raw"]
-        window_end = date.today() + timedelta(days=90)
-        occurrences = recurring_occurrence_status(
-            raw, occurrence_history_start(raw), window_end, linked
-        )
-
-    return render(
-        request,
-        "reconcile.html",
-        msg,
-        err,
-        item=item,
-        rules=rules,
-        linked=linked,
-        suggestions=suggestions,
-        occurrences=occurrences,
-        rule_seed=rule_seed,
-    )
+def _known(user_id: int, source_type: str, source_id: int) -> bool:
+    return source_type in EXPECTED_SOURCE_TYPES and bool(load_expected_item(user_id, source_type, source_id))
 
 
 @router.post("/expected/reconcile/confirm")
@@ -187,7 +212,7 @@ def confirm_match(
     description: str = Form(""),
 ):
     target = _reconcile_path(source_type, source_id)
-    if source_type not in EXPECTED_SOURCE_TYPES or not load_expected_item(user["id"], source_type, source_id):
+    if not _known(user["id"], source_type, source_id):
         return redirect_with_message("/budget", "Expected item not found", is_error=True)
 
     created = confirm_reconciliation(user["id"], source_type, source_id, imported_transaction_id)
@@ -196,7 +221,7 @@ def confirm_match(
 
     seed = suggest_rule_pattern(description)
     return redirect_with_message(
-        f"{target}?rule_seed={quote_plus(seed)}", "Match confirmed — review the auto-match rule below"
+        f"{target}?rule_seed={quote_plus(seed)}", "Match confirmed — check the auto-match rule below"
     )
 
 
@@ -240,7 +265,7 @@ def save_rule(
     amount_max: str = Form(""),
 ):
     target = _reconcile_path(source_type, source_id)
-    if source_type not in EXPECTED_SOURCE_TYPES or not load_expected_item(user["id"], source_type, source_id):
+    if not _known(user["id"], source_type, source_id):
         return redirect_with_message("/budget", "Expected item not found", is_error=True)
 
     try:
@@ -267,18 +292,3 @@ def remove_rule(request: Request, user: CurrentUser, rule_id: int, source_type: 
 def unlink_match(request: Request, user: CurrentUser, recon_id: int, source_type: str = Form(...), source_id: int = Form(...)):
     unlink_reconciliation(user["id"], recon_id)
     return redirect_with_message(_reconcile_path(source_type, source_id), "Match removed")
-
-
-@router.post("/expected/one-time/{tx_id}/delete")
-def delete_one_time_expected(request: Request, user: CurrentUser, tx_id: int):
-    with get_connection() as conn:
-        conn.execute("DELETE FROM manual_transactions WHERE id = ? AND user_id = ?", [tx_id, user["id"]])
-        conn.execute(
-            "DELETE FROM expected_reconciliations WHERE user_id = ? AND source_type = 'one_time' AND source_id = ?",
-            [user["id"], tx_id],
-        )
-        conn.execute(
-            "DELETE FROM expected_match_rules WHERE user_id = ? AND source_type = 'one_time' AND source_id = ?",
-            [user["id"], tx_id],
-        )
-    return redirect_with_message("/budget", "One-time expected transaction deleted")

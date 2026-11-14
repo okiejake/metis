@@ -1,7 +1,7 @@
 """Which charges are one merchant.
 
-`merchant_key` is the single grouping used by the recurring detector and by
-Review. Pure functions, no database.
+`merchant_key` is the single grouping used by bill suggestions and by
+the inbox. Pure functions, no database.
 """
 
 import re

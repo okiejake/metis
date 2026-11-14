@@ -1,4 +1,4 @@
-"""Dashboard, Ledger, Budget and Review share one saved date range: what is saved
+"""Dashboard, Ledger, Budget and the inbox share one saved date range: what is saved
 is what each of them opens on. A link carrying ?start=&end= shows those dates on
 that view only and never replaces the saved range.
 

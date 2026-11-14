@@ -1,4 +1,4 @@
-"""One merchant key, shared by Review and the recurring detector, decides which
+"""One merchant key, shared by the inbox and the bill detector, decides which
 charges are one merchant. A payment processor's prefix used to swallow the
 merchant behind it, so every merchant billed through that processor became one.
 
@@ -32,8 +32,8 @@ def test_a_suggestion_dismissed_under_the_old_key_stays_dismissed(db, user_id, a
     checking = accounts["Example Checking"]
     for month in (3, 4, 5, 6):
         add_imported(db, user_id, checking, "Example Checking", date(2026, month, 2), "PAYPAL *ACME STREAMING", -10.0)
-    assert [s["key"] for s in db.detect_recurring_suggestions(user_id, lookback_days=100000)] == ["PAYPAL ACME STREAMING"]
+    assert [s["key"] for s in db.detect_bill_suggestions(user_id, lookback_days=100000)] == ["PAYPAL ACME STREAMING"]
 
     db.dismiss_suggestion(user_id, "PAYPAL")
 
-    assert db.detect_recurring_suggestions(user_id, lookback_days=100000) == []
+    assert db.detect_bill_suggestions(user_id, lookback_days=100000) == []

@@ -88,5 +88,6 @@ def test_a_redirect_keeps_a_same_site_path_and_its_query():
 
 
 def test_a_reconcile_path_is_built_only_for_known_item_types():
-    assert _reconcile_path("recurring", 3) == "/expected/recurring/3/reconcile"
+    assert _reconcile_path("bill", 3) == "/bills/3/reconcile"
+    assert _reconcile_path("one_time", 3) == "/one-time/3/reconcile"
     assert _reconcile_path("/evil.example", 3) == "/budget"

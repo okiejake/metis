@@ -191,7 +191,7 @@ def derive_merchant(description: str, on_card: bool = False) -> str:
     named in a bank transfer description, else, on checking, the description's
     first few words (bank descriptions trail with references and places), and on
     a card the whole description. Matches how rows were named before templates,
-    so Review's merchant decisions keep applying to new imports."""
+    so the inbox's merchant decisions keep applying to new imports."""
     for pattern in _ACH_PAYEE:
         match = pattern.search(description)
         if match:
@@ -359,9 +359,9 @@ def set_default_template(user_id: int, account_id: int, template_id: Optional[in
 def import_into_account(user_id: int, account: Mapping[str, Any], t: Mapping[str, Any],
                         raw: bytes, filename: str) -> Dict[str, int]:
     """Read a file with a template into one account, then settle the new rows the
-    way every import does: match rules, Review's merchant decisions, then
-    category rules. Raises CsvImportError when the file does not fit."""
-    from review import apply_review_decisions  # review imports services; keep this module light
+    way every import does: match rules, the inbox's merchant decisions, category
+    rules, then one-time items. Raises CsvImportError when the file does not fit."""
+    from inbox import apply_inbox_decisions  # inbox imports services; keep this module light
 
     header, rows = read_csv(raw)
     parsed = parse_rows(header, rows, t, account, db.card_payment_patterns(user_id))
@@ -370,7 +370,8 @@ def import_into_account(user_id: int, account: Mapping[str, Any], t: Mapping[str
     if result["inserted"]:
         result["matched"] = db.apply_match_rules(user_id)
         # Decisions first, so they win over rules for their rows.
-        result["categorized"] = apply_review_decisions(user_id) + db.apply_category_rules(user_id)
+        result["categorized"] = apply_inbox_decisions(user_id) + db.apply_category_rules(user_id)
+        result["matched"] += db.settle_one_time_items(user_id)["linked"]
     return result
 
 

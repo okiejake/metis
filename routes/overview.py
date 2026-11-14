@@ -17,7 +17,7 @@ from services import (
     load_categories,
     resolve_forecast_window,
 )
-from review import build_review
+from inbox import build_inbox
 from web import CurrentUser, render
 
 router = APIRouter()
@@ -99,7 +99,7 @@ def dashboard_page(request: Request, user: CurrentUser, start: str = "", end: st
     projected_end_balance = running_balance
     period_net = projected_end_balance - starting_balance
     average_monthly_net = period_net / len(monthly_rows) if monthly_rows else 0.0
-    review_summary = build_review(user["id"], window_start, window_end)
+    inbox_summary = build_inbox(user["id"], window_start, window_end)
 
     return render(
         request,
@@ -119,5 +119,5 @@ def dashboard_page(request: Request, user: CurrentUser, start: str = "", end: st
         first_negative_date=first_negative_date.isoformat() if first_negative_date else "",
         chart_labels_json=json.dumps(chart_labels),
         chart_values_json=json.dumps(chart_values),
-        review_line={"percent": review_summary["meter"]["percent"], "waiting": review_summary["waiting"]},
+        inbox_line={"percent": inbox_summary["meter"]["percent"], "waiting": inbox_summary["waiting"]},
     )

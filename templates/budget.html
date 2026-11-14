@@ -4,8 +4,9 @@
 <div class="page-bar">
   <div class="intro-badge-stack">
     <span class="stat-chip">today {{ today_iso }}</span>
-    {% if suggestion_count %}<a class="stat-chip success" href="{{ base_path() }}/inbox#recurring">{{ suggestion_count }} suggested</a>{% endif %}
-    <span class="stat-chip">{{ recurring_items|selectattr("status", "equalto", "active")|list|length }} recurring</span>
+    {% if suggestion_count %}<a class="stat-chip success" href="{{ base_path() }}/inbox#bills">{{ suggestion_count }} suggested</a>{% endif %}
+    {% set active_bills = bills|selectattr("status", "equalto", "active")|list|length %}
+    <span class="stat-chip">{{ active_bills }} {{ 'bill' if active_bills == 1 else 'bills' }}</span>
     <span class="stat-chip">{{ one_time_items|length }} one-time</span>
   </div>
 </div>
@@ -154,140 +155,18 @@
 {% endif %}
 
 <section class="panel">
-  <div class="panel-head">
-    <h2>add expected transaction</h2>
+  <div class="actions">
+    <a class="button-link" href="{{ base_path() }}/bills/new">add bill</a>
+    <a class="button-link" href="{{ base_path() }}/one-time/new">add one-time</a>
   </div>
-
-  <div class="segmented" role="tablist">
-    <button type="button" class="button-link active" data-mode="recurring" role="tab">recurring</button>
-    <button type="button" class="button-link" data-mode="one_time" role="tab">one-time</button>
-  </div>
-
-  <form method="post" action="{{ base_path() }}/recurring" id="recurring-form" class="grid-form expected-add-form" data-mode-form="recurring">
-    <label>
-      name
-      <input type="text" name="name" placeholder="paycheck / rent / utilities" />
-    </label>
-    <label>
-      type
-      <select name="kind">
-        <option value="income">income</option>
-        <option value="expense">expense</option>
-      </select>
-    </label>
-    <label>
-      amount
-      <input type="number" step="0.01" min="0.01" name="amount" />
-    </label>
-    <label>
-      category
-      <select name="category_id">
-        <option value="">no category</option>
-        {% for category in categories %}
-        <option value="{{ category.id }}">{% filter lower %}{{ category.name }}{% endfilter %}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>
-      account
-      <select name="account_id">
-        <option value="">unassigned (immediate)</option>
-        {% for account in accounts %}
-        <option value="{{ account.id }}">{% filter lower %}{{ account.name }}{{ ' (card)' if account.account_type == 'credit_card' else '' }}{% endfilter %}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>
-      start date
-      <input type="date" name="start_date" value="{{ today_iso }}" />
-    </label>
-    <label>
-      end date (optional)
-      <input type="date" name="end_date" />
-    </label>
-    <label>
-      frequency
-      <select name="frequency_type" id="frequency_type">
-        <option value="weekly">weekly</option>
-        <option value="biweekly">bi-weekly</option>
-        <option value="semimonthly">semi-monthly</option>
-        <option value="monthly">monthly</option>
-        <option value="yearly">yearly</option>
-        <option value="every_x_months">every x months</option>
-      </select>
-    </label>
-    <input type="hidden" name="day_of_month_touched" value="0" id="day_of_month_touched" />
-    <label data-field="interval_months" class="conditional hidden">
-      every x months
-      <input type="number" min="1" name="interval_months" value="2" />
-    </label>
-    <label data-field="day_of_month" class="conditional hidden">
-      day of month
-      <input type="number" min="1" max="31" name="day_of_month" value="1" />
-    </label>
-    <label data-field="semimonthly_day1" class="conditional hidden">
-      semi-monthly day 1
-      <input type="number" min="1" max="31" name="semimonthly_day1" value="1" />
-    </label>
-    <label data-field="semimonthly_day2" class="conditional hidden">
-      semi-monthly day 2
-      <input type="number" min="1" max="31" name="semimonthly_day2" value="15" />
-    </label>
-    <div class="full-row">
-      <button type="submit" class="button-link">add recurring item</button>
-    </div>
-  </form>
-
-  <form method="post" action="{{ base_path() }}/expected/one-time" id="one-time-form" class="grid-form expected-add-form hidden" data-mode-form="one_time">
-    <label>
-      name
-      <input type="text" name="name" placeholder="vet bill / car repair / bonus" />
-    </label>
-    <label>
-      type
-      <select name="kind">
-        <option value="expense">expense</option>
-        <option value="income">income</option>
-      </select>
-    </label>
-    <label>
-      amount
-      <input type="number" step="0.01" min="0.01" name="amount" />
-    </label>
-    <label>
-      category
-      <select name="category_id">
-        <option value="">no category</option>
-        {% for category in categories %}
-        <option value="{{ category.id }}">{% filter lower %}{{ category.name }}{% endfilter %}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>
-      account
-      <select name="account_id">
-        <option value="">unassigned (immediate)</option>
-        {% for account in accounts %}
-        <option value="{{ account.id }}">{% filter lower %}{{ account.name }}{{ ' (card)' if account.account_type == 'credit_card' else '' }}{% endfilter %}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>
-      expected date
-      <input type="date" name="tx_date" value="{{ today_iso }}" />
-    </label>
-    <div class="full-row">
-      <button type="submit" class="button-link">add one-time item</button>
-    </div>
-  </form>
 </section>
 
 <section class="panel">
   <div class="panel-head">
-    <h2>recurring</h2>
+    <h2>bills</h2>
   </div>
-  {% if recurring_items %}
-  <div class="segmented" role="tablist" aria-label="show recurring items by status">
+  {% if bills %}
+  <div class="segmented" role="tablist" aria-label="show bills by status">
     {% for status, label in [('active', 'active'), ('completed', 'completed'), ('paused', 'paused'), ('all', 'all')] %}
     <button type="button" class="button-link{{ ' active' if status == 'active' else '' }}" data-status-filter="{{ status }}" role="tab">{{ label }}</button>
     {% endfor %}
@@ -308,7 +187,7 @@
         </tr>
       </thead>
       <tbody>
-        {% for item in recurring_items %}
+        {% for item in bills %}
         <tr data-status="{{ item.status }}">
           <td>{{ item.name }}</td>
           <td>
@@ -332,19 +211,19 @@
           </td>
           <td class="row-action-cell">
             <div class="row-action-inline">
-              <a href="{{ base_path() }}/expected/recurring/{{ item.id }}/reconcile" class="button-link">reconcile</a>
+              <a href="{{ base_path() }}/bills/{{ item.id }}/reconcile" class="button-link">reconcile</a>
               <details class="row-action-menu">
                 <summary class="row-action-trigger" aria-label="open item actions">
                   <i data-lucide="settings-2" class="menu-icon" aria-hidden="true"></i>
                 </summary>
                 <div class="row-action-dropdown">
-                  <a href="{{ base_path() }}/recurring/{{ item.id }}/edit" class="row-action-item">edit</a>
+                  <a href="{{ base_path() }}/bills/{{ item.id }}/edit" class="row-action-item">edit</a>
                   {% if item.status != 'completed' %}
-                  <form method="post" action="{{ base_path() }}/recurring/{{ item.id }}/toggle" class="row-action-item-form">
+                  <form method="post" action="{{ base_path() }}/bills/{{ item.id }}/toggle" class="row-action-item-form">
                     <button type="submit" class="row-action-item">{{ 'pause' if item.active else 'resume' }}</button>
                   </form>
                   {% endif %}
-                  <form method="post" action="{{ base_path() }}/recurring/{{ item.id }}/delete" class="row-action-item-form" onsubmit="return confirm('delete this recurring item?')">
+                  <form method="post" action="{{ base_path() }}/bills/{{ item.id }}/delete" class="row-action-item-form" onsubmit="return confirm('delete this bill?')">
                     <button type="submit" class="row-action-item danger">delete</button>
                   </form>
                 </div>
@@ -356,9 +235,9 @@
       </tbody>
     </table>
   </div>
-  <p class="empty-state hidden" id="recurring-filter-empty">nothing here.</p>
+  <p class="empty-state hidden" id="bills-filter-empty">nothing here.</p>
   {% else %}
-  <p class="empty-state">no recurring expected items yet.</p>
+  <p class="empty-state">no bills yet.</p>
   {% endif %}
 </section>
 
@@ -403,10 +282,18 @@
           </td>
           <td class="row-action-cell">
             <div class="row-action-inline">
-              <a href="{{ base_path() }}/expected/one_time/{{ item.id }}/reconcile" class="button-link">reconcile</a>
-              <form method="post" action="{{ base_path() }}/expected/one-time/{{ item.id }}/delete" class="row-action-item-form" onsubmit="return confirm('delete this one-time expected item?')">
-                <button type="submit" class="button-link danger">delete</button>
-              </form>
+              <a href="{{ base_path() }}/one-time/{{ item.id }}/reconcile" class="button-link">reconcile</a>
+              <details class="row-action-menu">
+                <summary class="row-action-trigger" aria-label="open item actions">
+                  <i data-lucide="settings-2" class="menu-icon" aria-hidden="true"></i>
+                </summary>
+                <div class="row-action-dropdown">
+                  <a href="{{ base_path() }}/one-time/{{ item.id }}/edit" class="row-action-item">edit</a>
+                  <form method="post" action="{{ base_path() }}/one-time/{{ item.id }}/delete" class="row-action-item-form" onsubmit="return confirm('delete this one-time item?')">
+                    <button type="submit" class="row-action-item danger">delete</button>
+                  </form>
+                </div>
+              </details>
             </div>
           </td>
         </tr>
@@ -415,7 +302,7 @@
     </table>
   </div>
   {% else %}
-  <p class="empty-state">no one-time expected items yet.</p>
+  <p class="empty-state">no one-time items yet.</p>
   {% endif %}
 </section>
 
@@ -459,19 +346,10 @@
       });
     }
 
-    // Add-form type toggle (recurring vs one-time).
-    const toggleButtons = Array.from(document.querySelectorAll('[data-mode]'));
-    const forms = Array.from(document.querySelectorAll('[data-mode-form]'));
-    function setMode(mode) {
-      toggleButtons.forEach((btn) => btn.classList.toggle('active', btn.dataset.mode === mode));
-      forms.forEach((form) => form.classList.toggle('hidden', form.dataset.modeForm !== mode));
-    }
-    toggleButtons.forEach((btn) => btn.addEventListener('click', () => setMode(btn.dataset.mode)));
-
-    // Recurring status filter. Active is shown first.
+    // Bill status filter. Active is shown first.
     const statusButtons = Array.from(document.querySelectorAll('[data-status-filter]'));
     const statusRows = Array.from(document.querySelectorAll('tr[data-status]'));
-    const statusEmpty = document.getElementById('recurring-filter-empty');
+    const statusEmpty = document.getElementById('bills-filter-empty');
     function showStatus(status) {
       let shown = 0;
       statusButtons.forEach((btn) => btn.classList.toggle('active', btn.dataset.statusFilter === status));
@@ -485,37 +363,6 @@
     statusButtons.forEach((btn) => btn.addEventListener('click', () => showStatus(btn.dataset.statusFilter)));
     if (statusButtons.length) { showStatus('active'); }
 
-    // Conditional frequency fields for the recurring form.
-    const frequencySelect = document.getElementById('frequency_type');
-    const startDateInput = document.querySelector('#recurring-form input[name="start_date"]');
-    const dayOfMonthInput = document.querySelector('#recurring-form input[name="day_of_month"]');
-    const dayTouchedInput = document.getElementById('day_of_month_touched');
-    const intervalField = document.querySelector('[data-field="interval_months"]');
-    const dayField = document.querySelector('[data-field="day_of_month"]');
-    const semiDay1Field = document.querySelector('[data-field="semimonthly_day1"]');
-    const semiDay2Field = document.querySelector('[data-field="semimonthly_day2"]');
-
-    function syncDayOfMonthFromStart() {
-      if (!startDateInput || !dayOfMonthInput || !dayTouchedInput || dayTouchedInput.value === '1') return;
-      const value = startDateInput.value;
-      if (!value) return;
-      const day = Number.parseInt(value.split('-')[2], 10);
-      if (!Number.isNaN(day) && day >= 1 && day <= 31) dayOfMonthInput.value = String(day);
-    }
-    function updateConditionalFields() {
-      const value = frequencySelect.value;
-      intervalField.classList.toggle('hidden', value !== 'every_x_months');
-      dayField.classList.toggle('hidden', !(value === 'monthly' || value === 'every_x_months' || value === 'yearly'));
-      semiDay1Field.classList.toggle('hidden', value !== 'semimonthly');
-      semiDay2Field.classList.toggle('hidden', value !== 'semimonthly');
-      syncDayOfMonthFromStart();
-    }
-    if (frequencySelect) {
-      dayOfMonthInput.addEventListener('input', () => { dayTouchedInput.value = '1'; });
-      startDateInput.addEventListener('change', syncDayOfMonthFromStart);
-      frequencySelect.addEventListener('change', updateConditionalFields);
-      updateConditionalFields();
-    }
   })();
 </script>
 {% endblock %}

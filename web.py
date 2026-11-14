@@ -4,7 +4,7 @@ from typing import Annotated, Any, Dict
 from fastapi import Depends, Request
 from fastapi.templating import Jinja2Templates
 
-from review import review_waiting_count
+from inbox import inbox_waiting_count
 from date_range import format_range, resolve_rule, rule_to_saved
 from services import parse_iso_date
 from services import get_current_user, load_range_rule, load_saved_ranges, range_first_year, template_context
@@ -18,8 +18,8 @@ CurrentUser = Annotated[Dict[str, Any], Depends(get_current_user)]
 def render(request: Request, template_name: str, message: str = "", err: int = 0, **context: Any):
     """Render a template with the shared base context (current user, users, message/error)."""
     signed_in = getattr(request.state, "current_user", None)
-    if signed_in and "review_waiting" not in context:
-        context["review_waiting"] = review_waiting_count(int(signed_in["id"]))
+    if signed_in and "inbox_waiting" not in context:
+        context["inbox_waiting"] = inbox_waiting_count(int(signed_in["id"]))
     if signed_in:
         context.update(range_context(int(signed_in["id"]), context))
     return templates.TemplateResponse(request, template_name, template_context(request, message, err, **context))

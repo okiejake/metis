@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% import "_parts.html" as parts %}
+{% block content %}
+{% set v = values %}
+{% set one_time = v.repeats == 'one-time' %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>{{ heading }}</h2>
+  </div>
+  <form method="post" action="{{ base_path() }}{{ action }}" class="grid-form expected-form" data-expected-form>
+    {% if next_path %}<input type="hidden" name="next" value="{{ next_path }}" />{% endif %}
+    {% if v.from_tx %}<input type="hidden" name="from_tx" value="{{ v.from_tx }}" />{% endif %}
+    {% if v.from_suggestion %}<input type="hidden" name="from_suggestion" value="{{ v.from_suggestion }}" />{% endif %}
+
+    <label>
+      name
+      <input type="text" name="name" value="{{ v.name }}" required />
+    </label>
+    <label>
+      type
+      <select name="kind" required>
+        <option value="expense" {{ 'selected' if v.kind == 'expense' else '' }}>expense</option>
+        <option value="income" {{ 'selected' if v.kind == 'income' else '' }}>income</option>
+      </select>
+    </label>
+    <label>
+      amount
+      <input type="number" step="0.01" min="0.01" name="amount" value="{{ '%.2f'|format(v.amount) if v.amount else '' }}" required />
+    </label>
+    {% if editing == 'bill' %}
+    <fieldset class="amount-scope full-row">
+      <legend>a changed amount applies to</legend>
+      <label class="radio-label"><input type="radio" name="amount_change_scope" value="all" checked /> all occurrences</label>
+      <label class="radio-label"><input type="radio" name="amount_change_scope" value="future" /> from today forward</label>
+    </fieldset>
+    {% endif %}
+
+    <label>
+      category
+      {{ parts.category_picker('category_id', categories, v.category_id) }}
+    </label>
+    <label>
+      account
+      <select name="account_id">
+        <option value="">unassigned (immediate)</option>
+        {% for account in accounts %}
+        <option value="{{ account.id }}" {{ 'selected' if v.account_id == account.id else '' }}>{% filter lower %}{{ account.name }}{{ ' (card)' if account.account_type == 'credit_card' else '' }}{% endfilter %}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    {% if editing == 'one_time' %}
+    <input type="hidden" name="repeats" value="one-time" />
+    {% else %}
+    <label>
+      repeats
+      <select name="repeats" required data-repeats>
+        {% for option in repeats_options %}
+        <option value="{{ option }}" {{ 'selected' if v.repeats == option else '' }}>{% filter lower %}{{ repeats_labels[option] }}{% endfilter %}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% endif %}
+    <label>
+      <span data-repeating{{ ' class=hidden' if one_time else '' }}>first due date</span>
+      <span data-one-time{{ '' if one_time else ' class=hidden' }}>date</span>
+      <input type="date" name="first_due_date" value="{{ v.first_due_date }}" required />
+    </label>
+    <label data-repeating class="conditional{{ ' hidden' if one_time else '' }}">
+      end date
+      <input type="date" name="end_date" value="{{ v.end_date if v.end_date else '' }}" />
+    </label>
+    <label data-repeats-only="every_x_months" class="conditional{{ '' if v.repeats == 'every_x_months' else ' hidden' }}">
+      every x months
+      <input type="number" min="1" name="interval_months" value="{{ v.interval_months }}" />
+    </label>
+    <label data-repeats-only="semimonthly" class="conditional{{ '' if v.repeats == 'semimonthly' else ' hidden' }}">
+      first day
+      <input type="number" min="1" max="31" name="semimonthly_day1" value="{{ v.semimonthly_day1 }}" />
+    </label>
+    <label data-repeats-only="semimonthly" class="conditional{{ '' if v.repeats == 'semimonthly' else ' hidden' }}">
+      second day
+      <input type="number" min="1" max="31" name="semimonthly_day2" value="{{ v.semimonthly_day2 }}" />
+    </label>
+
+    <div class="full-row actions">
+      <button type="submit" class="button-link">save</button>
+      <a class="button-link" href="{{ base_path() }}{{ next_path or '/budget' }}">cancel</a>
+    </div>
+  </form>
+</section>
+<script src="{{ base_path() }}/static/expected-form.js"></script>
+{% endblock %}

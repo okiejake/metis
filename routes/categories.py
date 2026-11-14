@@ -136,11 +136,11 @@ def delete_category(request: Request, user: CurrentUser, category_id: int):
 
     with get_connection() as conn:
         conn.execute(
-            "UPDATE recurring_items SET category_id = NULL WHERE category_id = ? AND user_id = ?",
+            "UPDATE bills SET category_id = NULL WHERE category_id = ? AND user_id = ?",
             [category_id, user["id"]],
         )
         conn.execute(
-            "UPDATE manual_transactions SET category_id = NULL WHERE category_id = ? AND user_id = ?",
+            "UPDATE one_time_items SET category_id = NULL WHERE category_id = ? AND user_id = ?",
             [category_id, user["id"]],
         )
         # Anything that pointed imported rows at this category goes with it,
@@ -152,7 +152,7 @@ def delete_category(request: Request, user: CurrentUser, category_id: int):
         )
         conn.execute("DELETE FROM category_rules WHERE category_id = ? AND user_id = ?", [category_id, user["id"]])
         conn.execute("DELETE FROM transaction_splits WHERE category_id = ? AND user_id = ?", [category_id, user["id"]])
-        # Review's decisions for this category go too, so a later import from
+        # The inbox's decisions for this category go too, so a later import from
         # those merchants is not pointed at a category that no longer exists.
         conn.execute(
             "UPDATE imported_transactions SET decision_id = NULL WHERE user_id = ? AND decision_id IN "
