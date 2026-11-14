@@ -151,7 +151,7 @@ until Apply.
 | year   | dropdown of years                                 | −/+ stepper, years             |
 | decade | dropdown of decades (2020s…)                      | −/+ stepper, decades           |
 
-- Each relative stepper shows what its offset lands on beside it (`−3  Aug 2026`).
+- Each relative control is a small −/+ pair around a typed number field (accepts `3`, `+3`, `-3`, `−3`; Enter sets it without applying; anything else reverts), with what the offset lands on beside it (`−3  Aug 2026`). A typed value past the other end moves that end to meet it.
 - Steppers keep start ≤ end: start's + stops at end, end's − stops at start.
 - Dropdown span (*builder's call*): from the earlier of the user's first
   transaction year and ten years ago, to ten years ahead.
@@ -167,7 +167,7 @@ count**, never on the grain:
 
 | months | view |
 |--------|------|
-| 1–3    | **Full calendars**, one column: month name, weekday letters, day numbers. Days in range are tinted, start and end days filled. The month before and the month after show at the top and bottom, faded out with a gradient mask, like a wall calendar. Cells have a maximum size, so short ranges show more of the faded neighbours rather than stretching. |
+| 1–3    | **Full calendars**, one column: month name, weekday letters, day numbers. Every day in range is filled the same colour; today is filled orange, as in the other views. The month before and the month after show at the top and bottom, faded out with a gradient mask, like a wall calendar. Cells have a maximum size, so short ranges show more of the faded neighbours rather than stretching. |
 | 4–24   | **Mini months**, 3 columns, one row per quarter so **January is always in column 1**. Each month is a small grid of day squares in week rows, no numbers, with its short name and year. Months in the first and last rows that fall outside the range are dimmed. The quarter before and after show at top and bottom, faded out. |
 | 25+    | **Year rows**: one row per year, a labelled block per month (J F M …), January in column 1. No days. |
 

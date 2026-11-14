@@ -113,6 +113,14 @@
     return { grain, mode, start: relativeOffset(grain, start, today), end: relativeOffset(grain, end, today) };
   }
 
+  // A typed relative offset: "3", "+3", "-3" or "−3". Anything else is null.
+  function parseOffset(text) {
+    const match = /^([+\-−]?)(\d+)$/.exec(String(text).trim());
+    if (!match) return null;
+    const value = Number(match[2]);
+    return match[1] === '-' || match[1] === '−' ? -value : value;
+  }
+
   // What a relative offset lands on, shown beside its stepper.
   function stepLabel(grain, offset, today) {
     const [first] = relativeUnit(grain, offset, today);
@@ -157,6 +165,7 @@
     resolveRule,
     convertRule,
     stepLabel,
+    parseOffset,
     monthsTouched,
     previewView,
     quarterRows,
@@ -187,7 +196,7 @@
     return node;
   }
 
-  // One month's day grid. `full` adds day numbers and the filled start/end days.
+  // One month's day grid. `full` adds day numbers and weekday letters.
   function monthBlock(year, monthIndex, start, end, today, opts) {
     const block = div(`rp-month${opts.dim ? ' rp-dim' : ''}${opts.full ? '' : ' rp-small'}`);
     const title = opts.full ? `${new Date(year, monthIndex, 1).toLocaleDateString('en-US', { month: 'long' })} ${year}` : `${MONTH_SHORT[monthIndex]} ${year}`;
@@ -205,7 +214,7 @@
       const d = new Date(year, monthIndex, dayNumber);
       let className = 'rp-day';
       if (d >= start && d <= end) {
-        className += opts.full && (sameDay(d, start) || sameDay(d, end)) ? ' rp-edge' : ' rp-in';
+        className += ' rp-in';
       }
       if (sameDay(d, today)) className += ' rp-today';
       grid.appendChild(div(className, opts.full ? String(dayNumber) : undefined));
@@ -420,9 +429,27 @@
       });
       down.addEventListener('click', () => setRelative(which, value - 1));
       up.addEventListener('click', () => setRelative(which, value + 1));
+      const input = el('input', {
+        type: 'text', inputmode: 'numeric', className: 'range-step-value neu-field', 'aria-label': `${name}, ${rule.grain}s from now`, value: signed(value),
+      });
+      const commit = () => {
+        const typed = parseOffset(input.value);
+        if (typed === null) {
+          input.value = signed(value);
+          return;
+        }
+        setRelative(which, typed, true);
+      };
+      input.addEventListener('change', commit);
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault(); // Enter sets the value; it doesn't Apply
+          commit();
+        }
+      });
       return el('div', { className: 'range-stepper', role: 'group', 'aria-label': name }, [
         down,
-        el('output', { className: 'range-step-value', text: signed(value) }),
+        input,
         up,
         el('span', { className: 'range-step-note', text: stepLabel(rule.grain, value, today) }),
       ]);
@@ -438,9 +465,20 @@
       render();
     }
 
-    function setRelative(which, value) {
-      rule = { ...rule, [which]: clampOffset(rule.grain, value) };
+    // Steppers can't cross the other end. A typed value can; the other end
+    // moves to meet it, as it does for absolute values.
+    function setRelative(which, value, typed) {
+      const next = clampOffset(rule.grain, value);
+      rule = { ...rule, [which]: next };
+      if (typed && Number(rule.start) > Number(rule.end)) {
+        rule = { ...rule, [which === 'start' ? 'end' : 'start']: next };
+      }
       render();
+      if (typed) {
+        const slot = which === 'start' ? startSlot : endSlot;
+        const field = slot.querySelector('.range-step-value');
+        if (field) field.focus();
+      }
     }
 
     function render() {

@@ -59,6 +59,15 @@ check(
   [[2026, 4], [2026, 7], [2026, 10], [2027, 1], [2027, 4], [2027, 7], [2027, 10]],
 );
 
+check('parseOffset plain', dr.parseOffset('3'), 3);
+check('parseOffset plus', dr.parseOffset('+6'), 6);
+check('parseOffset hyphen', dr.parseOffset('-3'), -3);
+check('parseOffset minus sign', dr.parseOffset('−12'), -12);
+check('parseOffset spaces', dr.parseOffset('  4 '), 4);
+check('parseOffset junk', dr.parseOffset('abc'), null);
+check('parseOffset empty', dr.parseOffset(''), null);
+check('parseOffset decimal', dr.parseOffset('1.5'), null);
+
 if (failures) {
   process.exit(1);
 }
