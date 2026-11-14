@@ -31,7 +31,7 @@
         document.documentElement.setAttribute('data-theme', preferredTheme);
       })();
     </script>
-    <link rel="stylesheet" href="{{ base_path() }}/static/styles.css?v=20261113l" />
+    <link rel="stylesheet" href="{{ base_path() }}/static/styles.css?v=20261113m" />
   </head>
   <body>
     <div class="app-glow app-glow-one" aria-hidden="true"></div>
@@ -39,7 +39,6 @@
     <div class="app-grid" aria-hidden="true"></div>
 
     {% if chrome %}
-    {% set user_initial = (current_user.display_name[:1] if current_user.display_name else '?')|upper %}
     {% set active_path = request.url.path %}
     <header class="site-header">
       <div class="site-header-main">
@@ -47,7 +46,7 @@
                 aria-controls="nav-drawer" aria-expanded="false" aria-label="open menu" title="menu">
           <i data-lucide="menu" class="menu-icon" aria-hidden="true"></i>
         </button>
-        <h1>metis</h1>
+        <h1><a href="{{ base_path() }}/dashboard" class="brand-link">metis</a></h1>
 
         <button type="button" class="range-button neu-press" id="range-button" aria-haspopup="dialog">{{ range_label }}</button>
 
@@ -63,19 +62,10 @@
     </header>
 
     <dialog id="nav-drawer" class="nav-drawer neu-raised" aria-label="menu">
-      <div class="nav-drawer-user">
-        <div class="nav-drawer-head">
-          <span class="user-avatar" aria-hidden="true">{{ user_initial }}</span>
-          <div class="nav-drawer-who">
-            <p class="user-menu-name">{{ current_user.display_name }}</p>
-            {% if current_user.email %}
-            <p class="user-menu-email">{{ current_user.email }}</p>
-            {% endif %}
-          </div>
-          <button type="button" class="icon-button nav-close neu-press" id="nav-close" aria-label="close menu" title="close menu">
-            <i data-lucide="x" class="menu-icon" aria-hidden="true"></i>
-          </button>
-        </div>
+      <div class="nav-drawer-head">
+        <button type="button" class="icon-button nav-close neu-press" id="nav-close" aria-label="close menu" title="close menu">
+          <i data-lucide="x" class="menu-icon" aria-hidden="true"></i>
+        </button>
       </div>
 
       <nav class="site-nav" aria-label="primary">
@@ -98,6 +88,9 @@
             sign out
           </button>
         </form>
+        <p class="nav-drawer-who">
+          {{ current_user.display_name }}{% if current_user.email %} - {{ current_user.email }}{% endif %}
+        </p>
       </div>
     </dialog>
     {% include "_date_range.html" %}

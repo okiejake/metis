@@ -37,20 +37,30 @@ def test_the_header_holds_the_menu_button_before_metis_and_no_page_links(client)
     top = header(client.get("/dashboard").text)
 
     assert re.search(r'id="nav-toggle"[^>]*aria-label="open menu"', top)
-    assert top.index('id="nav-toggle"') < top.index("<h1>metis</h1>")
+    assert top.index('id="nav-toggle"') < top.index("<h1>")
     assert "user-menu-trigger" not in top
-    assert not any(f'href="{page}"' in top for page in PAGES)
+    assert 'class="site-nav"' not in top
+    assert not any(f'href="{page}"' in top for page in PAGES if page != "/dashboard")  # metis links home
 
 
-def test_the_drawer_lists_the_user_then_the_pages_then_settings_and_sign_out(client):
+def test_the_drawer_opens_on_close_then_pages_then_settings_sign_out_and_who(client):
     panel = drawer(client.get("/dashboard").text)
     links = re.findall(r'<a href="(/[a-z]+)"[^>]*>', re.search(r'<nav class="site-nav".*?</nav>', panel, re.S).group(0))
     footer = re.search(r'<div class="site-nav nav-drawer-footer">(.*?)\n      </div>', panel, re.S)
 
     assert links == PAGES
-    assert panel.index("user-menu-name") < panel.index('<nav class="site-nav"') < panel.index("nav-drawer-footer")
+    assert panel.index('id="nav-close"') < panel.index('<nav class="site-nav"') < panel.index("nav-drawer-footer")
     assert footer and "/settings" in footer.group(1) and "/logout" in footer.group(1)
+    assert panel.index("/logout") < panel.index('class="nav-drawer-who"')
+    assert re.search(r'<p class="nav-drawer-who">\s*Test User - test@example.com\s*</p>', panel)
+    assert "user-avatar" not in panel
     assert "theme" not in panel
+
+
+def test_metis_links_to_the_dashboard(client):
+    top = header(client.get("/ledger").text)
+
+    assert re.search(r'<h1><a href="/dashboard"[^>]*>metis</a></h1>', top)
 
 
 def test_the_theme_toggle_sits_right_of_hide_amounts(client):
