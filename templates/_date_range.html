@@ -1,5 +1,5 @@
 {# The header date range popup. static/date-range.js drives it; POST /window saves it. #}
-<dialog id="range-dialog" class="range-dialog" aria-labelledby="range-label"
+<dialog id="range-dialog" class="range-dialog neu-raised" aria-labelledby="range-label"
         data-rule='{{ range_rule|tojson }}' data-today="{{ range_today }}"
         data-first-year="{{ range_first_year }}" data-start="{{ range_start }}" data-end="{{ range_end }}">
   <form method="post" action="{{ base_path() }}/window" class="range-form">
@@ -9,13 +9,13 @@
     <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}" />
 
     <div class="range-top">
-      <button type="button" class="icon-button range-panel-toggle" id="range-panel-toggle"
+      <button type="button" class="icon-button range-panel-toggle neu-press" id="range-panel-toggle"
               aria-controls="range-panel" aria-expanded="true" aria-label="Hide filters" title="Hide filters">
         <i data-lucide="filter" class="menu-icon" aria-hidden="true"></i>
       </button>
       <h2 class="range-label" id="range-label">{{ range_label }}</h2>
       <button type="button" class="button-link" id="range-cancel">Cancel</button>
-      <button type="submit" class="button-link range-apply">Apply</button>
+      <button type="submit" class="button-link range-apply neu-press">Apply</button>
     </div>
 
     <div class="range-body">
@@ -24,7 +24,7 @@
           <legend>Grain</legend>
           <div class="range-segments" role="group" aria-label="Grain">
             {% for grain in ["day", "month", "year", "decade"] %}
-            <button type="button" class="range-segment" data-grain="{{ grain }}" aria-pressed="false">{{ grain|capitalize }}</button>
+            <button type="button" class="range-segment neu-press" data-grain="{{ grain }}" aria-pressed="false">{{ grain|capitalize }}</button>
             {% endfor %}
           </div>
         </fieldset>

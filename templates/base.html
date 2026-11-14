@@ -31,7 +31,7 @@
         document.documentElement.setAttribute('data-theme', preferredTheme);
       })();
     </script>
-    <link rel="stylesheet" href="{{ base_path() }}/static/styles.css?v=20261113c" />
+    <link rel="stylesheet" href="{{ base_path() }}/static/styles.css?v=20261113d" />
   </head>
   <body>
     <div class="app-glow app-glow-one" aria-hidden="true"></div>
@@ -53,7 +53,7 @@
           <a href="{{ base_path() }}/accounts" class="{{ 'active' if active_path.startswith('/accounts') else '' }}">Accounts</a>
         </nav>
 
-        <button type="button" class="range-button" id="range-button" aria-haspopup="dialog">{{ range_label }}</button>
+        <button type="button" class="range-button neu-press" id="range-button" aria-haspopup="dialog">{{ range_label }}</button>
 
         <div class="header-actions">
           <button type="button" class="icon-button" id="amount-toggle-button" aria-label="Hide amounts" title="Hide amounts">
@@ -112,7 +112,7 @@
 
 
     {% if chrome %}
-    <script src="{{ base_path() }}/static/date-range.js?v=20261113b" defer></script>
+    <script src="{{ base_path() }}/static/date-range.js?v=20261113c" defer></script>
     {% endif %}
     <script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js"></script>
     <script>

@@ -392,11 +392,11 @@
       const value = String(rule[which]);
       const name = which === 'start' ? 'Start' : 'End';
       if (rule.grain === 'day') {
-        const input = el('input', { type: 'date', className: 'range-date', 'aria-label': name, value });
+        const input = el('input', { type: 'date', className: 'range-date neu-field', 'aria-label': name, value });
         input.addEventListener('change', () => setAbsolute(which, input.value));
         return input;
       }
-      const select = el('select', { className: 'range-select', 'aria-label': name }, absoluteOptions(rule.grain));
+      const select = el('select', { className: 'range-select neu-field', 'aria-label': name }, absoluteOptions(rule.grain));
       if (!Array.from(select.options).some((option) => option.value === value)) {
         select.appendChild(el('option', { value, text: value }));
       }
@@ -413,10 +413,10 @@
       const minimum = which === 'end' ? Math.max(-limit, otherValue) : -limit;
       const maximum = which === 'start' ? Math.min(limit, otherValue) : limit;
       const down = el('button', {
-        type: 'button', className: 'range-step', 'aria-label': `${name} earlier`, disabled: value <= minimum, text: '−',
+        type: 'button', className: 'range-step neu-press', 'aria-label': `${name} earlier`, disabled: value <= minimum, text: '−',
       });
       const up = el('button', {
-        type: 'button', className: 'range-step', 'aria-label': `${name} later`, disabled: value >= maximum, text: '+',
+        type: 'button', className: 'range-step neu-press', 'aria-label': `${name} later`, disabled: value >= maximum, text: '+',
       });
       down.addEventListener('click', () => setRelative(which, value - 1));
       up.addEventListener('click', () => setRelative(which, value + 1));

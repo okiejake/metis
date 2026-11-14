@@ -34,6 +34,17 @@
   --warning-soft: color-mix(in srgb, var(--steel-blue) 12%, var(--platinum));
   --today: #e8890c;
 
+  /* Neumorphism (docs/design/neumorphism.md): soft frame, flat data. */
+  --neu-base: #E8E8E8;
+  --neu-blue: #C8E0F4;
+  --neu-pink: #F5E0E8;
+  --neu-light: #FFFFFF;
+  --neu-dark: #D0D0D0;
+  --neu-accent: #7B68EE;
+  --neu-heading: #3F3F46;
+  --neu-text: #52525B;
+  --neu-edge: #7D7D85; /* 3:1 against --neu-base, for input edges */
+
   --shadow-lg: 0 20px 40px color-mix(in srgb, var(--gunmetal) 16%, transparent), 0 3px 8px color-mix(in srgb, var(--gunmetal) 12%, transparent);
   --shadow-md: 0 12px 24px color-mix(in srgb, var(--gunmetal) 14%, transparent), 0 2px 5px color-mix(in srgb, var(--gunmetal) 10%, transparent);
   --shadow-sm: 0 6px 14px color-mix(in srgb, var(--gunmetal) 12%, transparent);
@@ -290,6 +301,149 @@ body.is-ready .container > *:nth-child(4) {
   padding: 0 1rem;
   pointer-events: none;
   user-select: none;
+}
+
+/* ---- Neumorphism: shared surfaces (docs/design/neumorphism.md) ---- */
+
+.neu-raised {
+  background: var(--neu-base);
+  color: var(--neu-heading);
+  box-shadow: -6px -6px 16px var(--neu-light), 6px 6px 16px var(--neu-dark);
+}
+
+.neu-inset {
+  background: var(--neu-base);
+  color: var(--neu-heading);
+  box-shadow: inset -4px -4px 10px var(--neu-light), inset 4px 4px 10px var(--neu-dark);
+}
+
+.neu-press {
+  border: 0;
+  background: var(--neu-base);
+  color: var(--neu-heading);
+  font-weight: 600;
+  box-shadow: -4px -4px 10px var(--neu-light), 4px 4px 10px var(--neu-dark);
+  transition: box-shadow 150ms ease, color 150ms ease;
+}
+
+.neu-press:hover {
+  background: var(--neu-base);
+  border-color: transparent;
+  color: var(--neu-heading);
+}
+
+:root[data-theme="dark"] .neu-press:hover {
+  background: var(--neu-base);
+  border-color: transparent;
+  color: var(--neu-heading);
+}
+
+.neu-press:active,
+.neu-press[aria-pressed="true"],
+.neu-press[aria-expanded="true"] {
+  box-shadow: inset -4px -4px 10px var(--neu-light), inset 4px 4px 10px var(--neu-dark);
+}
+
+.neu-press[aria-pressed="true"] {
+  color: var(--neu-accent);
+}
+
+.neu-press:disabled {
+  opacity: 0.45;
+  cursor: default;
+  box-shadow: none;
+}
+
+/* :root lifts these above the older `button:focus { outline: none }` rules. */
+:root .neu-press:focus-visible,
+:root .neu-field:focus-visible {
+  outline: 3px solid var(--neu-accent);
+  outline-offset: 3px;
+}
+
+.neu-field {
+  border: 1px solid var(--neu-edge);
+  border-radius: 0.8rem;
+  background: var(--neu-base);
+  color: var(--neu-heading);
+  box-shadow: inset -3px -3px 8px var(--neu-light), inset 3px 3px 8px var(--neu-dark);
+}
+
+/* ---- Date range picker: neumorphic frame ---- */
+
+.range-button {
+  padding: 0.45rem 1rem;
+  border-radius: 999px;
+}
+
+.range-dialog {
+  border-radius: 1.5rem;
+  color: var(--neu-text);
+}
+
+.range-dialog::backdrop {
+  background: color-mix(in srgb, var(--neu-dark) 55%, transparent);
+  backdrop-filter: blur(3px);
+}
+
+.range-label {
+  color: var(--neu-heading);
+  font-weight: 600;
+}
+
+.range-panel-toggle {
+  border-radius: 0.8rem;
+}
+
+.range-apply {
+  padding: 0.55rem 1.4rem;
+  border-radius: 999px;
+  color: var(--neu-accent);
+}
+
+.range-panel {
+  border-right: 1px solid color-mix(in srgb, var(--neu-dark) 80%, transparent);
+}
+
+.range-fieldset legend,
+.range-legend {
+  color: var(--neu-text);
+}
+
+.range-segments {
+  gap: 0.45rem;
+}
+
+.range-segment {
+  border-radius: 0.7rem;
+}
+
+.range-modes input {
+  accent-color: var(--neu-accent);
+}
+
+.range-date,
+.range-select {
+  padding: 0.5rem 0.7rem;
+}
+
+.range-step {
+  border-radius: 999px;
+}
+
+.range-step-value {
+  color: var(--neu-heading);
+}
+
+.range-step-note {
+  white-space: nowrap;
+  color: var(--neu-text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .neu-press {
+    transition: none;
+  }
 }
 
 /* The preview is flat: the data, not the frame. */
@@ -1711,6 +1865,16 @@ body.amounts-hidden .amount-sensitive {
 
 :root[data-theme="dark"] {
   color-scheme: dark;
+
+  --neu-base: #2A2D32;
+  --neu-blue: #3A4A5A;
+  --neu-pink: #4A3A42;
+  --neu-light: #34383E;
+  --neu-dark: #1F2125;
+  --neu-accent: #9D8CF5;
+  --neu-heading: #E4E4E7;
+  --neu-text: #C4C4CC;
+  --neu-edge: #6B6F78;
 
   /* brand palette (dark) */
   --steel-blue: #4083b0;
