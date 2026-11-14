@@ -1,15 +1,5 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="page-bar">
-  <div class="intro-badge-stack">
-    {% if first_negative_date %}
-    <span class="stat-chip danger">first negative: {{ first_negative_date }}</span>
-    {% else %}
-    <span class="stat-chip success">no projected negative day</span>
-    {% endif %}
-  </div>
-</div>
-
 {% if review_line.waiting %}
 <p class="review-line">
   <a href="{{ base_path() }}/inbox" class="button-link">{% if review_line.percent is not none %}categorized {{ review_line.percent }}%{% else %}review{% endif %}</a>
@@ -51,10 +41,6 @@
   <article class="card compact-card">
     <h3>transactions</h3>
     <p>{{ transaction_count }}</p>
-  </article>
-  <article class="card compact-card">
-    <h3>first negative date</h3>
-    <p>{{ first_negative_date if first_negative_date else 'none in selected window' }}</p>
   </article>
 </section>
 

@@ -3029,6 +3029,29 @@ def collect_window_transactions(
     return transactions
 
 
+def first_projected_negative(
+    user_id: int, window_start: date, window_end: date, today: Optional[date] = None
+) -> Optional[date]:
+    """The first day from today on, inside the window, when the checking
+    balance (actuals, then forecast) drops below zero; None if it never does."""
+    today = today or date.today()
+    if window_end < today:
+        return None
+    opening_balance = get_setting_float(user_id, "starting_balance", 0.0)
+    start_balance = checking_actual_balance_before(user_id, window_start, opening_balance)
+    rows, _first, _end = build_ledger_rows(collect_blended_transactions(user_id, window_start, window_end), start_balance, window_start)
+    balance = start_balance
+    if balance < 0 and window_start >= today:
+        return window_start
+    for row in rows:
+        balance = row["running_balance"]
+        if row["date"] >= today and balance < 0:
+            return row["date"]
+    if balance < 0 and not rows and window_start <= today:
+        return today
+    return None
+
+
 def build_ledger_rows(
     transactions: List[Dict[str, Any]],
     starting_balance: float,

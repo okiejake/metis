@@ -35,6 +35,13 @@
 } %}
 {% set titles = [('imports', 'imports'), ('transfers', 'transfers'), ('categories', 'categories'), ('budgets', 'budgets'), ('recurring', 'recurring')] %}
 
+{% for alert in r.alerts %}
+<div class="inbox-alert danger" role="alert">
+  <strong>projected below zero on {{ alert.date }}</strong>
+  <a class="button-link" href="{{ base_path() }}/ledger">ledger</a>
+</div>
+{% endfor %}
+
 <section class="panel review-summary">
   {% if r.meter.percent is not none %}
   <div class="review-meter">

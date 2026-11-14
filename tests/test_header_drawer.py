@@ -69,6 +69,7 @@ def test_the_current_page_is_marked_in_the_drawer(client):
 
 def test_inbox_shows_its_waiting_count(client, db, user_id, accounts):
     quiet_imports(user_id)
+    db.set_setting_value(user_id, "starting_balance", "1000")  # no negative-balance alert
     add_imported(db, user_id, accounts["Example Card"], "Example Card", db.date.today(), "EXAMPLE FUEL", -50.0)
 
     panel = drawer(client.get("/budget").text)

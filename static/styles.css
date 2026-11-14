@@ -2758,6 +2758,23 @@ body.amounts-hidden .amount-sensitive {
   margin-left: 0.6rem;
 }
 
+/* An inbox alert: something about to go wrong, in red. */
+.inbox-alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1.1rem;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--over);
+  background: color-mix(in srgb, var(--over) 12%, var(--surface));
+  color: var(--over);
+}
+
+.inbox-alert .button-link {
+  color: var(--over);
+}
+
 .nav-badge {
   display: inline-block;
   min-width: 1.3rem;

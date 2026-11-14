@@ -5,11 +5,6 @@
 <div class="page-bar">
   <div class="intro-badge-stack">
     {% if forecast_start_iso %}<span class="stat-chip">forecast from {{ forecast_start_iso }}</span>{% endif %}
-    {% if first_negative_date %}
-    <span class="stat-chip danger">first negative: {{ first_negative_date }}</span>
-    {% else %}
-    <span class="stat-chip success">no projected negative day</span>
-    {% endif %}
   </div>
 </div>
 
@@ -32,11 +27,6 @@
   </article>
 </section>
 
-{% if first_negative_date %}
-<section class="panel warning">
-  <strong>cash-flow alert:</strong> projected balance first drops below zero on {{ first_negative_date }}.
-</section>
-{% endif %}
 
 <section class="panel">
   <div class="panel-head">
