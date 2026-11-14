@@ -2,8 +2,8 @@
 {% block content %}
 <section class="page-intro">
   <div>
-    <p class="page-kicker"><a href="{{ base_path() }}/accounts" class="button-link">← Accounts</a></p>
-    <h2>New template{% if account %} for {{ account.name }}{% endif %}</h2>
+    <p class="page-kicker"><a href="{{ base_path() }}/accounts" class="button-link">← accounts</a></p>
+    <h2>new template{% if account %} for {{ account.name }}{% endif %}</h2>
   </div>
 </section>
 
@@ -11,11 +11,11 @@
   <form method="post" action="{{ base_path() }}/templates/upload" enctype="multipart/form-data" class="grid-form">
     {% if account %}<input type="hidden" name="account_id" value="{{ account.id }}" />{% endif %}
     <label class="full-row">
-      CSV file
+      csv file
       <input type="file" name="file" accept=".csv,text/csv" required />
     </label>
     <div class="full-row">
-      <button type="submit" class="button-link">Upload</button>
+      <button type="submit" class="button-link">upload</button>
     </div>
   </form>
 </section>

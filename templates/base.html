@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>{{ title if title else "Metis Finance" }}</title>
+    <title>{{ title if title else "metis finance" }}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -31,7 +31,7 @@
         document.documentElement.setAttribute('data-theme', preferredTheme);
       })();
     </script>
-    <link rel="stylesheet" href="{{ base_path() }}/static/styles.css?v=20261113e" />
+    <link rel="stylesheet" href="{{ base_path() }}/static/styles.css?v=20261113f" />
   </head>
   <body>
     <div class="app-glow app-glow-one" aria-hidden="true"></div>
@@ -44,24 +44,24 @@
     <header class="site-header">
       <div class="site-header-main">
         <h1>metis</h1>
-        <nav class="site-nav" aria-label="Primary">
-          <a href="{{ base_path() }}/dashboard" class="{{ 'active' if active_path.startswith('/dashboard') else '' }}">Dashboard</a>
-          <a href="{{ base_path() }}/review" class="{{ 'active' if active_path.startswith('/review') else '' }}">Review{% if review_waiting %} <span class="nav-badge">{{ review_waiting }}</span>{% endif %}</a>
-          <a href="{{ base_path() }}/ledger" class="{{ 'active' if active_path.startswith('/ledger') else '' }}">Ledger</a>
-          <a href="{{ base_path() }}/statements" class="{{ 'active' if active_path.startswith('/statements') else '' }}">Statements</a>
-          <a href="{{ base_path() }}/budget" class="{{ 'active' if active_path.startswith('/budget') or active_path.startswith('/expected') or active_path.startswith('/recurring') or active_path.startswith('/categories') else '' }}">Budget</a>
-          <a href="{{ base_path() }}/accounts" class="{{ 'active' if active_path.startswith('/accounts') else '' }}">Accounts</a>
+        <nav class="site-nav" aria-label="primary">
+          <a href="{{ base_path() }}/dashboard" class="{{ 'active' if active_path.startswith('/dashboard') else '' }}">dashboard</a>
+          <a href="{{ base_path() }}/review" class="{{ 'active' if active_path.startswith('/review') else '' }}">review{% if review_waiting %} <span class="nav-badge">{{ review_waiting }}</span>{% endif %}</a>
+          <a href="{{ base_path() }}/ledger" class="{{ 'active' if active_path.startswith('/ledger') else '' }}">ledger</a>
+          <a href="{{ base_path() }}/statements" class="{{ 'active' if active_path.startswith('/statements') else '' }}">statements</a>
+          <a href="{{ base_path() }}/budget" class="{{ 'active' if active_path.startswith('/budget') or active_path.startswith('/expected') or active_path.startswith('/recurring') or active_path.startswith('/categories') else '' }}">budget</a>
+          <a href="{{ base_path() }}/accounts" class="{{ 'active' if active_path.startswith('/accounts') else '' }}">accounts</a>
         </nav>
 
         <button type="button" class="range-button neu-press" id="range-button" aria-haspopup="dialog">{{ range_label }}</button>
 
         <div class="header-actions">
-          <button type="button" class="icon-button" id="amount-toggle-button" aria-label="Hide amounts" title="Hide amounts">
+          <button type="button" class="icon-button" id="amount-toggle-button" aria-label="hide amounts" title="hide amounts">
             <i data-lucide="eye-off" class="menu-icon" aria-hidden="true"></i>
           </button>
 
           <details class="user-menu">
-            <summary class="user-menu-trigger" aria-label="Open user menu">{{ user_initial }}</summary>
+            <summary class="user-menu-trigger" aria-label="open user menu">{{ user_initial }}</summary>
             <div class="user-menu-dropdown">
               <p class="user-menu-name">{{ current_user.display_name }}</p>
               {% if current_user.email %}
@@ -69,21 +69,21 @@
               {% endif %}
 
               <label class="user-menu-theme">
-                Theme
-                <select name="theme" id="theme-select" aria-label="Theme selection">
-                  <option value="light">Light</option>
-                  <option value="dark">Dark</option>
+                theme
+                <select name="theme" id="theme-select" aria-label="theme selection">
+                  <option value="light">light</option>
+                  <option value="dark">dark</option>
                 </select>
               </label>
 
               <a href="{{ base_path() }}/settings?section=user-management" class="user-menu-action">
                 <i data-lucide="settings-2" class="menu-icon" aria-hidden="true"></i>
-                Settings
+                settings
               </a>
               <form method="post" action="{{ base_path() }}/logout">
                 <button type="submit" class="user-menu-action buttonless">
                   <i data-lucide="log-out" class="menu-icon" aria-hidden="true"></i>
-                  Sign out
+                  sign out
                 </button>
               </form>
             </div>
@@ -101,7 +101,7 @@
         {{ message }}
         {% if undo_id and not is_error %}
         <form method="post" action="{{ base_path() }}/review/undo/{{ undo_id }}" class="inline-form flash-undo">
-          <button type="submit" class="button-link">Undo</button>
+          <button type="submit" class="button-link">undo</button>
         </form>
         {% endif %}
       </div>
@@ -112,7 +112,7 @@
 
 
     {% if chrome %}
-    <script src="{{ base_path() }}/static/date-range.js?v=20261113d" defer></script>
+    <script src="{{ base_path() }}/static/date-range.js?v=20261113e" defer></script>
     {% endif %}
     <script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js"></script>
     <script>
@@ -176,7 +176,7 @@
             return;
           }
           document.body.classList.toggle('amounts-hidden', amountsHidden);
-          const label = amountsHidden ? 'Show amounts' : 'Hide amounts';
+          const label = amountsHidden ? 'show amounts' : 'hide amounts';
           amountToggleButton.setAttribute('aria-label', label);
           amountToggleButton.setAttribute('title', label);
           amountToggleButton.innerHTML = `<i data-lucide="${amountsHidden ? 'eye' : 'eye-off'}" class="menu-icon" aria-hidden="true"></i>`;

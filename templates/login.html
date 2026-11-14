@@ -7,15 +7,15 @@
     <form method="post" action="{{ base_path() }}/login" class="auth-form">
       <input type="hidden" name="next_path" value="{{ next_path }}" />
       <label>
-        Name or email
+        name or email
         <input type="text" name="identifier" value="{{ identifier if identifier else '' }}"
                autocomplete="username" autofocus required />
       </label>
       <label>
-        Password
+        password
         <input type="password" name="password" autocomplete="current-password" required />
       </label>
-      <button type="submit" class="button-link auth-submit">Sign In</button>
+      <button type="submit" class="button-link auth-submit">sign in</button>
     </form>
   </div>
 </section>

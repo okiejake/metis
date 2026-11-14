@@ -3,10 +3,10 @@
 {% block content %}
 <section class="page-intro">
   <div>
-    <h2>Budget</h2>
+    <h2>budget</h2>
   </div>
   <div class="intro-badge-stack">
-    <span class="stat-chip">Today {{ today_iso }}</span>
+    <span class="stat-chip">today {{ today_iso }}</span>
     {% if suggestion_count %}<a class="stat-chip success" href="{{ base_path() }}/review#recurring">{{ suggestion_count }} suggested</a>{% endif %}
     <span class="stat-chip">{{ recurring_items|selectattr("status", "equalto", "active")|list|length }} recurring</span>
     <span class="stat-chip">{{ one_time_items|length }} one-time</span>
@@ -16,29 +16,29 @@
 {% if budget_summary %}
 <section class="panel">
   <div class="panel-head">
-    <h2>Categories</h2>
+    <h2>categories</h2>
   </div>
 
   <div class="summary-grid compact-grid">
     <article class="card compact-card">
-      <h3>Budgeted</h3>
+      <h3>budgeted</h3>
       <p class="amount-value">${{ budget_summary.totals.budgeted|currency }}</p>
       <p class="card-note">planned expenses</p>
     </article>
     <article class="card compact-card">
-      <h3>Actual</h3>
+      <h3>actual</h3>
       <p class="amount-value negative">${{ budget_summary.totals.actual|currency }}</p>
       <p class="card-note">imported spend</p>
     </article>
     <article class="card compact-card">
-      <h3>Difference</h3>
+      <h3>difference</h3>
       <p class="amount-value {{ 'negative' if budget_summary.totals.difference < 0 else 'positive' }}">
         {{ '-' if budget_summary.totals.difference < 0 else '' }}${{ (budget_summary.totals.difference if budget_summary.totals.difference >= 0 else -budget_summary.totals.difference)|currency }}
       </p>
       <p class="card-note">{{ 'over budget' if budget_summary.totals.difference < 0 else 'under budget' }}</p>
     </article>
     <article class="card compact-card">
-      <h3>Income</h3>
+      <h3>income</h3>
       <p class="amount-value positive">${{ budget_summary.income.actual|currency }}</p>
       <p class="card-note">actual of ${{ budget_summary.income.budgeted|currency }} budgeted</p>
     </article>
@@ -47,24 +47,24 @@
   {% if budget_summary.categories %}
   <div class="budget-detail-controls">
     <div class="budget-expand-controls">
-      <button type="button" class="button-link js-budget-expand-all">Expand all</button>
-      <button type="button" class="button-link js-budget-collapse-all">Collapse all</button>
+      <button type="button" class="button-link js-budget-expand-all">expand all</button>
+      <button type="button" class="button-link js-budget-collapse-all">collapse all</button>
     </div>
     <button type="button" class="button-link js-category-add-toggle" aria-expanded="false" aria-controls="category-add">
-      New category
+      new category
     </button>
   </div>
 
   <form method="post" action="{{ base_path() }}/categories" class="inline-form category-add-form hidden" id="category-add">
     <label>
-      Name
-      <input type="text" name="name" placeholder="e.g. Groceries" required />
+      name
+      <input type="text" name="name" placeholder="e.g. groceries" required />
     </label>
     <label>
-      Color
+      color
       <input type="color" name="color" value="{{ default_color }}" required />
     </label>
-    <button type="submit" class="button-link">Add Category</button>
+    <button type="submit" class="button-link">add category</button>
   </form>
 
   <ul class="budget-bars" id="budget-vs-actual-bars">
@@ -74,7 +74,7 @@
         <span class="budget-bar-label">
           <button type="button" class="card-expand-toggle js-budget-toggle"
                   data-target="budget-detail-{{ loop.index }}" aria-expanded="false"
-                  aria-label="Show the budget detail for {{ cat.name }}">›</button>
+                  aria-label="show the budget detail for {{ cat.name }}">›</button>
           {{ parts.category_pill(cat.name, cat.color) }}
         </span>
         <span class="budget-bar-figures">
@@ -116,23 +116,23 @@
           {% endfor %}
         </ul>
         {% elif cat.explicit_monthly is not none %}
-        <p class="card-detail-caption">Budgeted directly, not from expected items.</p>
+        <p class="card-detail-caption">budgeted directly, not from expected items.</p>
         {% else %}
-        <p class="card-detail-caption">No expected items in this category yet.</p>
+        <p class="card-detail-caption">no expected items in this category yet.</p>
         {% endif %}
 
         <div class="budget-bar-actions">
           {% if cat.id %}
           <form method="post" action="{{ base_path() }}/categories/{{ cat.id }}/budget" class="budget-set-form">
             <label>
-              <span class="budget-set-label">Monthly budget</span>
+              <span class="budget-set-label">monthly budget</span>
               <input type="number" name="budget_amount" step="0.01" min="0"
                      value="{{ '%.2f'|format(cat.explicit_monthly) if cat.explicit_monthly is not none else '' }}"
                      placeholder="{{ 'set a budget' if not cat.has_target else 'from expected items' }}" />
             </label>
-            <button type="submit" class="button-link">Save</button>
+            <button type="submit" class="button-link">save</button>
           </form>
-          <a class="button-link" href="{{ base_path() }}/categories/{{ cat.id }}/edit">Edit category</a>
+          <a class="button-link" href="{{ base_path() }}/categories/{{ cat.id }}/edit">edit category</a>
           {% endif %}
         </div>
       </div>
@@ -141,157 +141,157 @@
   </ul>
 
   <p class="budget-bars-total">
-    <strong>Total</strong>
+    <strong>total</strong>
     ${{ budget_summary.totals.actual|currency }} actual of ${{ budget_summary.totals.budgeted|currency }} budgeted
     <span class="{{ 'negative' if budget_summary.totals.difference < 0 else 'positive' }}">
       ({{ '-' if budget_summary.totals.difference < 0 else '' }}${{ (budget_summary.totals.difference if budget_summary.totals.difference >= 0 else -budget_summary.totals.difference)|currency }})
     </span>
     {% if budget_summary.months and budget_summary.months != 1.0 %}
-    <span class="card-note">Monthly budgets are prorated across {{ '%.1f'|format(budget_summary.months) }} months in this window.</span>
+    <span class="card-note">monthly budgets are prorated across {{ '%.1f'|format(budget_summary.months) }} months in this window.</span>
     {% endif %}
   </p>
   {% else %}
-  <p class="empty-state">No budgeted or actual expenses in this period yet.</p>
+  <p class="empty-state">no budgeted or actual expenses in this period yet.</p>
   {% endif %}
 </section>
 {% endif %}
 
 <section class="panel">
   <div class="panel-head">
-    <h2>Add Expected Transaction</h2>
+    <h2>add expected transaction</h2>
   </div>
 
   <div class="segmented" role="tablist">
-    <button type="button" class="button-link active" data-mode="recurring" role="tab">Recurring</button>
-    <button type="button" class="button-link" data-mode="one_time" role="tab">One-time</button>
+    <button type="button" class="button-link active" data-mode="recurring" role="tab">recurring</button>
+    <button type="button" class="button-link" data-mode="one_time" role="tab">one-time</button>
   </div>
 
   <form method="post" action="{{ base_path() }}/recurring" id="recurring-form" class="grid-form expected-add-form" data-mode-form="recurring">
     <label>
-      Name
-      <input type="text" name="name" placeholder="Paycheck / Rent / Utilities" />
+      name
+      <input type="text" name="name" placeholder="paycheck / rent / utilities" />
     </label>
     <label>
-      Type
+      type
       <select name="kind">
-        <option value="income">Income</option>
-        <option value="expense">Expense</option>
+        <option value="income">income</option>
+        <option value="expense">expense</option>
       </select>
     </label>
     <label>
-      Amount
+      amount
       <input type="number" step="0.01" min="0.01" name="amount" />
     </label>
     <label>
-      Category
+      category
       <select name="category_id">
-        <option value="">No category</option>
+        <option value="">no category</option>
         {% for category in categories %}
         <option value="{{ category.id }}">{{ category.name }}</option>
         {% endfor %}
       </select>
     </label>
     <label>
-      Account
+      account
       <select name="account_id">
-        <option value="">Unassigned (immediate)</option>
+        <option value="">unassigned (immediate)</option>
         {% for account in accounts %}
         <option value="{{ account.id }}">{{ account.name }}{{ ' (card)' if account.account_type == 'credit_card' else '' }}</option>
         {% endfor %}
       </select>
     </label>
     <label>
-      Start Date
+      start date
       <input type="date" name="start_date" value="{{ today_iso }}" />
     </label>
     <label>
-      End Date (optional)
+      end date (optional)
       <input type="date" name="end_date" />
     </label>
     <label>
-      Frequency
+      frequency
       <select name="frequency_type" id="frequency_type">
-        <option value="weekly">Weekly</option>
-        <option value="biweekly">Bi-weekly</option>
-        <option value="semimonthly">Semi-monthly</option>
-        <option value="monthly">Monthly</option>
-        <option value="yearly">Yearly</option>
-        <option value="every_x_months">Every X months</option>
+        <option value="weekly">weekly</option>
+        <option value="biweekly">bi-weekly</option>
+        <option value="semimonthly">semi-monthly</option>
+        <option value="monthly">monthly</option>
+        <option value="yearly">yearly</option>
+        <option value="every_x_months">every x months</option>
       </select>
     </label>
     <input type="hidden" name="day_of_month_touched" value="0" id="day_of_month_touched" />
     <label data-field="interval_months" class="conditional hidden">
-      Every X Months
+      every x months
       <input type="number" min="1" name="interval_months" value="2" />
     </label>
     <label data-field="day_of_month" class="conditional hidden">
-      Day of Month
+      day of month
       <input type="number" min="1" max="31" name="day_of_month" value="1" />
     </label>
     <label data-field="semimonthly_day1" class="conditional hidden">
-      Semi-monthly Day 1
+      semi-monthly day 1
       <input type="number" min="1" max="31" name="semimonthly_day1" value="1" />
     </label>
     <label data-field="semimonthly_day2" class="conditional hidden">
-      Semi-monthly Day 2
+      semi-monthly day 2
       <input type="number" min="1" max="31" name="semimonthly_day2" value="15" />
     </label>
     <div class="full-row">
-      <button type="submit" class="button-link">Add Recurring Item</button>
+      <button type="submit" class="button-link">add recurring item</button>
     </div>
   </form>
 
   <form method="post" action="{{ base_path() }}/expected/one-time" id="one-time-form" class="grid-form expected-add-form hidden" data-mode-form="one_time">
     <label>
-      Name
-      <input type="text" name="name" placeholder="Vet bill / Car repair / Bonus" />
+      name
+      <input type="text" name="name" placeholder="vet bill / car repair / bonus" />
     </label>
     <label>
-      Type
+      type
       <select name="kind">
-        <option value="expense">Expense</option>
-        <option value="income">Income</option>
+        <option value="expense">expense</option>
+        <option value="income">income</option>
       </select>
     </label>
     <label>
-      Amount
+      amount
       <input type="number" step="0.01" min="0.01" name="amount" />
     </label>
     <label>
-      Category
+      category
       <select name="category_id">
-        <option value="">No category</option>
+        <option value="">no category</option>
         {% for category in categories %}
         <option value="{{ category.id }}">{{ category.name }}</option>
         {% endfor %}
       </select>
     </label>
     <label>
-      Account
+      account
       <select name="account_id">
-        <option value="">Unassigned (immediate)</option>
+        <option value="">unassigned (immediate)</option>
         {% for account in accounts %}
         <option value="{{ account.id }}">{{ account.name }}{{ ' (card)' if account.account_type == 'credit_card' else '' }}</option>
         {% endfor %}
       </select>
     </label>
     <label>
-      Expected Date
+      expected date
       <input type="date" name="tx_date" value="{{ today_iso }}" />
     </label>
     <div class="full-row">
-      <button type="submit" class="button-link">Add One-time Item</button>
+      <button type="submit" class="button-link">add one-time item</button>
     </div>
   </form>
 </section>
 
 <section class="panel">
   <div class="panel-head">
-    <h2>Recurring</h2>
+    <h2>recurring</h2>
   </div>
   {% if recurring_items %}
-  <div class="segmented" role="tablist" aria-label="Show recurring items by status">
-    {% for status, label in [('active', 'Active'), ('completed', 'Completed'), ('paused', 'Paused'), ('all', 'All')] %}
+  <div class="segmented" role="tablist" aria-label="show recurring items by status">
+    {% for status, label in [('active', 'active'), ('completed', 'completed'), ('paused', 'paused'), ('all', 'all')] %}
     <button type="button" class="button-link{{ ' active' if status == 'active' else '' }}" data-status-filter="{{ status }}" role="tab">{{ label }}</button>
     {% endfor %}
   </div>
@@ -299,14 +299,14 @@
     <table>
       <thead>
         <tr>
-          <th>Name</th>
-          <th>Category</th>
-          <th>Type</th>
-          <th>Amount</th>
-          <th>Account</th>
-          <th>Cadence</th>
-          <th>Matched</th>
-          <th>Status</th>
+          <th>name</th>
+          <th>category</th>
+          <th>type</th>
+          <th>amount</th>
+          <th>account</th>
+          <th>cadence</th>
+          <th>matched</th>
+          <th>status</th>
           <th></th>
         </tr>
       </thead>
@@ -331,24 +331,24 @@
             {% endif %}
           </td>
           <td>
-            <span class="table-pill {{ 'success' if item.status == 'active' else 'neutral' }}">{{ item.status|capitalize }}</span>
+            <span class="table-pill {{ 'success' if item.status == 'active' else 'neutral' }}">{{ item.status }}</span>
           </td>
           <td class="row-action-cell">
             <div class="row-action-inline">
-              <a href="{{ base_path() }}/expected/recurring/{{ item.id }}/reconcile" class="button-link">Reconcile</a>
+              <a href="{{ base_path() }}/expected/recurring/{{ item.id }}/reconcile" class="button-link">reconcile</a>
               <details class="row-action-menu">
-                <summary class="row-action-trigger" aria-label="Open item actions">
+                <summary class="row-action-trigger" aria-label="open item actions">
                   <i data-lucide="settings-2" class="menu-icon" aria-hidden="true"></i>
                 </summary>
                 <div class="row-action-dropdown">
-                  <a href="{{ base_path() }}/recurring/{{ item.id }}/edit" class="row-action-item">Edit</a>
+                  <a href="{{ base_path() }}/recurring/{{ item.id }}/edit" class="row-action-item">edit</a>
                   {% if item.status != 'completed' %}
                   <form method="post" action="{{ base_path() }}/recurring/{{ item.id }}/toggle" class="row-action-item-form">
-                    <button type="submit" class="row-action-item">{{ 'Pause' if item.active else 'Resume' }}</button>
+                    <button type="submit" class="row-action-item">{{ 'pause' if item.active else 'resume' }}</button>
                   </form>
                   {% endif %}
-                  <form method="post" action="{{ base_path() }}/recurring/{{ item.id }}/delete" class="row-action-item-form" onsubmit="return confirm('Delete this recurring item?')">
-                    <button type="submit" class="row-action-item danger">Delete</button>
+                  <form method="post" action="{{ base_path() }}/recurring/{{ item.id }}/delete" class="row-action-item-form" onsubmit="return confirm('delete this recurring item?')">
+                    <button type="submit" class="row-action-item danger">delete</button>
                   </form>
                 </div>
               </details>
@@ -359,28 +359,28 @@
       </tbody>
     </table>
   </div>
-  <p class="empty-state hidden" id="recurring-filter-empty">Nothing here.</p>
+  <p class="empty-state hidden" id="recurring-filter-empty">nothing here.</p>
   {% else %}
-  <p class="empty-state">No recurring expected items yet.</p>
+  <p class="empty-state">no recurring expected items yet.</p>
   {% endif %}
 </section>
 
 <section class="panel">
   <div class="panel-head">
-    <h2>One-time</h2>
+    <h2>one-time</h2>
   </div>
   {% if one_time_items %}
   <div class="table-wrap">
     <table>
       <thead>
         <tr>
-          <th>Name</th>
-          <th>Category</th>
-          <th>Type</th>
-          <th>Amount</th>
-          <th>Account</th>
-          <th>Expected Date</th>
-          <th>Status</th>
+          <th>name</th>
+          <th>category</th>
+          <th>type</th>
+          <th>amount</th>
+          <th>account</th>
+          <th>expected date</th>
+          <th>status</th>
           <th></th>
         </tr>
       </thead>
@@ -406,9 +406,9 @@
           </td>
           <td class="row-action-cell">
             <div class="row-action-inline">
-              <a href="{{ base_path() }}/expected/one_time/{{ item.id }}/reconcile" class="button-link">Reconcile</a>
-              <form method="post" action="{{ base_path() }}/expected/one-time/{{ item.id }}/delete" class="row-action-item-form" onsubmit="return confirm('Delete this one-time expected item?')">
-                <button type="submit" class="button-link danger">Delete</button>
+              <a href="{{ base_path() }}/expected/one_time/{{ item.id }}/reconcile" class="button-link">reconcile</a>
+              <form method="post" action="{{ base_path() }}/expected/one-time/{{ item.id }}/delete" class="row-action-item-form" onsubmit="return confirm('delete this one-time expected item?')">
+                <button type="submit" class="button-link danger">delete</button>
               </form>
             </div>
           </td>
@@ -418,7 +418,7 @@
     </table>
   </div>
   {% else %}
-  <p class="empty-state">No one-time expected items yet.</p>
+  <p class="empty-state">no one-time expected items yet.</p>
   {% endif %}
 </section>
 

@@ -2,73 +2,73 @@
 {% block content %}
 <section class="page-intro">
   <div>
-    <h2>Settings</h2>
+    <h2>settings</h2>
   </div>
   <div class="intro-badge-stack">
-    <span class="stat-chip">Active user {{ current_user.display_name }}</span>
+    <span class="stat-chip">active user {{ current_user.display_name }}</span>
     <span class="stat-chip">{{ managed_users|length }} total user{{ '' if managed_users|length == 1 else 's' }}</span>
   </div>
 </section>
 
 <section class="settings-layout panel">
   <aside class="settings-sidebar">
-    <h2>Settings</h2>
+    <h2>settings</h2>
     <nav class="settings-nav">
-      <a href="{{ base_path() }}/settings?section=user-management" class="{{ 'active' if section == 'user-management' else '' }}">User Management</a>
+      <a href="{{ base_path() }}/settings?section=user-management" class="{{ 'active' if section == 'user-management' else '' }}">user management</a>
     </nav>
   </aside>
 
   <div class="settings-content">
     <section class="panel">
       <div class="panel-head">
-        <h2>Personal</h2>
+        <h2>personal</h2>
       </div>
       <form method="post" action="{{ base_path() }}/settings/personal" class="grid-form compact">
         <label>
-          Name
+          name
           <input type="text" name="display_name" value="{{ personal_user.display_name }}" required />
         </label>
         <label>
-          Email
+          email
           <input type="email" name="email" value="{{ personal_user.email }}" placeholder="name@example.com" />
         </label>
         <div class="full-row">
-          <button type="submit" class="button-link">Save Personal Details</button>
+          <button type="submit" class="button-link">save personal details</button>
         </div>
       </form>
 
       <form method="post" action="{{ base_path() }}/settings/personal/password" class="grid-form compact">
         <label>
-          Current password
+          current password
           <input type="password" name="current_password" autocomplete="current-password" required />
         </label>
         <label>
-          New password
+          new password
           <input type="password" name="password" autocomplete="new-password" minlength="10" required />
         </label>
         <label>
-          Confirm new password
+          confirm new password
           <input type="password" name="confirm" autocomplete="new-password" minlength="10" required />
         </label>
-        <button type="submit" class="button-link">Change Password</button>
+        <button type="submit" class="button-link">change password</button>
       </form>
       <p class="card-note">
-        Changing your password signs out every device, including this one.
+        changing your password signs out every device, including this one.
       </p>
     </section>
 
     <section class="panel">
       <div class="panel-head">
-        <h2>Admin Table</h2>
+        <h2>admin table</h2>
       </div>
       {% if managed_users %}
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>Handle</th>
-              <th>Name</th>
-              <th>Email</th>
+              <th>handle</th>
+              <th>name</th>
+              <th>email</th>
               <th></th>
             </tr>
           </thead>
@@ -81,18 +81,18 @@
                   <form method="post" action="{{ base_path() }}/settings/users/{{ user_row.id }}/edit" class="settings-user-row-form">
                     <input type="text" name="display_name" value="{{ user_row.display_name }}" required />
                     <input type="email" name="email" value="{{ user_row.email }}" placeholder="name@example.com" />
-                    <button type="submit">Save</button>
+                    <button type="submit">save</button>
                     {% if user_row.id == current_user.id %}
                     <span class="table-pill success">signed in</span>
                     {% elif not user_row.has_password %}
-                    <span class="table-pill neutral" title="This profile has no password, so nobody can sign in as it">no password</span>
+                    <span class="table-pill neutral" title="this profile has no password, so nobody can sign in as it">no password</span>
                     {% endif %}
                   </form>
                   <form method="post" action="{{ base_path() }}/settings/users/{{ user_row.id }}/password" class="settings-user-row-form">
-                    <input type="password" name="password" placeholder="{{ 'Set a password' if not user_row.has_password else 'New password' }}"
+                    <input type="password" name="password" placeholder="{{ 'set a password' if not user_row.has_password else 'new password' }}"
                            autocomplete="new-password" minlength="10" required />
-                    <input type="password" name="confirm" placeholder="Confirm" autocomplete="new-password" minlength="10" required />
-                    <button type="submit">{{ 'Enable Sign In' if not user_row.has_password else 'Reset Password' }}</button>
+                    <input type="password" name="confirm" placeholder="confirm" autocomplete="new-password" minlength="10" required />
+                    <button type="submit">{{ 'enable sign in' if not user_row.has_password else 'reset password' }}</button>
                   </form>
                   <form
                     method="post"
@@ -101,7 +101,7 @@
                     data-user-name="{{ user_row.display_name }}"
                   >
                     <input type="hidden" name="confirm_name" value="" />
-                    <button type="submit" class="danger">Delete</button>
+                    <button type="submit" class="danger">delete</button>
                   </form>
                 </div>
               </td>
@@ -112,17 +112,17 @@
       </div>
       {% endif %}
 
-      <h3>Add New User</h3>
+      <h3>add new user</h3>
       <form method="post" action="{{ base_path() }}/settings/users" class="inline-form">
         <label>
-          Name
-          <input type="text" name="display_name" placeholder="New user name" required />
+          name
+          <input type="text" name="display_name" placeholder="new user name" required />
         </label>
         <label>
-          Email
+          email
           <input type="email" name="email" placeholder="name@example.com" />
         </label>
-        <button type="submit" class="button-link">Add User</button>
+        <button type="submit" class="button-link">add user</button>
       </form>
     </section>
   </div>
@@ -138,7 +138,7 @@
       form.addEventListener('submit', (event) => {
         const expectedName = form.dataset.userName || '';
         const typedName = window.prompt(
-          `Type "${expectedName}" to permanently delete this user and all of their data.`,
+          `type "${expectedName}" to permanently delete this user and all of their data.`,
           '',
         );
         if (typedName === null) {
@@ -148,7 +148,7 @@
         const normalizedTypedName = typedName.trim();
         if (normalizedTypedName !== expectedName) {
           event.preventDefault();
-          window.alert('Name did not match. User was not deleted.');
+          window.alert('name did not match. user was not deleted.');
           return;
         }
         const confirmInput = form.querySelector('input[name="confirm_name"]');

@@ -68,14 +68,14 @@ def test_the_page_lists_in_working_order_and_hides_empty_lists(client, db, user_
 
     assert page.index('id="transfers"') < page.index('id="categories"')
     assert 'id="budgets"' not in page and 'id="recurring"' not in page
-    assert "Categorized 0%" in page
+    assert "categorized 0%" in page
 
 
 def test_nothing_to_review_when_everything_is_settled(client):
     page = client.get("/review").text
 
-    assert "Nothing to review." in page
-    assert "Categorized" not in page
+    assert "nothing to review." in page
+    assert "categorized" not in page
 
 
 def test_confirm_redirects_to_the_list_with_an_undo(client, db, user_id, accounts):
@@ -127,7 +127,7 @@ def test_dismiss_holds_across_reloads_and_restore_brings_rows_back(client, db, u
     client.post("/review/merchants/dismiss", data={"key": key}, follow_redirects=False)
     assert 'id="transfers"' not in client.get("/review").text
     assert 'id="transfers"' not in client.get("/review").text
-    assert "Restore dismissed (1)" in client.get("/review").text
+    assert "restore dismissed (1)" in client.get("/review").text
 
     client.post("/review/restore", follow_redirects=False)
     assert 'id="transfers"' in client.get("/review").text
@@ -154,7 +154,7 @@ def test_undo_from_the_message_returns_totals_and_categories(client, db, user_id
 
     client.post(f"/review/undo/{action}", follow_redirects=False)
     assert db.fetch_one("SELECT category_id FROM imported_transactions WHERE id = ?", [tx])[0] is None
-    assert "Categorized 0%" in client.get("/review").text
+    assert "categorized 0%" in client.get("/review").text
 
 
 def test_recurring_confirm_returns_to_review_and_can_be_undone(client, db, user_id, accounts):

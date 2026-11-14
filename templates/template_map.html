@@ -4,13 +4,13 @@
 {% set v = values %}
 <section class="page-intro">
   <div>
-    <p class="page-kicker"><a href="{{ base_path() }}/accounts" class="button-link">← Accounts</a></p>
-    <h2>Map columns{% if account %} for {{ account.name }}{% endif %}</h2>
+    <p class="page-kicker"><a href="{{ base_path() }}/accounts" class="button-link">← accounts</a></p>
+    <h2>map columns{% if account %} for {{ account.name }}{% endif %}</h2>
   </div>
 </section>
 
 <section class="panel">
-  <div class="panel-head"><h2>Sample</h2></div>
+  <div class="panel-head"><h2>sample</h2></div>
   <div class="table-wrap">
     <table class="sample-table">
       <thead><tr>{% for column in header %}<th>{{ column }}</th>{% endfor %}</tr></thead>
@@ -29,57 +29,57 @@
   {% if account %}<input type="hidden" name="account_id" value="{{ account.id }}" />{% endif %}
 
   <section class="panel">
-    <div class="panel-head"><h2>Columns</h2></div>
+    <div class="panel-head"><h2>columns</h2></div>
     <div class="grid-form">
       <label class="full-row">
-        Template name
+        template name
         <input type="text" name="name" value="{{ v.name or '' }}" required />
       </label>
-      <label>Date {{ parts.column_select('date_field', header, v.date_field, required=True) }}</label>
-      <label>Date if blank {{ parts.column_select('date_fallback_field', header, v.date_fallback_field, optional=True) }}</label>
+      <label>date {{ parts.column_select('date_field', header, v.date_field, required=True) }}</label>
+      <label>date if blank {{ parts.column_select('date_fallback_field', header, v.date_fallback_field, optional=True) }}</label>
       <label>
-        Date format
+        date format
         <select name="date_format">
-          <option value="">Choose…</option>
+          <option value="">choose…</option>
           {% for fmt, example in date_formats %}
           <option value="{{ fmt }}"{{ ' selected' if fmt == v.date_format else '' }}>{{ example }}</option>
           {% endfor %}
         </select>
       </label>
-      <label>Description {{ parts.column_select('description_field', header, v.description_field, required=True) }}</label>
-      <label>Merchant {{ parts.column_select('merchant_field', header, v.merchant_field, optional=True) }}</label>
-      <label>Type {{ parts.column_select('type_field', header, v.type_field, optional=True) }}</label>
+      <label>description {{ parts.column_select('description_field', header, v.description_field, required=True) }}</label>
+      <label>merchant {{ parts.column_select('merchant_field', header, v.merchant_field, optional=True) }}</label>
+      <label>type {{ parts.column_select('type_field', header, v.type_field, optional=True) }}</label>
     </div>
   </section>
 
   <section class="panel">
-    <div class="panel-head"><h2>Amounts</h2></div>
-    <div class="choice-cards" role="radiogroup" aria-label="Amounts">
-      {{ parts.choice_card('amount_layout', 'signed', 'One column', '+ in, − out', checked=v.amount_layout == 'signed') }}
-      {{ parts.choice_card('amount_layout', 'split', 'In and out columns', checked=v.amount_layout == 'split') }}
-      {{ parts.choice_card('amount_layout', 'typed', 'Amount and type', 'The type says money in', checked=v.amount_layout == 'typed') }}
+    <div class="panel-head"><h2>amounts</h2></div>
+    <div class="choice-cards" role="radiogroup" aria-label="amounts">
+      {{ parts.choice_card('amount_layout', 'signed', 'one column', '+ in, − out', checked=v.amount_layout == 'signed') }}
+      {{ parts.choice_card('amount_layout', 'split', 'in and out columns', checked=v.amount_layout == 'split') }}
+      {{ parts.choice_card('amount_layout', 'typed', 'amount and type', 'the type says money in', checked=v.amount_layout == 'typed') }}
     </div>
     <div class="grid-form">
-      <label data-layout="signed typed">Amount {{ parts.column_select('amount_field', header, v.amount_field) }}</label>
+      <label data-layout="signed typed">amount {{ parts.column_select('amount_field', header, v.amount_field) }}</label>
       <label data-layout="signed" class="eom-toggle">
-        <input type="checkbox" name="amount_sign" value="inverted"{{ ' checked' if v.amount_sign == 'inverted' else '' }} /> Flip signs
+        <input type="checkbox" name="amount_sign" value="inverted"{{ ' checked' if v.amount_sign == 'inverted' else '' }} /> flip signs
       </label>
-      <label data-layout="split">Money in {{ parts.column_select('amount_in_field', header, v.amount_in_field, optional=True) }}</label>
-      <label data-layout="split">Money out {{ parts.column_select('amount_out_field', header, v.amount_out_field, optional=True) }}</label>
+      <label data-layout="split">money in {{ parts.column_select('amount_in_field', header, v.amount_in_field, optional=True) }}</label>
+      <label data-layout="split">money out {{ parts.column_select('amount_out_field', header, v.amount_out_field, optional=True) }}</label>
       <label data-layout="typed">
-        Type value for money in
+        type value for money in
         <input type="text" name="credit_value" value="{{ v.credit_value or '' }}" />
       </label>
     </div>
   </section>
 
   <section class="panel">
-    <div class="panel-head"><h2>Preview</h2></div>
+    <div class="panel-head"><h2>preview</h2></div>
     <div id="template-preview" aria-live="polite">{% include "_template_preview.html" %}</div>
   </section>
 
   <div class="flow-actions">
-    <button type="submit" class="button-link">{{ 'Save and import' if account else 'Save template' }}</button>
+    <button type="submit" class="button-link">{{ 'save and import' if account else 'save template' }}</button>
   </div>
 </form>
 

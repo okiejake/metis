@@ -6,7 +6,7 @@
 {% macro restore() -%}
 {% if dismissed_count %}
 <form method="post" action="{{ base_path() }}/review/restore" class="inline-form review-restore">
-  <button type="submit" class="button-link">Restore dismissed ({{ dismissed_count }})</button>
+  <button type="submit" class="button-link">restore dismissed ({{ dismissed_count }})</button>
 </form>
 {% endif %}
 {%- endmacro %}
@@ -21,7 +21,7 @@
 
 {% if r.waiting == 0 %}
 <section class="panel">
-  <p class="empty-state">Nothing to review.</p>
+  <p class="empty-state">nothing to review.</p>
   {{ restore() }}
 </section>
 {% else %}
@@ -33,13 +33,13 @@
   'budgets': r.budgets|sum(attribute='actual'),
   'recurring': r.recurring|sum(attribute='amount'),
 } %}
-{% set titles = [('imports', 'Imports'), ('transfers', 'Transfers'), ('categories', 'Categories'), ('budgets', 'Budgets'), ('recurring', 'Recurring')] %}
+{% set titles = [('imports', 'imports'), ('transfers', 'transfers'), ('categories', 'categories'), ('budgets', 'budgets'), ('recurring', 'recurring')] %}
 
 <section class="panel review-summary">
   {% if r.meter.percent is not none %}
   <div class="review-meter">
     <p class="review-meter-label">
-      <strong>Categorized {{ r.meter.percent }}%</strong>
+      <strong>categorized {{ r.meter.percent }}%</strong>
       <span class="card-note">${{ r.meter.uncategorized|currency }} uncategorized</span>
     </p>
     {{ parts.bar(r.meter.percent) }}
@@ -62,14 +62,14 @@
 
 {% if r.imports %}
 <section class="panel" id="imports">
-  {{ list_head('Imports', r.imports, none) }}
+  {{ list_head('imports', r.imports, none) }}
   <ol class="review-list">
     {% for row in r.imports %}
-    {% call parts.review_row(row.name, ('Last ' ~ row.last_date ~ ' · ' ~ row.days_since ~ ' days ago · usually every ' ~ '%g'|format(row.usual_gap) ~ ' days') if row.last_date else 'No imports yet', row.key) %}
+    {% call parts.review_row(row.name, ('last ' ~ row.last_date ~ ' · ' ~ row.days_since ~ ' days ago · usually every ' ~ '%g'|format(row.usual_gap) ~ ' days') if row.last_date else 'no imports yet', row.key) %}
     {{ parts.import_button({'id': row.account_id, 'name': row.name, 'default_template_id': row.default_template_id}) }}
     <form method="post" action="{{ base_path() }}/review/imports/dismiss" class="inline-form">
       <input type="hidden" name="key" value="{{ row.key }}" />
-      <button type="submit" class="button-link">Dismiss</button>
+      <button type="submit" class="button-link">dismiss</button>
     </form>
     {% endcall %}
     {% endfor %}
@@ -79,7 +79,7 @@
 
 {% if r.transfers %}
 <section class="panel" id="transfers">
-  {{ list_head('Transfers', r.transfers, totals.transfers) }}
+  {{ list_head('transfers', r.transfers, totals.transfers) }}
   <ol class="review-list">
     {% for row in r.transfers %}
     {% call parts.review_row(row.name, row.count ~ ' · $' ~ row.total|currency ~ (' · to ' ~ row.arrived_in if row.arrived_in else ''), row.key) %}
@@ -87,11 +87,11 @@
       <input type="hidden" name="key" value="{{ row.key }}" />
       <input type="hidden" name="list" value="transfers" />
       <input type="hidden" name="choice" value="transfer" />
-      <button type="submit" class="button-link">Confirm</button>
+      <button type="submit" class="button-link">confirm</button>
     </form>
     <form method="post" action="{{ base_path() }}/review/merchants/dismiss" class="inline-form">
       <input type="hidden" name="key" value="{{ row.key }}" />
-      <button type="submit" class="button-link">Dismiss</button>
+      <button type="submit" class="button-link">dismiss</button>
     </form>
     {% endcall %}
     {% endfor %}
@@ -101,7 +101,7 @@
 
 {% if r.categories %}
 <section class="panel" id="categories">
-  {{ list_head('Categories', r.categories, totals.categories) }}
+  {{ list_head('categories', r.categories, totals.categories) }}
   <ol class="review-list">
     {% for row in r.categories %}
     {% call parts.review_row(row.name, row.count ~ ' · $' ~ row.total|currency, row.key) %}
@@ -109,19 +109,19 @@
       <input type="hidden" name="key" value="{{ row.key }}" />
       <input type="hidden" name="list" value="categories" />
       {{ parts.category_picker('choice', categories, row.suggested_category_id, extras=True, transfer=row.can_transfer) }}
-      <button type="submit" class="button-link">Confirm</button>
+      <button type="submit" class="button-link">confirm</button>
     </form>
     <button type="button" class="card-expand-toggle js-review-toggle" data-target="charges-{{ loop.index }}"
-            aria-expanded="false" aria-label="Show {{ row.name }}'s charges">›</button>
+            aria-expanded="false" aria-label="show {{ row.name }}'s charges">›</button>
     <ul class="review-charges hidden" id="charges-{{ loop.index }}">
       {% for c in row.charges %}
       <li>
         <span class="review-charge-facts">{{ c.tx_date }} · ${{ c.amount|currency }}{{ ' · split' if c.split_count else '' }}</span>
         <form method="post" action="{{ base_path() }}/review/charges/{{ c.tx_id }}" class="inline-form review-form">
           {{ parts.category_picker('choice', categories, None, extras=True, transfer=not c.on_card) }}
-          <button type="submit" class="button-link">Confirm</button>
+          <button type="submit" class="button-link">confirm</button>
         </form>
-        <a class="button-link" href="{{ base_path() }}/transactions/{{ c.tx_id }}/split?next=/review%23categories">Split</a>
+        <a class="button-link" href="{{ base_path() }}/transactions/{{ c.tx_id }}/split?next=/review%23categories">split</a>
       </li>
       {% endfor %}
     </ul>
@@ -133,19 +133,19 @@
 
 {% if r.budgets %}
 <section class="panel" id="budgets">
-  {{ list_head('Budgets', r.budgets, totals.budgets) }}
+  {{ list_head('budgets', r.budgets, totals.budgets) }}
   <ol class="review-list">
     {% for row in r.budgets %}
     {% call parts.review_row(row.name, ('$' ~ row.typical|currency ~ ' a month') if row.typical is not none else ('$' ~ row.actual|currency), 'budget-' ~ row.category_id) %}
     <form method="post" action="{{ base_path() }}/review/budgets/confirm" class="inline-form review-form">
       <input type="hidden" name="category_id" value="{{ row.category_id }}" />
-      <input type="number" name="amount" step="0.01" min="0" required aria-label="Monthly budget for {{ row.name }}"
+      <input type="number" name="amount" step="0.01" min="0" required aria-label="monthly budget for {{ row.name }}"
              value="{{ '%.2f'|format(row.suggested) if row.suggested is not none else '' }}" />
-      <button type="submit" class="button-link">Confirm</button>
+      <button type="submit" class="button-link">confirm</button>
     </form>
     <form method="post" action="{{ base_path() }}/review/budgets/dismiss" class="inline-form">
       <input type="hidden" name="category_id" value="{{ row.category_id }}" />
-      <button type="submit" class="button-link">Dismiss</button>
+      <button type="submit" class="button-link">dismiss</button>
     </form>
     {% endcall %}
     {% endfor %}
@@ -155,22 +155,22 @@
 
 {% if r.recurring %}
 <section class="panel" id="recurring">
-  {{ list_head('Recurring', r.recurring, totals.recurring) }}
+  {{ list_head('recurring', r.recurring, totals.recurring) }}
   <ol class="review-list">
     {% for s in r.recurring %}
     {% call parts.review_row(s.name, s.frequency_label ~ ' · $' ~ s.amount|currency, s.key) %}
     <form method="post" action="{{ base_path() }}/recurring" class="inline-form review-form">
       <input type="hidden" name="next_path" value="/review#recurring" />
-      <button type="submit" class="button-link">Confirm</button>
+      <button type="submit" class="button-link">confirm</button>
       <button type="button" class="card-expand-toggle js-review-toggle" data-target="recurring-{{ loop.index }}"
-              aria-expanded="false" aria-label="Change {{ s.name }} before confirming">›</button>
+              aria-expanded="false" aria-label="change {{ s.name }} before confirming">›</button>
       <div class="review-fields hidden" id="recurring-{{ loop.index }}">
         {{ parts.recurring_fields(s, accounts, categories) }}
       </div>
     </form>
     <form method="post" action="{{ base_path() }}/review/recurring/dismiss" class="inline-form">
       <input type="hidden" name="suggestion_key" value="{{ s.key }}" />
-      <button type="submit" class="button-link">Dismiss</button>
+      <button type="submit" class="button-link">dismiss</button>
     </form>
     {% endcall %}
     {% endfor %}

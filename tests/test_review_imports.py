@@ -93,7 +93,7 @@ def test_the_imports_list_comes_first_with_an_import_button(client, db, user_id,
 
     assert page.index('id="imports"') < page.index('id="categories"')
     assert re.search(rf'data-import-account="{accounts["Example Card"]}"', page)
-    assert "No imports yet" in page
+    assert "no imports yet" in page
     assert page.count('id="import-dialog"') == 1
 
 

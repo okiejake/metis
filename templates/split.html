@@ -2,7 +2,7 @@
 {% block content %}
 <section class="page-intro">
   <div>
-    <h2>Split transaction</h2>
+    <h2>split transaction</h2>
   </div>
   <div class="intro-badge-stack">
     <span class="stat-chip">{{ transaction.tx_date }}</span>
@@ -25,9 +25,9 @@
       <table class="split-table">
         <thead>
           <tr>
-            <th>Category</th>
-            <th>Amount</th>
-            <th>Note</th>
+            <th>category</th>
+            <th>amount</th>
+            <th>note</th>
           </tr>
         </thead>
         <tbody id="split-rows">
@@ -35,49 +35,49 @@
           <tr class="split-row">
             <td>
               <select name="category_id">
-                <option value="">Remove this part</option>
+                <option value="">remove this part</option>
                 {% for category in categories %}
                 <option value="{{ category.id }}" {{ 'selected' if category.id == split.category_id else '' }}>{{ category.name }}</option>
                 {% endfor %}
               </select>
             </td>
             <td><input type="number" name="amount" step="0.01" min="0" value="{{ '%.2f'|format(split.amount) }}" /></td>
-            <td><input type="text" name="note" value="{{ split.note or '' }}" placeholder="Optional" /></td>
+            <td><input type="text" name="note" value="{{ split.note or '' }}" placeholder="optional" /></td>
           </tr>
           {% endfor %}
           <tr class="split-row">
             <td>
               <select name="category_id">
-                <option value="">Choose a category</option>
+                <option value="">choose a category</option>
                 {% for category in categories %}
                 <option value="{{ category.id }}">{{ category.name }}</option>
                 {% endfor %}
               </select>
             </td>
             <td><input type="number" name="amount" step="0.01" min="0" placeholder="0.00" /></td>
-            <td><input type="text" name="note" placeholder="Optional" /></td>
+            <td><input type="text" name="note" placeholder="optional" /></td>
           </tr>
         </tbody>
       </table>
     </div>
 
     <p class="split-remainder">
-      Transaction total <strong>${{ transaction.magnitude|currency }}</strong>
+      transaction total <strong>${{ transaction.magnitude|currency }}</strong>
       · remainder on {{ transaction.category_name or 'no category' }}
       <strong id="split-remainder-value">${{ remainder|currency }}</strong>
     </p>
 
     <div class="split-actions">
-      <button type="button" class="button-link js-split-add">Add another part</button>
-      <button type="submit" class="button-link">Save Split</button>
-      <a class="button-link" href="{{ base_path() }}/ledger">Back to Ledger</a>
+      <button type="button" class="button-link js-split-add">add another part</button>
+      <button type="submit" class="button-link">save split</button>
+      <a class="button-link" href="{{ base_path() }}/ledger">back to ledger</a>
     </div>
   </form>
 
   {% if splits %}
   <form method="post" action="{{ base_path() }}/transactions/{{ transaction.id }}/split/clear" class="inline-form">
     {% if next_path %}<input type="hidden" name="next" value="{{ next_path }}" />{% endif %}
-    <button type="submit" class="button-link">Remove all parts</button>
+    <button type="submit" class="button-link">remove all parts</button>
   </form>
   {% endif %}
 </section>

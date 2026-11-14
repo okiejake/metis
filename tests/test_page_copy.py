@@ -14,12 +14,12 @@ import app as app_module
 from services import SESSION_COOKIE
 
 TOP_LEVEL = {
-    "/dashboard": "Dashboard",
-    "/ledger": "Ledger",
-    "/statements": "Statements",
-    "/budget": "Budget",
-    "/accounts": "Accounts",
-    "/settings": "Settings",
+    "/dashboard": "dashboard",
+    "/ledger": "ledger",
+    "/statements": "statements",
+    "/budget": "budget",
+    "/accounts": "accounts",
+    "/settings": "settings",
 }
 
 

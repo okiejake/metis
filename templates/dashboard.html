@@ -2,91 +2,91 @@
 {% block content %}
 <section class="page-intro">
   <div>
-    <h2>Dashboard</h2>
+    <h2>dashboard</h2>
   </div>
   <div class="intro-badge-stack">
     {% if first_negative_date %}
-    <span class="stat-chip danger">First negative: {{ first_negative_date }}</span>
+    <span class="stat-chip danger">first negative: {{ first_negative_date }}</span>
     {% else %}
-    <span class="stat-chip success">No projected negative day</span>
+    <span class="stat-chip success">no projected negative day</span>
     {% endif %}
   </div>
 </section>
 
 {% if review_line.waiting %}
 <p class="review-line">
-  <a href="{{ base_path() }}/review" class="button-link">{% if review_line.percent is not none %}Categorized {{ review_line.percent }}%{% else %}Review{% endif %}</a>
+  <a href="{{ base_path() }}/review" class="button-link">{% if review_line.percent is not none %}categorized {{ review_line.percent }}%{% else %}review{% endif %}</a>
 </p>
 {% endif %}
 
 <section class="summary-grid">
   <article class="card metric-card">
-    <h3>Starting Balance</h3>
+    <h3>starting balance</h3>
     <p class="amount-value">${{ starting_balance|currency }}</p>
-    <span class="card-foot">Opening cash position</span>
+    <span class="card-foot">opening cash position</span>
   </article>
   <article class="card metric-card">
-    <h3>Period Net</h3>
+    <h3>period net</h3>
     <p class="amount-value {{ 'negative' if period_net < 0 else 'positive' }}">${{ period_net|currency }}</p>
-    <span class="card-foot">Income minus expenses</span>
+    <span class="card-foot">income minus expenses</span>
   </article>
   <article class="card metric-card">
-    <h3>Projected End Balance</h3>
+    <h3>projected end balance</h3>
     <p class="amount-value {{ 'negative' if projected_end_balance < 0 else '' }}">${{ projected_end_balance|currency }}</p>
-    <span class="card-foot">End of selected window</span>
+    <span class="card-foot">end of selected window</span>
   </article>
   <article class="card metric-card">
-    <h3>Average Monthly Net</h3>
+    <h3>average monthly net</h3>
     <p class="amount-value {{ 'negative' if average_monthly_net < 0 else 'positive' }}">${{ average_monthly_net|currency }}</p>
-    <span class="card-foot">Average month-over-month</span>
+    <span class="card-foot">average month-over-month</span>
   </article>
 </section>
 
 <section class="summary-grid compact-grid">
   <article class="card compact-card">
-    <h3>Total Income</h3>
+    <h3>total income</h3>
     <p class="amount-value positive">${{ total_income|currency }}</p>
   </article>
   <article class="card compact-card">
-    <h3>Total Expenses</h3>
+    <h3>total expenses</h3>
     <p class="amount-value negative">${{ total_expense|currency }}</p>
   </article>
   <article class="card compact-card">
-    <h3>Transactions</h3>
+    <h3>transactions</h3>
     <p>{{ transaction_count }}</p>
   </article>
   <article class="card compact-card">
-    <h3>First Negative Date</h3>
-    <p>{{ first_negative_date if first_negative_date else 'None in selected window' }}</p>
+    <h3>first negative date</h3>
+    <p>{{ first_negative_date if first_negative_date else 'none in selected window' }}</p>
   </article>
 </section>
 
 <section class="panel chart-panel">
   <div class="panel-head chart-head">
     <div>
-      <h2>Running Balance Trend</h2>
+      <h2>running balance trend</h2>
     </div>
   </div>
   <div class="balance-chart-wrap amount-sensitive">
-    <canvas id="dashboardBalanceChart" aria-label="Running balance line chart"></canvas>
+    <canvas id="dashboardBalanceChart" aria-label="running balance line chart"></canvas>
     <div id="dashboardChartTooltip" class="chart-tooltip hidden"></div>
   </div>
 </section>
 
 <section class="panel">
   <div class="panel-head">
-    <h2>Monthly Running Totals</h2>
+    <h2>monthly running totals</h2>
   </div>
   {% if monthly_rows %}
   <div class="table-wrap">
     <table>
       <thead>
         <tr>
-          <th>Month</th>
-          <th>Income</th>
-          <th>Expenses</th>
-          <th>Net</th>
-          <th>Ending Balance</th>
+          <th>month</th>
+          <th>income</th>
+          <th>expenses</th>
+          <th>net</th>
+          <th>ending balance</th>
         </tr>
       </thead>
       <tbody>
@@ -103,7 +103,7 @@
     </table>
   </div>
   {% else %}
-  <p class="empty-state">No monthly data for this window.</p>
+  <p class="empty-state">no monthly data for this window.</p>
   {% endif %}
 </section>
 

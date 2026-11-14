@@ -373,8 +373,8 @@
     function setPanelShown(shown) {
       panel.hidden = !shown;
       toggle.setAttribute('aria-expanded', shown ? 'true' : 'false');
-      toggle.setAttribute('aria-label', shown ? 'Hide filters' : 'Show filters');
-      toggle.setAttribute('title', shown ? 'Hide filters' : 'Show filters');
+      toggle.setAttribute('aria-label', shown ? 'hide filters' : 'show filters');
+      toggle.setAttribute('title', shown ? 'hide filters' : 'show filters');
       dialog.classList.toggle('panel-hidden', !shown);
     }
 
@@ -399,7 +399,7 @@
 
     function absoluteControl(which) {
       const value = String(rule[which]);
-      const name = which === 'start' ? 'Start' : 'End';
+      const name = which === 'start' ? 'start' : 'end';
       if (rule.grain === 'day') {
         const input = el('input', { type: 'date', className: 'range-date neu-field', 'aria-label': name, value });
         input.addEventListener('change', () => setAbsolute(which, input.value));
@@ -417,7 +417,7 @@
     function relativeControl(which) {
       const value = Number(rule[which]);
       const limit = RELATIVE_LIMITS[rule.grain];
-      const name = which === 'start' ? 'Start' : 'End';
+      const name = which === 'start' ? 'start' : 'end';
       const otherValue = Number(rule[which === 'start' ? 'end' : 'start']);
       const minimum = which === 'end' ? Math.max(-limit, otherValue) : -limit;
       const maximum = which === 'start' ? Math.min(limit, otherValue) : limit;

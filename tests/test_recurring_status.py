@@ -58,8 +58,8 @@ def test_an_ended_item_shows_as_completed_without_pause(client, db, user_id):
     row = row_for(client.get("/budget").text, "Acme Streaming")
 
     assert 'data-status="completed"' in row
-    assert "Completed" in row
-    assert "Pause" not in row and "Resume" not in row
+    assert re.search(r'class="table-pill[^"]*">completed</span>', row)
+    assert not re.search(r">\s*(pause|resume)\s*<", row)
 
 
 def test_the_recurring_count_counts_only_active_items(client, db, user_id):
