@@ -43,17 +43,20 @@ def save_window(
     back = clean_window_next(next)
     try:
         rule = rule_from_form(grain, mode, start, end)
-        check_span(rule)
     except ValueError as error:
         return redirect_with_message(back, str(error), is_error=True)
+    if span_too_long(rule):
+        return redirect_with_message(back, TOO_LONG, is_error=True)
     save_range_rule(user["id"], rule)
     return RedirectResponse(url=back, status_code=303)
 
 
-def check_span(rule) -> None:
+TOO_LONG = "that range is too long: up to 100 years"
+
+
+def span_too_long(rule) -> bool:
     range_start, range_end = resolve_rule(rule, date.today())
-    if (range_end - range_start).days > MAX_SPAN_DAYS:
-        raise ValueError("That range is too long: up to 100 years")
+    return (range_end - range_start).days > MAX_SPAN_DAYS
 
 
 SAVED_NAME_MAX = 60
@@ -70,20 +73,25 @@ def save_filter(
 ):
     """Save the picker's range under a name, exactly as set. JSON, so the
     popup stays open with the user's unapplied edits."""
+    # Replies carry fixed messages only, never an exception's own text.
     name = name.strip()
+    if not name:
+        return _bad("enter a name for this filter")
+    if len(name) > SAVED_NAME_MAX:
+        return _bad(f"keep the name to {SAVED_NAME_MAX} characters")
     try:
-        if not name:
-            raise ValueError("enter a name for this filter")
-        if len(name) > SAVED_NAME_MAX:
-            raise ValueError(f"keep the name to {SAVED_NAME_MAX} characters")
         rule = rule_from_form(grain, mode, start, end)
-        check_span(rule)
-    except ValueError as error:
-        return JSONResponse({"error": str(error).lower()}, status_code=400)
+    except ValueError:
+        return _bad("that range isn't valid")  # the picker only sends valid ranges
+    if span_too_long(rule):
+        return _bad(TOO_LONG)
     if saved_range_name_taken(user["id"], name):
-        # Built after lowercasing, so the name keeps the case the user typed.
-        return JSONResponse({"error": f'a filter named "{name}" already exists'}, status_code=400)
+        return _bad(f'a filter named "{name}" already exists')
     return JSONResponse(save_saved_range(user["id"], name, rule), status_code=201)
+
+
+def _bad(message: str) -> JSONResponse:
+    return JSONResponse({"error": message}, status_code=400)
 
 
 @router.post("/window/saved/{range_id}/delete")

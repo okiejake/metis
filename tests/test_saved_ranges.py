@@ -94,7 +94,8 @@ def test_save_returns_the_filter_exactly_as_set(client, db, user_id, form, rule)
         ("   ", {"grain": "month", "mode": "relative", "start": "0", "end": "0"}, "name"),
         ("x" * 61, {"grain": "month", "mode": "relative", "start": "0", "end": "0"}, "60"),
         ("quarter", {"grain": "month", "mode": "relative", "start": "0", "end": "0"}, "already"),
-        ("Bad", {"grain": "week", "mode": "relative", "start": "0", "end": "0"}, "grain"),
+        ("Bad", {"grain": "week", "mode": "relative", "start": "0", "end": "0"}, "isn't valid"),
+        ("Bad day", {"grain": "day", "mode": "absolute", "start": "2026-02-30", "end": "2026-03-01"}, "isn't valid"),
         ("Long", {"grain": "day", "mode": "absolute", "start": "1900-01-01", "end": "2100-12-31"}, "too long"),
     ],
 )
@@ -105,6 +106,7 @@ def test_save_rejects_bad_input(client, db, user_id, name, form, message):
 
     assert response.status_code == 400
     assert message in response.json()["error"]
+    assert "out of range" not in response.json()["error"]  # never a raw parser message
     assert len(db.load_saved_ranges(user_id)) == 1
 
 
