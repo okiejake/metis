@@ -81,3 +81,13 @@ def test_the_header_button_shows_the_range_in_words(client, db, user_id):
 
 def test_the_popup_carries_the_server_date(client):
     assert f'data-today="{date.today().isoformat()}"' in client.get("/dashboard").text
+
+
+def test_a_malformed_link_date_falls_back_to_the_saved_range(db, user_id):
+    from web import range_context
+
+    db.save_forecast_window(user_id, date(2026, 1, 1), date(2026, 12, 31))
+
+    context = range_context(user_id, {"start": "bad", "end": "2026-13-45"})
+
+    assert (context["range_start"], context["range_end"]) == ("2026-01-01", "2026-12-31")

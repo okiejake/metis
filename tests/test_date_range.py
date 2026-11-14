@@ -78,3 +78,9 @@ def test_rule_from_form_rejects(args, message):
 def test_rule_from_form_accepts_and_types_values():
     assert rule_from_form("month", "relative", "-3", "6") == RangeRule("month", "relative", -3, 6)
     assert rule_from_form("decade", "absolute", "2020", "2030") == RangeRule("decade", "absolute", "2020", "2030")
+
+
+@pytest.mark.parametrize("value", ["20261110", "2026-W45-1", "2026-11-10T00:00"])
+def test_day_values_must_be_plain_iso_dates(value):
+    with pytest.raises(ValueError, match="day"):
+        rule_from_form("day", "absolute", value, "2026-12-01")

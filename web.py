@@ -32,8 +32,13 @@ def range_context(user_id: int, context: Dict[str, Any]) -> Dict[str, Any]:
     today = date.today()
     rule = load_range_rule(user_id)
     saved_start, saved_end = resolve_rule(rule, today)
-    range_start = context.get("start") or saved_start.isoformat()
-    range_end = context.get("end") or saved_end.isoformat()
+    range_start, range_end = saved_start, saved_end
+    try:
+        range_start = parse_iso_date(context["start"]) if context.get("start") else saved_start
+        range_end = parse_iso_date(context["end"]) if context.get("end") else saved_end
+    except ValueError:
+        range_start, range_end = saved_start, saved_end  # a malformed link date
+    range_start, range_end = range_start.isoformat(), range_end.isoformat()
     return {
         "range_rule": rule_to_saved(rule),
         "range_start": range_start,

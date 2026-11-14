@@ -9,6 +9,7 @@ both are pinned to `tests/fixtures/date_range_cases.json`.
 """
 
 import calendar
+import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Optional, Tuple, Union
@@ -42,6 +43,10 @@ def _shift_month(year: int, month: int, count: int) -> Tuple[int, int]:
 def _parse_absolute(grain: str, value: str) -> Tuple[date, date]:
     """The first and last day of the unit an absolute value names."""
     if grain == "day":
+        # Plain YYYY-MM-DD only: Python also reads 20261110 and week dates, which
+        # the browser's picker can't.
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            raise ValueError("Choose a day like 2026-11-10")
         day = date.fromisoformat(value)
         return day, day
     if grain == "month":
