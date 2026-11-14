@@ -1,9 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="page-intro">
-  <div>
-    <h2>dashboard</h2>
-  </div>
+<div class="page-bar">
   <div class="intro-badge-stack">
     {% if first_negative_date %}
     <span class="stat-chip danger">first negative: {{ first_negative_date }}</span>
@@ -11,11 +8,11 @@
     <span class="stat-chip success">no projected negative day</span>
     {% endif %}
   </div>
-</section>
+</div>
 
 {% if review_line.waiting %}
 <p class="review-line">
-  <a href="{{ base_path() }}/review" class="button-link">{% if review_line.percent is not none %}categorized {{ review_line.percent }}%{% else %}review{% endif %}</a>
+  <a href="{{ base_path() }}/inbox" class="button-link">{% if review_line.percent is not none %}categorized {{ review_line.percent }}%{% else %}review{% endif %}</a>
 </p>
 {% endif %}
 

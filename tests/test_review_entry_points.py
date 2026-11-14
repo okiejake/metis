@@ -16,7 +16,7 @@ from conftest import add_imported, quiet_imports
 from services import SESSION_COOKIE
 
 TODAY = date.today()
-NAV_REVIEW = re.compile(r'<a href="/review"[^>]*>\s*review\s*(<span class="nav-badge">(\d+)</span>)?\s*</a>')
+NAV_REVIEW = re.compile(r'<a href="/inbox"[^>]*>\s*inbox\s*(<span class="nav-badge">(\d+)</span>)?\s*</a>')
 
 
 @pytest.fixture
@@ -28,7 +28,7 @@ def client(db, user_id):
         yield test_client
 
 
-def test_nav_shows_review_with_a_count_only_when_something_waits(client, db, user_id, accounts):
+def test_nav_shows_inbox_with_a_count_only_when_something_waits(client, db, user_id, accounts):
     quiet_imports(user_id)
     quiet = NAV_REVIEW.search(client.get("/budget").text)
     assert quiet and quiet.group(1) is None
@@ -45,7 +45,7 @@ def test_dashboard_line_links_to_review_and_hides_when_nothing_waits(client, db,
     add_imported(db, user_id, accounts["Example Card"], "Example Card", TODAY, "EXAMPLE FUEL", -50.0)
     page = client.get("/dashboard").text
 
-    assert re.search(r'<a href="/review"[^>]*>\s*categorized 0%\s*</a>', page)
+    assert re.search(r'<a href="/inbox"[^>]*>\s*categorized 0%\s*</a>', page)
 
 
 def test_budget_no_longer_lists_suggestions_and_links_its_chip_to_review(client, db, user_id, accounts):
@@ -56,4 +56,4 @@ def test_budget_no_longer_lists_suggestions_and_links_its_chip_to_review(client,
     page = client.get("/budget").text
 
     assert "suggested recurring" not in page.lower()
-    assert re.search(r'<a [^>]*href="/review#recurring"[^>]*>\s*1 suggested\s*</a>', page)
+    assert re.search(r'<a [^>]*href="/inbox#recurring"[^>]*>\s*1 suggested\s*</a>', page)

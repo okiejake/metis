@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% import "_parts.html" as parts %}
 {% block content %}
-<section class="page-intro">
-  <div>
+<div class="page-bar">
+  <div class="page-bar-title">
     <p class="page-kicker"><a href="{{ base_path() }}/accounts" class="button-link">← accounts</a></p>
     <h2>add account</h2>
   </div>
-</section>
+</div>
 
 <form method="post" action="{{ base_path() }}/accounts/new" id="account-new-form" class="flow">
   <section class="panel flow-step">

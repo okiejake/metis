@@ -29,7 +29,7 @@ def page(db, user_id, accounts):
     db.save_forecast_window(user_id, TODAY.replace(day=1), TODAY)
     with TestClient(app_module.app) as client:
         client.cookies.set(SESSION_COOKIE, db.create_session(user_id))
-        return client.get("/review").text
+        return client.get("/inbox").text
 
 
 def test_every_row_has_skip_and_every_list_has_a_position_line(page):

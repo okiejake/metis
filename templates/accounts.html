@@ -1,16 +1,13 @@
 {% extends "base.html" %}
 {% import "_parts.html" as parts %}
 {% block content %}
-<section class="page-intro">
-  <div>
-    <h2>accounts</h2>
-  </div>
+<div class="page-bar">
   <div class="intro-badge-stack">
     <span class="stat-chip amount-value">checking opening ${{ starting_balance|currency }}</span>
     <span class="stat-chip">{{ accounts|length }} account{{ '' if accounts|length == 1 else 's' }}</span>
     <a class="button-link" href="{{ base_path() }}/accounts/new">add account</a>
   </div>
-</section>
+</div>
 
 <section class="panel">
   <div class="panel-head">

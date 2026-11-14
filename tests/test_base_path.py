@@ -21,7 +21,7 @@ BASE = "/metis_qa"
 PASSWORD = "synthetic-password-for-tests"
 TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
 URL_ATTRIBUTE = re.compile(r'(?:href|action|src|formaction)="([^"]*)"')
-PAGES = ["/dashboard", "/ledger", "/statements", "/budget", "/review", "/accounts", "/accounts/new", "/templates/new", "/settings"]
+PAGES = ["/dashboard", "/ledger", "/statements", "/budget", "/inbox", "/accounts", "/accounts/new", "/templates/new", "/settings"]
 
 
 @pytest.fixture

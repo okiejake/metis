@@ -2,12 +2,12 @@
 {% import "_parts.html" as parts %}
 {% block content %}
 {% set v = values %}
-<section class="page-intro">
-  <div>
+<div class="page-bar">
+  <div class="page-bar-title">
     <p class="page-kicker"><a href="{{ base_path() }}/accounts" class="button-link">← accounts</a></p>
     <h2>map columns{% if account %} for {{ account.name }}{% endif %}</h2>
   </div>
-</section>
+</div>
 
 <section class="panel">
   <div class="panel-head"><h2>sample</h2></div>

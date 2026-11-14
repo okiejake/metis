@@ -5,7 +5,7 @@
 
 {% macro restore() -%}
 {% if dismissed_count %}
-<form method="post" action="{{ base_path() }}/review/restore" class="inline-form review-restore">
+<form method="post" action="{{ base_path() }}/inbox/restore" class="inline-form review-restore">
   <button type="submit" class="button-link">restore dismissed ({{ dismissed_count }})</button>
 </form>
 {% endif %}
@@ -21,7 +21,7 @@
 
 {% if r.waiting == 0 %}
 <section class="panel">
-  <p class="empty-state">nothing to review.</p>
+  <p class="empty-state">inbox is empty.</p>
   {{ restore() }}
 </section>
 {% else %}
@@ -67,7 +67,7 @@
     {% for row in r.imports %}
     {% call parts.review_row(row.name, ('last ' ~ row.last_date ~ ' · ' ~ row.days_since ~ ' days ago · usually every ' ~ '%g'|format(row.usual_gap) ~ ' days') if row.last_date else 'no imports yet', row.key) %}
     {{ parts.import_button({'id': row.account_id, 'name': row.name, 'default_template_id': row.default_template_id}) }}
-    <form method="post" action="{{ base_path() }}/review/imports/dismiss" class="inline-form">
+    <form method="post" action="{{ base_path() }}/inbox/imports/dismiss" class="inline-form">
       <input type="hidden" name="key" value="{{ row.key }}" />
       <button type="submit" class="button-link">dismiss</button>
     </form>
@@ -83,13 +83,13 @@
   <ol class="review-list">
     {% for row in r.transfers %}
     {% call parts.review_row(row.name, row.count ~ ' · $' ~ row.total|currency ~ (' · to ' ~ row.arrived_in if row.arrived_in else ''), row.key) %}
-    <form method="post" action="{{ base_path() }}/review/merchants/confirm" class="inline-form review-form">
+    <form method="post" action="{{ base_path() }}/inbox/merchants/confirm" class="inline-form review-form">
       <input type="hidden" name="key" value="{{ row.key }}" />
       <input type="hidden" name="list" value="transfers" />
       <input type="hidden" name="choice" value="transfer" />
       <button type="submit" class="button-link">confirm</button>
     </form>
-    <form method="post" action="{{ base_path() }}/review/merchants/dismiss" class="inline-form">
+    <form method="post" action="{{ base_path() }}/inbox/merchants/dismiss" class="inline-form">
       <input type="hidden" name="key" value="{{ row.key }}" />
       <button type="submit" class="button-link">dismiss</button>
     </form>
@@ -105,7 +105,7 @@
   <ol class="review-list">
     {% for row in r.categories %}
     {% call parts.review_row(row.name, row.count ~ ' · $' ~ row.total|currency, row.key) %}
-    <form method="post" action="{{ base_path() }}/review/merchants/confirm" class="inline-form review-form">
+    <form method="post" action="{{ base_path() }}/inbox/merchants/confirm" class="inline-form review-form">
       <input type="hidden" name="key" value="{{ row.key }}" />
       <input type="hidden" name="list" value="categories" />
       {{ parts.category_picker('choice', categories, row.suggested_category_id, extras=True, transfer=row.can_transfer) }}
@@ -117,11 +117,11 @@
       {% for c in row.charges %}
       <li>
         <span class="review-charge-facts">{{ c.tx_date }} · ${{ c.amount|currency }}{{ ' · split' if c.split_count else '' }}</span>
-        <form method="post" action="{{ base_path() }}/review/charges/{{ c.tx_id }}" class="inline-form review-form">
+        <form method="post" action="{{ base_path() }}/inbox/charges/{{ c.tx_id }}" class="inline-form review-form">
           {{ parts.category_picker('choice', categories, None, extras=True, transfer=not c.on_card) }}
           <button type="submit" class="button-link">confirm</button>
         </form>
-        <a class="button-link" href="{{ base_path() }}/transactions/{{ c.tx_id }}/split?next=/review%23categories">split</a>
+        <a class="button-link" href="{{ base_path() }}/transactions/{{ c.tx_id }}/split?next=/inbox%23categories">split</a>
       </li>
       {% endfor %}
     </ul>
@@ -137,13 +137,13 @@
   <ol class="review-list">
     {% for row in r.budgets %}
     {% call parts.review_row(row.name, ('$' ~ row.typical|currency ~ ' a month') if row.typical is not none else ('$' ~ row.actual|currency), 'budget-' ~ row.category_id) %}
-    <form method="post" action="{{ base_path() }}/review/budgets/confirm" class="inline-form review-form">
+    <form method="post" action="{{ base_path() }}/inbox/budgets/confirm" class="inline-form review-form">
       <input type="hidden" name="category_id" value="{{ row.category_id }}" />
       <input type="number" name="amount" step="0.01" min="0" required aria-label="monthly budget for {{ row.name }}"
              value="{{ '%.2f'|format(row.suggested) if row.suggested is not none else '' }}" />
       <button type="submit" class="button-link">confirm</button>
     </form>
-    <form method="post" action="{{ base_path() }}/review/budgets/dismiss" class="inline-form">
+    <form method="post" action="{{ base_path() }}/inbox/budgets/dismiss" class="inline-form">
       <input type="hidden" name="category_id" value="{{ row.category_id }}" />
       <button type="submit" class="button-link">dismiss</button>
     </form>
@@ -160,7 +160,7 @@
     {% for s in r.recurring %}
     {% call parts.review_row(s.name, s.frequency_label ~ ' · $' ~ s.amount|currency, s.key) %}
     <form method="post" action="{{ base_path() }}/recurring" class="inline-form review-form">
-      <input type="hidden" name="next_path" value="/review#recurring" />
+      <input type="hidden" name="next_path" value="/inbox#recurring" />
       <button type="submit" class="button-link">confirm</button>
       <button type="button" class="card-expand-toggle js-review-toggle" data-target="recurring-{{ loop.index }}"
               aria-expanded="false" aria-label="change {{ s.name }} before confirming">›</button>
@@ -168,7 +168,7 @@
         {{ parts.recurring_fields(s, accounts, categories) }}
       </div>
     </form>
-    <form method="post" action="{{ base_path() }}/review/recurring/dismiss" class="inline-form">
+    <form method="post" action="{{ base_path() }}/inbox/recurring/dismiss" class="inline-form">
       <input type="hidden" name="suggestion_key" value="{{ s.key }}" />
       <button type="submit" class="button-link">dismiss</button>
     </form>
@@ -179,7 +179,7 @@
 {% endif %}
 
 {{ restore() }}
-{{ parts.import_dialog(templates, '/review#imports') }}
+{{ parts.import_dialog(templates, '/inbox#imports') }}
 {% endif %}
 
 <script>

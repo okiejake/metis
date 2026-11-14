@@ -1,10 +1,7 @@
 {% extends "base.html" %}
 {% import "_statement_macros.html" as stmt %}
 {% block content %}
-<section class="page-intro">
-  <div>
-    <h2>statements</h2>
-  </div>
+<div class="page-bar">
   {% if card and latest %}
   <div class="intro-badge-stack">
     {% if latest.status == 'paid' or latest.status == 'no_balance' %}
@@ -17,7 +14,7 @@
     {% endif %}
   </div>
   {% endif %}
-</section>
+</div>
 
 {% if not cards %}
 <section class="panel">

@@ -1,17 +1,14 @@
 {% extends "base.html" %}
 {% import "_parts.html" as parts %}
 {% block content %}
-<section class="page-intro">
-  <div>
-    <h2>budget</h2>
-  </div>
+<div class="page-bar">
   <div class="intro-badge-stack">
     <span class="stat-chip">today {{ today_iso }}</span>
-    {% if suggestion_count %}<a class="stat-chip success" href="{{ base_path() }}/review#recurring">{{ suggestion_count }} suggested</a>{% endif %}
+    {% if suggestion_count %}<a class="stat-chip success" href="{{ base_path() }}/inbox#recurring">{{ suggestion_count }} suggested</a>{% endif %}
     <span class="stat-chip">{{ recurring_items|selectattr("status", "equalto", "active")|list|length }} recurring</span>
     <span class="stat-chip">{{ one_time_items|length }} one-time</span>
   </div>
-</section>
+</div>
 
 {% if budget_summary %}
 <section class="panel">

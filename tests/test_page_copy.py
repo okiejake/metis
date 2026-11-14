@@ -13,14 +13,7 @@ from fastapi.testclient import TestClient
 import app as app_module
 from services import SESSION_COOKIE
 
-TOP_LEVEL = {
-    "/dashboard": "dashboard",
-    "/ledger": "ledger",
-    "/statements": "statements",
-    "/budget": "budget",
-    "/accounts": "accounts",
-    "/settings": "settings",
-}
+TOP_LEVEL = ["/dashboard", "/ledger", "/statements", "/budget", "/accounts", "/settings"]
 
 
 @pytest.fixture
@@ -31,14 +24,14 @@ def client(db, user_id):
         yield test_client
 
 
-@pytest.mark.parametrize("path, title", TOP_LEVEL.items())
-def test_a_page_intro_is_a_short_title_and_data_only(client, path, title):
+@pytest.mark.parametrize("path", TOP_LEVEL)
+def test_a_top_level_page_opens_on_its_badges_alone(client, path):
     html = client.get(path).text
-    intro = re.search(r'<section class="page-intro">(.*?)</section>', html, re.S).group(1)
+    bar = re.search(r'<div class="page-bar">(.*?)\n</div>', html, re.S)
 
-    assert re.search(rf"<h2>\s*{title}\s*</h2>", intro)
-    assert "page-kicker" not in intro
-    assert "<p" not in intro
+    assert 'class="page-intro"' not in html
+    if bar:
+        assert "<h2" not in bar.group(1) and "page-kicker" not in bar.group(1) and "<p" not in bar.group(1)
 
 
 def test_the_sign_in_page_has_no_tagline(client):

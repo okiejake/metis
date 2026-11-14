@@ -2,10 +2,7 @@
 {% import "_parts.html" as parts %}
 {% import "_statement_macros.html" as stmt %}
 {% block content %}
-<section class="page-intro">
-  <div>
-    <h2>ledger</h2>
-  </div>
+<div class="page-bar">
   <div class="intro-badge-stack">
     {% if forecast_start_iso %}<span class="stat-chip">forecast from {{ forecast_start_iso }}</span>{% endif %}
     {% if first_negative_date %}
@@ -14,7 +11,7 @@
     <span class="stat-chip success">no projected negative day</span>
     {% endif %}
   </div>
-</section>
+</div>
 
 <section class="summary-grid compact-grid">
   <article class="card compact-card">

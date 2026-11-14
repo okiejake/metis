@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% import "_parts.html" as parts %}
 {% block content %}
-<section class="page-intro">
-  <div>
+<div class="page-bar">
+  <div class="page-bar-title">
     <p class="page-kicker"><a href="{{ base_path() }}/expected" class="button-link">← expected transactions</a></p>
     <h2>reconcile: {{ item.name }}</h2>
     <p>
@@ -12,7 +12,7 @@
       {% endif %}
     </p>
   </div>
-</section>
+</div>
 
 {% if occurrences is not none %}
 <section class="panel">

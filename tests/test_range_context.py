@@ -26,7 +26,7 @@ def client(db, user_id):
 
 
 @pytest.mark.parametrize(
-    "path", ["/dashboard", "/review", "/ledger", "/statements", "/budget", "/accounts", "/settings"]
+    "path", ["/dashboard", "/inbox", "/ledger", "/statements", "/budget", "/accounts", "/settings"]
 )
 def test_every_signed_in_page_gets_the_range(client, path):
     response = client.get(path)

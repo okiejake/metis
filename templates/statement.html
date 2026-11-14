@@ -2,8 +2,8 @@
 {% import "_parts.html" as parts %}
 {% import "_statement_macros.html" as stmt %}
 {% block content %}
-<section class="page-intro">
-  <div>
+<div class="page-bar">
+  <div class="page-bar-title">
     <p class="page-kicker"><a href="{{ base_path() }}/statements/{{ card.id }}">{{ card.name }} statements</a></p>
     <h2>{{ 'statement closed' if statement.closed else 'estimated statement closing' }} {{ statement.close_date }}</h2>
     <p>covers {{ statement.period_start }} – {{ statement.close_date }}, due {{ statement.due_date }}.</p>
@@ -14,7 +14,7 @@
     <span class="stat-chip" title="transactions after this date have not been imported, so this statement may be incomplete.">imported through {{ statement.imported_through or 'nothing yet' }}</span>
     {% endif %}
   </div>
-</section>
+</div>
 
 <nav class="import-filter-tabs statement-steps" aria-label="other statements">
   {% if previous %}<a href="{{ stmt.statement_url(previous) }}">← {{ previous.close_date }}</a>{% endif %}

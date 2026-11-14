@@ -1,14 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="page-intro">
-  <div>
-    <h2>settings</h2>
-  </div>
+<div class="page-bar">
   <div class="intro-badge-stack">
     <span class="stat-chip">active user {{ current_user.display_name }}</span>
     <span class="stat-chip">{{ managed_users|length }} total user{{ '' if managed_users|length == 1 else 's' }}</span>
   </div>
-</section>
+</div>
 
 <section class="settings-layout panel">
   <aside class="settings-sidebar">

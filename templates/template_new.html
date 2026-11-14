@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="page-intro">
-  <div>
+<div class="page-bar">
+  <div class="page-bar-title">
     <p class="page-kicker"><a href="{{ base_path() }}/accounts" class="button-link">← accounts</a></p>
     <h2>new template{% if account %} for {{ account.name }}{% endif %}</h2>
   </div>
-</section>
+</div>
 
 <section class="panel">
   <form method="post" action="{{ base_path() }}/templates/upload" enctype="multipart/form-data" class="grid-form">

@@ -23,7 +23,7 @@ def client(db, user_id):
         yield test_client
 
 
-@pytest.mark.parametrize("read_on", ["/dashboard", "/ledger", "/budget", "/review"])
+@pytest.mark.parametrize("read_on", ["/dashboard", "/ledger", "/budget", "/inbox"])
 def test_every_page_opens_on_the_saved_range(client, db, user_id, read_on):
     db.save_range_rule(user_id, RangeRule("day", "absolute", "2026-02-01", "2026-03-31"))
 
