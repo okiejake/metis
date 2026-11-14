@@ -358,19 +358,24 @@ def set_default_template(user_id: int, account_id: int, template_id: Optional[in
 
 def import_into_account(user_id: int, account: Mapping[str, Any], t: Mapping[str, Any],
                         raw: bytes, filename: str) -> Dict[str, int]:
-    """Read a file with a template into one account, then settle the new rows the
-    way every import does: match rules, the inbox's merchant decisions, category
-    rules, then one-time items. Raises CsvImportError when the file does not fit."""
-    from inbox import apply_inbox_decisions  # inbox imports services; keep this module light
-
+    """Read a file with a template into one account and settle the new rows.
+    Raises CsvImportError when the file does not fit."""
     header, rows = read_csv(raw)
     parsed = parse_rows(header, rows, t, account, db.card_payment_patterns(user_id))
+    return import_rows(user_id, parsed, filename)
+
+
+def import_rows(user_id: int, parsed: List[Dict[str, Any]], filename: str) -> Dict[str, int]:
+    """Store parsed rows and settle the new ones the way every import does:
+    auto-match rules, transfer rules, category rules, then one-time items."""
+    from inbox import apply_transfer_rules  # inbox imports services; keep this module light
+
     result = db.upsert_imported_transactions(user_id, parsed, filename)
     result["matched"] = result["categorized"] = 0
     if result["inserted"]:
         result["matched"] = db.apply_match_rules(user_id)
-        # Decisions first, so they win over rules for their rows.
-        result["categorized"] = apply_inbox_decisions(user_id) + db.apply_category_rules(user_id)
+        apply_transfer_rules(user_id)
+        result["categorized"] = db.resync_category_rules(user_id)
         result["matched"] += db.settle_one_time_items(user_id)["linked"]
     return result
 

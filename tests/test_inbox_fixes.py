@@ -60,7 +60,8 @@ def test_a_category_for_the_card_part_keeps_the_transfer_decision(db, user_id, a
     inbox.confirm_category(user_id, MIXED, fees)
 
     later = add_imported(db, user_id, accounts["Example Checking"], "Example Checking", TODAY - timedelta(days=1), "EXAMPLE MOVE", -300.0)
-    inbox.apply_inbox_decisions(user_id)
+    inbox.apply_transfer_rules(user_id)
+    db.resync_category_rules(user_id)
     assert row(db, later)[0] is True
     assert row(db, card) == (False, fees)
 

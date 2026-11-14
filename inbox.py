@@ -1,11 +1,11 @@
 """The inbox: the page where everything Metis cannot yet account for is listed and
 settled, one decision per merchant.
 
-A decision is stored per merchant (merchant_decisions) and applied to every
-matching row, past and future: apply_inbox_decisions runs after each import.
-A merchant can hold one decision of each kind. Rows a category decision set
-carry its id in imported_transactions.decision_id; rows a transfer decision
-marked carry it in transfer_decision_id. Every action is recorded
+Confirming a merchant's category makes a merchant rule (see the category rules
+in services), applied to every matching row, past and future. Confirming a
+merchant as a transfer makes a transfer rule (transfer_rules), applied after
+each import by apply_transfer_rules; rows it marked carry its id in
+imported_transactions.transfer_rule_id. Every action is recorded
 (inbox_actions) so Undo can reverse it completely.
 
 This module reads and writes through services; services never imports it.
@@ -53,25 +53,23 @@ def undo(user_id: int, action_id: int) -> str:
     return "Undone"
 
 
-def _undo_decision(user_id: int, payload: Dict[str, Any]) -> None:
-    """Reverse a decision by the kind recorded with the action, so it works
-    even after the decision row was replaced."""
-    decision_id = int(payload["decision_id"])
-    with db.get_connection() as conn:
-        if payload["kind"] == "transfer":
-            conn.execute(
-                "UPDATE imported_transactions SET is_transfer = FALSE, transfer_decision_id = NULL "
-                "WHERE user_id = ? AND transfer_decision_id = ?",
-                [user_id, decision_id],
-            )
-        else:
-            conn.execute(
-                "UPDATE imported_transactions SET category_id = NULL, category_via = NULL, decision_id = NULL "
-                "WHERE user_id = ? AND decision_id = ?",
-                [user_id, decision_id],
-            )
-        conn.execute("DELETE FROM merchant_decisions WHERE id = ? AND user_id = ?", [decision_id, user_id])
+def _undo_rule(user_id: int, payload: Dict[str, Any]) -> None:
+    """Delete a merchant rule a confirm made; the rows it set are worked out
+    again, so they go back to uncategorized unless another rule takes them."""
+    if payload.get("rule_id"):
+        db.delete_category_rule(user_id, int(payload["rule_id"]))
     _remove_created_category(user_id, payload.get("created_category_id"))
+
+
+def _undo_transfer(user_id: int, payload: Dict[str, Any]) -> None:
+    rule_id = int(payload["transfer_rule_id"])
+    with db.get_connection() as conn:
+        conn.execute(
+            "UPDATE imported_transactions SET is_transfer = FALSE, transfer_rule_id = NULL "
+            "WHERE user_id = ? AND transfer_rule_id = ?",
+            [user_id, rule_id],
+        )
+        conn.execute("DELETE FROM transfer_rules WHERE id = ? AND user_id = ?", [rule_id, user_id])
 
 
 def _remove_created_category(user_id: int, category_id: Optional[int]) -> None:
@@ -85,7 +83,7 @@ def _remove_created_category(user_id: int, category_id: Optional[int]) -> None:
              + (SELECT COUNT(*) FROM category_rules WHERE user_id = ? AND category_id = ?)
              + (SELECT COUNT(*) FROM bills WHERE user_id = ? AND category_id = ?)
              + (SELECT COUNT(*) FROM one_time_items WHERE user_id = ? AND category_id = ?)
-             + (SELECT COUNT(*) FROM merchant_decisions WHERE user_id = ? AND category_id = ?)
+             + (SELECT COUNT(*) FROM categories WHERE user_id = ? AND parent_id = ?)
         """,
         [user_id, category_id] * 6,
     )[0]
@@ -95,18 +93,18 @@ def _remove_created_category(user_id: int, category_id: Optional[int]) -> None:
 
 def _undo_charge(user_id: int, payload: Dict[str, Any]) -> None:
     db.execute(
-        "UPDATE imported_transactions SET category_id = ?, category_via = ?, is_transfer = ?, decision_id = ?, "
-        "transfer_decision_id = ? WHERE id = ? AND user_id = ?",
+        "UPDATE imported_transactions SET category_id = ?, category_via = ?, is_transfer = ?, category_rule_id = ?, "
+        "transfer_rule_id = ? WHERE id = ? AND user_id = ?",
         [payload["category_id"], payload["category_via"], payload["is_transfer"],
-         payload["decision_id"], payload.get("transfer_decision_id"), payload["tx_id"], user_id],
+         payload.get("category_rule_id"), payload.get("transfer_rule_id"), payload["tx_id"], user_id],
     )
     _remove_created_category(user_id, payload.get("created_category_id"))
 
 
-_UNDO = {"decision": _undo_decision, "charge": _undo_charge}
+_UNDO = {"rule": _undo_rule, "transfer": _undo_transfer, "charge": _undo_charge}
 
 
-# --- Decisions --------------------------------------------------------------
+# --- Categories by merchant ---------------------------------------------------
 
 
 def _uncategorized_ids_by_key(user_id: int) -> Dict[str, Set[int]]:
@@ -124,62 +122,33 @@ def has_uncategorized(user_id: int, key: str) -> bool:
     return bool(_uncategorized_ids_by_key(user_id).get(key))
 
 
-def _save_decision(user_id: int, key: str, kind: str, category_id: Optional[int]) -> int:
-    """Store the merchant's decision of this kind, replacing an earlier one of
-    the same kind. Returns its id."""
-    with db.get_connection() as conn:
-        conn.execute(
-            "DELETE FROM merchant_decisions WHERE user_id = ? AND merchant_key = ? AND kind = ?", [user_id, key, kind]
-        )
-        return int(conn.execute(
-            "INSERT INTO merchant_decisions (user_id, merchant_key, kind, category_id) "
-            "VALUES (?, ?, ?, ?) RETURNING id",
-            [user_id, key, kind, category_id],
-        ).fetchone()[0])
-
-
-def _categorize(user_id: int, tx_ids: Set[int], category_id: int, decision_id: int) -> int:
-    if not tx_ids:
-        return 0
-    ids = sorted(tx_ids)
-    placeholders = ", ".join("?" for _ in ids)
-    db.execute(
-        f"UPDATE imported_transactions SET category_id = ?, category_via = 'merchant', decision_id = ? "
-        f"WHERE user_id = ? AND id IN ({placeholders})",
-        [category_id, decision_id, user_id, *ids],
-    )
-    return len(ids)
-
-
 def confirm_category(user_id: int, key: str, category_id: int, created: bool = False) -> Optional[int]:
-    """Give every uncategorized charge from this merchant the category, now and
-    on every later import. `created` says the category was made for this
-    action, so Undo removes it too. Returns the action id, or None when nothing
-    was left to change."""
-    tx_ids = _uncategorized_ids_by_key(user_id).get(key, set())
-    if not tx_ids:
+    """Make a merchant rule: every charge from this merchant takes the category,
+    now and on every later import, unless picked by hand. `created` says the
+    category was made for this action, so Undo removes it too. Returns the
+    action id, or None when nothing was left to change."""
+    if not _uncategorized_ids_by_key(user_id).get(key):
         return None
-    decision_id = _save_decision(user_id, key, "category", category_id)
-    _categorize(user_id, tx_ids, category_id, decision_id)
-    return record_action(user_id, "decision", {
-        "decision_id": decision_id, "kind": "category", "created_category_id": category_id if created else None,
+    rule_id = db.create_category_rule(user_id, category_id, key, match_on="merchant")
+    return record_action(user_id, "rule", {
+        "rule_id": rule_id, "created_category_id": category_id if created else None,
     })
 
 
 def set_charge(user_id: int, tx_id: int, choice: Choice, created: bool = False) -> Optional[int]:
     """Set one charge by hand: a category, or "transfer". A hand-picked category
-    is never overwritten by a merchant decision or a rule. A card row is never
-    a transfer, so statements are untouched. Returns the action id, or None
-    when the charge already reads that way."""
+    is never overwritten by a rule. A card row is never a transfer, so
+    statements are untouched. Returns the action id, or None when the charge
+    already reads that way."""
     row = db.fetch_one(
-        "SELECT category_id, category_via, is_transfer, decision_id, transfer_decision_id, account_id "
+        "SELECT category_id, category_via, is_transfer, category_rule_id, transfer_rule_id, account_id "
         "FROM imported_transactions WHERE id = ? AND user_id = ?",
         [tx_id, user_id],
     )
     if not row:
         return None
     before = {"tx_id": tx_id, "category_id": row[0], "category_via": row[1], "is_transfer": bool(row[2]),
-              "decision_id": row[3], "transfer_decision_id": row[4],
+              "category_rule_id": row[3], "transfer_rule_id": row[4],
               "created_category_id": int(choice) if created else None}
     if choice == "transfer":
         if row[5] is not None and int(row[5]) in _card_ids(user_id):
@@ -194,7 +163,7 @@ def set_charge(user_id: int, tx_id: int, choice: Choice, created: bool = False) 
         if before["category_id"] == category_id and before["category_via"] is None:
             return None
         db.execute(
-            "UPDATE imported_transactions SET category_id = ?, category_via = NULL, decision_id = NULL "
+            "UPDATE imported_transactions SET category_id = ?, category_via = NULL, category_rule_id = NULL "
             "WHERE id = ? AND user_id = ?",
             [category_id, tx_id, user_id],
         )
@@ -207,7 +176,7 @@ def set_charge(user_id: int, tx_id: int, choice: Choice, created: bool = False) 
 def _rows(user_id: int, where: str, params: List[Any]) -> List[Dict[str, Any]]:
     rows = db.query_all(
         f"""
-        SELECT id, account_id, tx_date, amount, is_transfer, transfer_decision_id,
+        SELECT id, account_id, tx_date, amount, is_transfer, transfer_rule_id,
                COALESCE(NULLIF(merchant, ''), description) AS merchant
         FROM imported_transactions
         WHERE user_id = ? AND account_id IS NOT NULL AND {where}
@@ -281,20 +250,20 @@ def paired_outflows(user_id: int, window_start: date, window_end: date) -> Dict[
     return result
 
 
-def _mark_transfers(user_id: int, tx_ids: Set[int], decision_id: int) -> int:
+def _mark_transfers(user_id: int, tx_ids: Set[int], rule_id: int) -> int:
     if not tx_ids:
         return 0
     ids = sorted(tx_ids)
     placeholders = ", ".join("?" for _ in ids)
     db.execute(
-        f"UPDATE imported_transactions SET is_transfer = TRUE, transfer_decision_id = ? "
+        f"UPDATE imported_transactions SET is_transfer = TRUE, transfer_rule_id = ? "
         f"WHERE user_id = ? AND id IN ({placeholders})",
-        [decision_id, user_id, *ids],
+        [rule_id, user_id, *ids],
     )
     return len(ids)
 
 
-def _apply_transfer(user_id: int, key: str, decision_id: int, cards: Set[int]) -> int:
+def _apply_transfer(user_id: int, key: str, rule_id: int, cards: Set[int]) -> int:
     """Mark the merchant's debits outside cards as transfers, then the arrival
     of each when it landed outside a card and is not one already."""
     outflows = [
@@ -302,15 +271,15 @@ def _apply_transfer(user_id: int, key: str, decision_id: int, cards: Set[int]) -
         if row["account_id"] not in cards and merchant_key(row["merchant"]) == key
     ]
     changed = _mark_transfers(
-        user_id, {row["id"] for row in outflows if not row["is_transfer"]}, decision_id
+        user_id, {row["id"] for row in outflows if not row["is_transfer"]}, rule_id
     )
-    decided = [row for row in outflows if not row["is_transfer"] or row["transfer_decision_id"] == decision_id]
+    decided = [row for row in outflows if not row["is_transfer"] or row["transfer_rule_id"] == rule_id]
     arrivals = {
         arrival["id"]
         for arrival in _pair(decided, _inflows_near(user_id, decided)).values()
         if arrival["account_id"] not in cards and not arrival["is_transfer"]
     }
-    return changed + _mark_transfers(user_id, arrivals, decision_id)
+    return changed + _mark_transfers(user_id, arrivals, rule_id)
 
 
 def confirm_transfer(user_id: int, key: str) -> Optional[int]:
@@ -324,36 +293,27 @@ def confirm_transfer(user_id: int, key: str) -> Optional[int]:
     ]
     if not pending:
         return None
-    decision_id = _save_decision(user_id, key, "transfer", None)
-    _apply_transfer(user_id, key, decision_id, cards)
-    return record_action(user_id, "decision", {"decision_id": decision_id, "kind": "transfer"})
+    with db.get_connection() as conn:
+        conn.execute("DELETE FROM transfer_rules WHERE user_id = ? AND merchant_key = ?", [user_id, key])
+        rule_id = int(conn.execute(
+            "INSERT INTO transfer_rules (user_id, merchant_key) VALUES (?, ?) RETURNING id", [user_id, key]
+        ).fetchone()[0])
+    _apply_transfer(user_id, key, rule_id, cards)
+    return record_action(user_id, "transfer", {"transfer_rule_id": rule_id})
 
 
-def load_decisions(user_id: int) -> List[Dict[str, Any]]:
-    return db.query_all(
-        "SELECT id, merchant_key, kind, category_id FROM merchant_decisions WHERE user_id = ? ORDER BY id",
-        [user_id],
-    )
+def load_transfer_rules(user_id: int) -> List[Dict[str, Any]]:
+    return db.query_all("SELECT id, merchant_key FROM transfer_rules WHERE user_id = ? ORDER BY id", [user_id])
 
 
-def apply_inbox_decisions(user_id: int) -> int:
-    """Apply every stored decision to the rows it covers that are not yet
-    changed. Idempotent; runs after each import. Returns how many rows changed."""
-    decisions = load_decisions(user_id)
-    if not decisions:
+def apply_transfer_rules(user_id: int) -> int:
+    """Apply every transfer rule to the rows it covers that are not yet marked.
+    Idempotent; runs after each import. Returns how many rows changed."""
+    rules = load_transfer_rules(user_id)
+    if not rules:
         return 0
-    changed = 0
-    by_key = _uncategorized_ids_by_key(user_id)
     cards = _card_ids(user_id)
-    for decision in decisions:
-        if decision["kind"] == "category":
-            changed += _categorize(
-                user_id, by_key.get(decision["merchant_key"], set()),
-                int(decision["category_id"]), int(decision["id"]),
-            )
-        elif decision["kind"] == "transfer":
-            changed += _apply_transfer(user_id, decision["merchant_key"], int(decision["id"]), cards)
-    return changed
+    return sum(_apply_transfer(user_id, rule["merchant_key"], int(rule["id"]), cards) for rule in rules)
 
 
 # --- Dismiss and budgets ----------------------------------------------------
@@ -631,7 +591,7 @@ def build_inbox(user_id: int, window_start: date, window_end: date) -> Dict[str,
     # Uncategorized refunds can push the raw share past 100; the meter reads 0..100.
     percent = max(0, min(100, round(100 * (spending - uncategorized) / spending))) if spending > 0.005 else None
 
-    decided = {d["merchant_key"] for d in load_decisions(user_id) if d["kind"] == "transfer"}
+    decided = {rule["merchant_key"] for rule in load_transfer_rules(user_id)}
     dismissed = db.load_dismissed_suggestion_keys(user_id)
     transfers = _transfer_rows(user_id, window_start, window_end, decided, dismissed)
     categories = _category_rows(user_id, parts, {row["key"] for row in transfers})
@@ -666,7 +626,8 @@ def _data_stamp(user_id: int) -> tuple:
           (SELECT MAX(id) FROM imported_transactions WHERE user_id = ?),
           (SELECT SUM(COALESCE(category_id, 0)) FROM imported_transactions WHERE user_id = ?),
           (SELECT SUM(CAST(is_transfer AS INTEGER)) FROM imported_transactions WHERE user_id = ?),
-          (SELECT COUNT(*) FROM merchant_decisions WHERE user_id = ?),
+          (SELECT COUNT(*) FROM transfer_rules WHERE user_id = ?),
+          (SELECT COUNT(*) FROM category_rules WHERE user_id = ?),
           (SELECT COUNT(*) FROM dismissed_suggestions WHERE user_id = ?),
           (SELECT COUNT(*) FROM bills WHERE user_id = ?),
           (SELECT COUNT(*) FROM categories WHERE user_id = ?),
@@ -682,7 +643,7 @@ def _data_stamp(user_id: int) -> tuple:
           (SELECT value FROM settings WHERE key = ?),
           CURRENT_DATE
         """,
-        [user_id] * 16 + [f"user:{user_id}:starting_balance"],
+        [user_id] * 17 + [f"user:{user_id}:starting_balance"],
     ))
 
 

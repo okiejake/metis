@@ -62,6 +62,15 @@
       color
       <input type="color" name="color" value="{{ default_color }}" required />
     </label>
+    <label>
+      parent
+      <select name="parent_id">
+        <option value="">none</option>
+        {% for parent in categories|rejectattr('parent_id') %}
+        <option value="{{ parent.id }}">{% filter lower %}{{ parent.name }}{% endfilter %}</option>
+        {% endfor %}
+      </select>
+    </label>
     <button type="submit" class="button-link">add category</button>
   </form>
 

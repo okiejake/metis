@@ -86,9 +86,9 @@ def test_a_later_import_and_its_late_arrival_are_marked(db, user_id, accounts, s
     inbox.confirm_transfer(user_id, SAVINGS_KEY)
 
     later = add_imported(db, user_id, accounts["Example Checking"], "Example Checking", date(2026, 7, 3), "EXAMPLE SAVINGS XFER", -300.0)
-    inbox.apply_inbox_decisions(user_id)
+    inbox.apply_transfer_rules(user_id)
     late_arrival = add_imported(db, user_id, savings, "Example Savings", date(2026, 7, 5), "TRANSFER FROM CHECKING", 300.0, flow="income")
-    inbox.apply_inbox_decisions(user_id)
+    inbox.apply_transfer_rules(user_id)
 
     assert transfer_flags(db, later, late_arrival) == [True, True]
 
@@ -99,7 +99,7 @@ def test_undo_counts_it_as_spending_again(db, user_id, accounts, savings):
 
     inbox.undo(user_id, action)
     later = add_imported(db, user_id, accounts["Example Checking"], "Example Checking", date(2026, 7, 3), "EXAMPLE SAVINGS XFER", -300.0)
-    inbox.apply_inbox_decisions(user_id)
+    inbox.apply_transfer_rules(user_id)
 
     assert transfer_flags(db, out, arrival, later) == [False, False, False]
 

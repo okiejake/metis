@@ -18,14 +18,28 @@
 </div>
 {%- endmacro %}
 
-{# With extras, also offers "New category" (choosing it reveals the name
-   field; see the page's picker script) and, unless transfer is false,
-   "Transfer". #}
-{% macro category_picker(field, categories, selected=None, extras=False, transfer=True) -%}
-<select name="{{ field }}" class="category-picker"{% if extras %} data-category-picker{% endif %}>
+{# The one category picker (#27): a select with an optgroup per parent, which
+   static/category-picker.js turns into a type-ahead box. With extras it also
+   offers "new category" (the script fills the name field from what was typed)
+   and, unless transfer is false, "transfer". With submit, choosing a category
+   submits the picker's form, as in a list row; in a form it only sets the
+   field. #}
+{% macro _picker_option(category, selected) -%}
+<option value="{{ category.id }}" {{ 'selected' if category.id == selected else '' }}>{% filter lower %}{{ category.label or category.name }}{% endfilter %}</option>
+{%- endmacro %}
+{% macro category_picker(field, categories, selected=None, extras=False, transfer=True, submit=False, label="category") -%}
+<select name="{{ field }}" class="category-picker" data-category-picker{% if submit %} data-picker-submit{% endif %} aria-label="{{ label }}">
   <option value="">no category</option>
-  {% for category in categories %}
-  <option value="{{ category.id }}" {{ 'selected' if category.id == selected else '' }}>{% filter lower %}{{ category.name }}{% endfilter %}</option>
+  {% for top in categories|rejectattr('parent_id') %}
+  {% set children = categories|selectattr('parent_id', 'equalto', top.id)|list %}
+  {% if children %}
+  <optgroup label="{{ top.name|lower }}">
+    {{ _picker_option(top, selected) }}
+    {% for child in children %}{{ _picker_option(child, selected) }}{% endfor %}
+  </optgroup>
+  {% else %}
+  {{ _picker_option(top, selected) }}
+  {% endif %}
   {% endfor %}
   {% if extras and transfer %}
   <option value="transfer">transfer</option>

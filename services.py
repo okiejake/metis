@@ -414,7 +414,7 @@ def delete_user_and_data(user_id: int) -> None:
         for table in (
             "bills", "one_time_items", "imported_transactions", "expected_reconciliations", "expected_match_rules",
             "category_rules", "transaction_splits", "saved_ranges", "sessions", "card_statements",
-            "merchant_decisions", "inbox_actions", "dismissed_suggestions", "import_templates", "import_uploads",
+            "transfer_rules", "inbox_actions", "dismissed_suggestions", "import_templates", "import_uploads",
             "import_account_links", "accounts", "categories",
         ):
             conn.execute(f"DELETE FROM {table} WHERE user_id = ?", [user_id])
@@ -432,7 +432,7 @@ def _table_exists(conn: duckdb.DuckDBPyConnection, table_name: str) -> bool:
 SEQUENCES = (
     "users", "categories", "bills", "one_time_items", "amount_overrides", "imported_transactions",
     "expected_reconciliations", "expected_match_rules", "accounts", "import_templates", "import_uploads",
-    "category_rules", "transaction_splits", "sessions", "card_statements", "merchant_decisions",
+    "category_rules", "transaction_splits", "sessions", "card_statements", "transfer_rules",
     "inbox_actions", "saved_ranges",
 )
 SCHEMA = (
@@ -462,7 +462,9 @@ SCHEMA = (
         color TEXT NOT NULL DEFAULT '#64748b',
         user_id BIGINT NOT NULL,
         created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        budget_amount DOUBLE
+        budget_amount DOUBLE,
+        -- One level: a category with a parent has no children (#100).
+        parent_id BIGINT
     )
     """,
     # Scheduled money out (kind 'expense') and in (kind 'income'). A bill recurs
@@ -517,30 +519,11 @@ SCHEMA = (
         created_at TIMESTAMP NOT NULL DEFAULT NOW()
     )
     """,
-    # category_via says how a row got its category: 'rule' (set by a rule, so
-    # safe to work out again) or NULL (picked by hand; a rule never changes it).
-    """
-    CREATE TABLE IF NOT EXISTS imported_transactions (
-        id BIGINT PRIMARY KEY DEFAULT nextval('imported_transactions_id_seq'),
-        user_id BIGINT NOT NULL,
-        account TEXT NOT NULL,
-        tx_date DATE NOT NULL,
-        description TEXT NOT NULL,
-        merchant TEXT NOT NULL DEFAULT '',
-        amount DOUBLE NOT NULL,
-        flow TEXT NOT NULL,
-        is_transfer BOOLEAN NOT NULL DEFAULT FALSE,
-        raw_type TEXT NOT NULL DEFAULT '',
-        category_id BIGINT,
-        source_file TEXT NOT NULL DEFAULT '',
-        fingerprint TEXT NOT NULL,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        account_id BIGINT,
-        category_via TEXT,
-        decision_id BIGINT,
-        transfer_decision_id BIGINT
-    )
-    """,
+    # category_via says how a row got its category: 'rule' (set by the rule in
+    # category_rule_id, so safe to work out again) or NULL (picked by hand; a
+    # rule never changes it). transfer_rule_id is the transfer rule that marked
+    # it. unexpected is the owner's explicit mark, with an optional note.
+    migrations.IMPORTED_TRANSACTIONS_TABLE.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS"),
     # An actual linked to the expected transaction it settles. source_type is
     # 'bill' or 'one_time'.
     """
@@ -604,7 +587,10 @@ SCHEMA = (
         pattern TEXT NOT NULL,
         amount_min DOUBLE,
         amount_max DOUBLE,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        match_on TEXT DEFAULT 'description',
+        date_from DATE,
+        date_to DATE
     )
     """,
     # payment_pattern is how a payment to this card appears on the funding
@@ -698,22 +684,9 @@ SCHEMA = (
         PRIMARY KEY (user_id, suggestion_key)
     )
     """,
-    # The inbox's per-merchant decisions (see inbox.py). kind is 'category' or
-    # 'transfer'; a merchant can hold one of each (a card part categorized, a
-    # checking part a transfer). Rows a category decision changed carry its id
-    # in imported_transactions.decision_id, and rows a transfer decision marked
-    # carry it in transfer_decision_id, so Undo finds every one of them.
-    """
-    CREATE TABLE IF NOT EXISTS merchant_decisions (
-        id BIGINT PRIMARY KEY DEFAULT nextval('merchant_decisions_id_seq'),
-        user_id BIGINT NOT NULL,
-        merchant_key TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        category_id BIGINT,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        UNIQUE (user_id, merchant_key, kind)
-    )
-    """,
+    # A merchant whose debits outside cards are transfers between the owner's
+    # accounts, now and on later imports (see inbox.py).
+    migrations.TRANSFER_RULES_TABLE.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS"),
     # Every inbox action, with what Undo needs to reverse it (JSON).
     """
     CREATE TABLE IF NOT EXISTS inbox_actions (
@@ -1370,38 +1343,68 @@ def range_first_year(user_id: int, today: date) -> int:
     return min(earliest, today.year - 10)
 
 
+LABEL_SEPARATOR = " › "
+
+
+def category_join(alias: str, id_expr: str, user_expr: str, kind: str = "LEFT") -> str:
+    """Join a category and its parent, for category_label(alias)."""
+    return (f"{kind} JOIN categories {alias} ON {alias}.id = {id_expr} AND {alias}.user_id = {user_expr} "
+            f"LEFT JOIN categories {alias}_parent ON {alias}_parent.id = {alias}.parent_id "
+            f"AND {alias}_parent.user_id = {alias}.user_id")
+
+
+def category_label(alias: str) -> str:
+    """A category's name as shown: a sub-category reads with its parent
+    (`food › groceries`). NULL when the join found no category."""
+    return (f"CASE WHEN {alias}_parent.id IS NULL THEN {alias}.name "
+            f"ELSE {alias}_parent.name || '{LABEL_SEPARATOR}' || {alias}.name END")
+
+
 def load_categories(user_id: int) -> List[Dict[str, Any]]:
-    rows = query_all("""
-            SELECT id, name, color
-            FROM categories
-            WHERE user_id = ?
-            ORDER BY LOWER(name), id
-            """, [user_id])
-    for row in rows:
-        row["color"] = safe_hex_color(row.get("color"))
-    return rows
-
-
-def load_categories_with_usage(user_id: int) -> List[Dict[str, Any]]:
-    rows = query_all("""
-            SELECT c.id, c.name, c.color,
-                   (SELECT COUNT(*) FROM bills b WHERE b.category_id = c.id AND b.user_id = c.user_id) AS bill_count,
-                   (SELECT COUNT(*) FROM one_time_items o WHERE o.category_id = c.id AND o.user_id = c.user_id) AS one_time_count
+    """Every category, each parent followed by its children, by name. Each has
+    its label and parent_id."""
+    rows = query_all(f"""
+            SELECT c.id, c.name, c.color, c.parent_id, {category_label("c")} AS label
             FROM categories c
+            LEFT JOIN categories c_parent ON c_parent.id = c.parent_id AND c_parent.user_id = c.user_id
             WHERE c.user_id = ?
-            ORDER BY LOWER(c.name), c.id
+            ORDER BY LOWER(COALESCE(c_parent.name, c.name)), c.parent_id IS NOT NULL, LOWER(c.name), c.id
             """, [user_id])
     for row in rows:
         row["color"] = safe_hex_color(row.get("color"))
+        row["parent_id"] = int(row["parent_id"]) if row["parent_id"] is not None else None
     return rows
 
 
-def create_category(user_id: int, name: str, color: str = DEFAULT_CATEGORY_COLOR) -> int:
-    """Add a category and return its id. Names are unique per user, ignoring case."""
+def _check_parent(user_id: int, category_id: Optional[int], parent_id: Optional[int]) -> Optional[Dict[str, Any]]:
+    """The parent a category may take, or None for top-level. One level only:
+    the parent must be top-level, and a category with children takes none."""
+    if parent_id is None:
+        return None
+    parent = load_category_by_id(user_id, parent_id)
+    if not parent:
+        raise ValueError("parent not found")
+    if category_id is not None and int(parent_id) == int(category_id):
+        raise ValueError("a category can't be its own parent")
+    if parent["parent_id"] is not None:
+        raise ValueError("a sub-category can't have sub-categories")
+    if category_id is not None and category_children(user_id, category_id):
+        raise ValueError("a category with sub-categories can't have a parent")
+    return parent
+
+
+def create_category(user_id: int, name: str, color: Optional[str] = None, parent_id: Optional[int] = None) -> int:
+    """Add a category and return its id. Names are unique per user, ignoring
+    case, sub-categories included. A sub-category starts with its parent's
+    color unless one is given."""
     cleaned_name = (name or "").strip()
     if not cleaned_name:
         raise ValueError("Category name is required")
-    normalized_color = normalize_hex_color(color)
+    parent = _check_parent(user_id, None, parent_id)
+    if color:
+        normalized_color = normalize_hex_color(color)
+    else:
+        normalized_color = parent["color"] if parent else DEFAULT_CATEGORY_COLOR
     with get_connection() as conn:
         existing = conn.execute(
             "SELECT id FROM categories WHERE user_id = ? AND LOWER(name) = LOWER(?) LIMIT 1",
@@ -1410,14 +1413,20 @@ def create_category(user_id: int, name: str, color: str = DEFAULT_CATEGORY_COLOR
         if existing:
             raise ValueError("A category with this name already exists")
         return int(conn.execute(
-            "INSERT INTO categories (name, color, user_id) VALUES (?, ?, ?) RETURNING id",
-            [cleaned_name, normalized_color, user_id],
+            "INSERT INTO categories (name, color, user_id, parent_id) VALUES (?, ?, ?, ?) RETURNING id",
+            [cleaned_name, normalized_color, user_id, parent["id"] if parent else None],
         ).fetchone()[0])
+
+
+def set_category_parent(user_id: int, category_id: int, parent_id: Optional[int]) -> None:
+    """Move a category under a parent, or with None promote it to top-level."""
+    _check_parent(user_id, category_id, parent_id)
+    execute("UPDATE categories SET parent_id = ? WHERE id = ? AND user_id = ?", [parent_id, category_id, user_id])
 
 
 def load_category_by_id(user_id: int, category_id: int) -> Optional[Dict[str, Any]]:
     row = fetch_one("""
-            SELECT id, name, color, budget_amount
+            SELECT id, name, color, budget_amount, parent_id
             FROM categories
             WHERE id = ? AND user_id = ?
             """, [category_id, user_id])
@@ -1428,7 +1437,38 @@ def load_category_by_id(user_id: int, category_id: int) -> Optional[Dict[str, An
         "name": row[1],
         "color": safe_hex_color(row[2]),
         "budget_amount": float(row[3]) if row[3] is not None else None,
+        "parent_id": int(row[4]) if row[4] is not None else None,
     }
+
+
+def category_children(user_id: int, category_id: int) -> List[int]:
+    return [int(row[0]) for row in fetch_all(
+        "SELECT id FROM categories WHERE user_id = ? AND parent_id = ? ORDER BY id", [user_id, category_id])]
+
+
+def delete_category(user_id: int, category_id: int, children: str = "") -> None:
+    """Delete a category, its rules and splits; what pointed at it is left
+    without a category. A parent with children needs `children`: "move" makes
+    them top-level, "delete" deletes them the same way."""
+    kids = category_children(user_id, category_id)
+    if kids and children not in ("move", "delete"):
+        raise ValueError("choose what happens to its sub-categories")
+    doomed = [category_id] + (kids if children == "delete" else [])
+    with get_connection() as conn:
+        if kids and children == "move":
+            conn.execute("UPDATE categories SET parent_id = NULL WHERE user_id = ? AND parent_id = ?",
+                         [user_id, category_id])
+        for doomed_id in doomed:
+            for table in ("bills", "one_time_items"):
+                conn.execute(f"UPDATE {table} SET category_id = NULL WHERE category_id = ? AND user_id = ?",
+                             [doomed_id, user_id])
+            conn.execute(
+                "UPDATE imported_transactions SET category_id = NULL, category_via = NULL, category_rule_id = NULL "
+                "WHERE category_id = ? AND user_id = ?", [doomed_id, user_id])
+            conn.execute("DELETE FROM category_rules WHERE category_id = ? AND user_id = ?", [doomed_id, user_id])
+            conn.execute("DELETE FROM transaction_splits WHERE category_id = ? AND user_id = ?", [doomed_id, user_id])
+            conn.execute("DELETE FROM categories WHERE id = ? AND user_id = ?", [doomed_id, user_id])
+    resync_category_rules(user_id)
 
 
 def set_category_budget(user_id: int, category_id: int, amount: Optional[float]) -> None:
@@ -1648,7 +1688,7 @@ BILL_COLUMNS = (
     "b.id, b.name, b.kind, b.amount, b.first_due_date, b.end_date, b.frequency_type, b.interval_months, "
     "b.semimonthly_day1, b.semimonthly_day2, b.active, b.created_at, b.category_id, b.account_id, "
     "b.balance, b.balance_as_of, b.interest_rate, b.biller_url, b.charge_frequency, b.charge_first_date, "
-    "c.name AS category_name, c.color AS category_color"
+    f"{category_label('c')} AS category_name, c.color AS category_color"
 )
 
 
@@ -1656,7 +1696,7 @@ def _load_bills(user_id: int, where: str = "", params: Sequence[Any] = (), order
     rows = query_all(f"""
             SELECT {BILL_COLUMNS}
             FROM bills b
-            LEFT JOIN categories c ON c.id = b.category_id AND c.user_id = b.user_id
+            {category_join("c", "b.category_id", "b.user_id")}
             WHERE b.user_id = ? {where}
             ORDER BY {order}
             """, [user_id, *params])
@@ -1685,7 +1725,7 @@ def load_bill_by_id(user_id: int, bill_id: int) -> Optional[Dict[str, Any]]:
 
 ONE_TIME_COLUMNS = (
     "o.id, o.name, o.kind, o.amount, o.expected_date, o.category_id, o.account_id, "
-    "c.name AS category_name, c.color AS category_color"
+    f"{category_label('c')} AS category_name, c.color AS category_color"
 )
 
 
@@ -1694,7 +1734,7 @@ def _load_one_time_items(user_id: int, where: str = "", params: Sequence[Any] = 
     rows = query_all(f"""
             SELECT {ONE_TIME_COLUMNS}
             FROM one_time_items o
-            LEFT JOIN categories c ON c.id = o.category_id AND c.user_id = o.user_id
+            {category_join("c", "o.category_id", "o.user_id")}
             WHERE o.user_id = ? {where}
             ORDER BY {order}
             """, [user_id, *params])
@@ -1973,8 +2013,8 @@ def load_actual_checking_transactions(user_id: int, window_start: date, window_e
     rows = query_all(f"""
                 SELECT i.id, i.tx_date, i.description, i.merchant, i.amount,
                        COALESCE(b.name, ot.name) AS expected_name,
-                       ec.name AS expected_category_name, ec.color AS expected_category_color,
-                       ic.name AS import_category_name, ic.color AS import_category_color
+                       {category_label("ec")} AS expected_category_name, ec.color AS expected_category_color,
+                       {category_label("ic")} AS import_category_name, ic.color AS import_category_color
                 FROM imported_transactions i
                 LEFT JOIN expected_reconciliations r
                        ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
@@ -1982,10 +2022,8 @@ def load_actual_checking_transactions(user_id: int, window_start: date, window_e
                        ON r.source_type = 'bill' AND b.id = r.source_id AND b.user_id = i.user_id
                 LEFT JOIN one_time_items ot
                        ON r.source_type = 'one_time' AND ot.id = r.source_id AND ot.user_id = i.user_id
-                LEFT JOIN categories ec
-                       ON ec.id = COALESCE(b.category_id, ot.category_id) AND ec.user_id = i.user_id
-                LEFT JOIN categories ic
-                       ON ic.id = i.category_id AND ic.user_id = i.user_id
+                {category_join("ec", "COALESCE(b.category_id, ot.category_id)", "i.user_id")}
+                {category_join("ic", "i.category_id", "i.user_id")}
                 WHERE i.user_id = ? AND {scope_clause}
                   AND i.tx_date >= ? AND i.tx_date <= ?
                 ORDER BY i.tx_date, i.id
@@ -2150,9 +2188,9 @@ def _card_rows(user_id: int, card: Dict[str, Any]) -> List[Dict[str, Any]]:
     clause, params = _card_scope_sql(card, "i.")
     rows = query_all(f"""
             SELECT i.id, i.tx_date, i.description, i.merchant, i.amount, i.is_transfer,
-                   c.name AS category_name, c.color AS category_color
+                   {category_label("c")} AS category_name, c.color AS category_color
             FROM imported_transactions i
-            LEFT JOIN categories c ON c.id = i.category_id AND c.user_id = i.user_id
+            {category_join("c", "i.category_id", "i.user_id")}
             WHERE i.user_id = ? AND {clause}
             ORDER BY i.tx_date, i.id
             """, [user_id, *params])
@@ -2560,12 +2598,12 @@ def spending_parts(user_id: int, window_start: date, window_end: date) -> List[D
     Each dict: tx_id, tx_date, account_id, merchant, category_id (None when
     uncategorized), category_name, category_color, spent (> 0 spending,
     < 0 refund)."""
-    rows = query_all("""
+    rows = query_all(f"""
             WITH tx AS (
                 SELECT i.id, i.tx_date, i.account_id, i.amount,
                        COALESCE(NULLIF(i.merchant, ''), i.description) AS merchant,
                        COALESCE(ec.id, ic.id) AS cat_id,
-                       COALESCE(ec.name, ic.name) AS cat_name,
+                       COALESCE({category_label("ec")}, {category_label("ic")}) AS cat_name,
                        COALESCE(ec.color, ic.color) AS cat_color
                 FROM imported_transactions i
                 LEFT JOIN accounts acct
@@ -2576,10 +2614,8 @@ def spending_parts(user_id: int, window_start: date, window_end: date) -> List[D
                        ON r.source_type = 'bill' AND b.id = r.source_id AND b.user_id = i.user_id
                 LEFT JOIN one_time_items ot
                        ON r.source_type = 'one_time' AND ot.id = r.source_id AND ot.user_id = i.user_id
-                LEFT JOIN categories ec
-                       ON ec.id = COALESCE(b.category_id, ot.category_id) AND ec.user_id = i.user_id
-                LEFT JOIN categories ic
-                       ON ic.id = i.category_id AND ic.user_id = i.user_id
+                {category_join("ec", "COALESCE(b.category_id, ot.category_id)", "i.user_id")}
+                {category_join("ic", "i.category_id", "i.user_id")}
                 WHERE i.user_id = ? AND NOT i.is_transfer
                   AND i.tx_date >= ? AND i.tx_date <= ?
                   AND (i.amount < 0 OR COALESCE(acct.account_type = 'credit_card', FALSE))
@@ -2596,11 +2632,11 @@ def spending_parts(user_id: int, window_start: date, window_end: date) -> List[D
                 FROM tx LEFT JOIN allocated a ON a.tx_id = tx.id
                 UNION ALL
                 SELECT tx.id, tx.tx_date, tx.account_id, tx.merchant,
-                       sc.id, sc.name, sc.color, -SIGN(tx.amount) * ts.amount
+                       sc.id, {category_label("sc")}, sc.color, -SIGN(tx.amount) * ts.amount
                 FROM tx
                 JOIN transaction_splits ts
                        ON ts.imported_transaction_id = tx.id AND ts.user_id = ?
-                JOIN categories sc ON sc.id = ts.category_id AND sc.user_id = ?
+                {category_join("sc", "ts.category_id", "?", "")}
             )
             SELECT * FROM parts WHERE ABS(spent) > 0.005
             ORDER BY tx_date, tx_id
@@ -4104,10 +4140,11 @@ def reconciled_occurrence_dates(
 def load_imported_transaction_by_id(user_id: int, tx_id: int) -> Optional[Dict[str, Any]]:
     """One imported transaction with its effective category (a reconciled expected
     item's category wins over the import's own, matching the ledger and budget)."""
-    rows = query_all("""
+    rows = query_all(f"""
                 SELECT i.id, i.tx_date, i.description, i.merchant, i.amount, i.account, i.account_id,
-                       i.is_transfer, i.category_id, i.category_via,
-                       COALESCE(ec.name, ic.name) AS category_name,
+                       i.is_transfer, i.category_id, i.category_via, i.category_rule_id, i.transfer_rule_id,
+                       i.unexpected, i.note,
+                       COALESCE({category_label("ec")}, {category_label("ic")}) AS category_name,
                        COALESCE(ec.color, ic.color) AS category_color,
                        COALESCE(b.name, ot.name) AS expected_name
                 FROM imported_transactions i
@@ -4117,10 +4154,8 @@ def load_imported_transaction_by_id(user_id: int, tx_id: int) -> Optional[Dict[s
                        ON r.source_type = 'bill' AND b.id = r.source_id AND b.user_id = i.user_id
                 LEFT JOIN one_time_items ot
                        ON r.source_type = 'one_time' AND ot.id = r.source_id AND ot.user_id = i.user_id
-                LEFT JOIN categories ec
-                       ON ec.id = COALESCE(b.category_id, ot.category_id) AND ec.user_id = i.user_id
-                LEFT JOIN categories ic
-                       ON ic.id = i.category_id AND ic.user_id = i.user_id
+                {category_join("ec", "COALESCE(b.category_id, ot.category_id)", "i.user_id")}
+                {category_join("ic", "i.category_id", "i.user_id")}
                 WHERE i.id = ? AND i.user_id = ?
                 """, [tx_id, user_id])
     if not rows:
@@ -4135,11 +4170,11 @@ def load_imported_transaction_by_id(user_id: int, tx_id: int) -> Optional[Dict[s
 
 def load_transaction_splits(user_id: int, tx_id: int) -> List[Dict[str, Any]]:
     """Split parts for one transaction, oldest first."""
-    rows = query_all("""
+    rows = query_all(f"""
                 SELECT ts.id, ts.category_id, ts.amount, ts.note,
-                       c.name AS category_name, c.color AS category_color
+                       {category_label("c")} AS category_name, c.color AS category_color
                 FROM transaction_splits ts
-                JOIN categories c ON c.id = ts.category_id AND c.user_id = ts.user_id
+                {category_join("c", "ts.category_id", "ts.user_id", "")}
                 WHERE ts.user_id = ? AND ts.imported_transaction_id = ?
                 ORDER BY ts.id
                 """, [user_id, tx_id])
@@ -4222,27 +4257,63 @@ def split_counts_by_transaction(user_id: int) -> Dict[int, int]:
 # ---------------------------------------------------------------------------
 # Category rules
 #
-# Name-match rules that categorize imported transactions directly, with no
-# budget or bill behind them — for the things that never follow a
-# schedule (card payments, ATM withdrawals, occasional spend you still want named).
+# One table, two kinds. A description rule matches when the description
+# contains its pattern. A merchant rule (what confirming a merchant in the
+# inbox makes) matches when the merchant key equals its pattern, and only on
+# spending. Both honor optional amount bounds, compared with the magnitude, and
+# an optional date range.
 #
-# A rule only ever writes rows it owns (category_via = 'rule'), so a category you
-# picked by hand is never overwritten. Transfers are eligible on purpose: card
-# payments are transfers, and the budget aggregation already excludes transfers,
-# so naming one is presentational and can't distort budget totals.
+# A rule only ever writes rows it owns (category_via = 'rule', with its id in
+# category_rule_id), so a category picked by hand is never overwritten. When
+# several rules match a row, a merchant rule beats a description rule, and the
+# newest wins within a kind. Rule-set categories are worked out again from
+# every rule whenever one is added, changed or deleted, and after each import.
+# Description rules may name transfers on purpose: card payments are transfers,
+# and budget totals already leave transfers out.
 # ---------------------------------------------------------------------------
 
+RULE_KINDS = ("description", "merchant")
 
-def load_category_rules(user_id: int) -> List[Dict[str, Any]]:
-    """All category rules with their category, newest first."""
-    return query_all("""
-                SELECT cr.id, cr.category_id, cr.pattern, cr.amount_min, cr.amount_max,
-                       c.name AS category_name, c.color AS category_color
+
+def load_category_rules(user_id: int, category_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Category rules with their category, merchant rules first, newest first
+    within a kind. With category_id, only that category's."""
+    where, params = "", [user_id]
+    if category_id is not None:
+        where, params = "AND cr.category_id = ?", [user_id, category_id]
+    rows = query_all(f"""
+                SELECT cr.id, cr.category_id, cr.pattern, cr.match_on, cr.amount_min, cr.amount_max,
+                       cr.date_from, cr.date_to,
+                       {category_label("c")} AS category_name, c.color AS category_color
                 FROM category_rules cr
-                JOIN categories c ON c.id = cr.category_id AND c.user_id = cr.user_id
-                WHERE cr.user_id = ?
-                ORDER BY cr.created_at DESC, cr.id DESC
-                """, [user_id])
+                {category_join("c", "cr.category_id", "cr.user_id", "")}
+                WHERE cr.user_id = ? {where}
+                ORDER BY cr.match_on = 'merchant' DESC, cr.id DESC
+                """, params)
+    for row in rows:
+        for key in ("date_from", "date_to"):
+            if row[key] is not None:
+                row[key] = _as_date(row[key])
+        for key in ("amount_min", "amount_max"):
+            if row[key] is not None:
+                row[key] = float(row[key])
+    return rows
+
+
+def _clean_rule(user_id: int, category_id: int, pattern: str, match_on: str,
+                amount_min: Optional[float], amount_max: Optional[float],
+                date_from: Optional[date], date_to: Optional[date]) -> List[Any]:
+    cleaned = (pattern or "").strip()
+    if not cleaned:
+        raise ValueError("A match pattern is required")
+    if match_on not in RULE_KINDS:
+        raise ValueError("A rule matches on the description or the merchant")
+    if not load_category_by_id(user_id, category_id):
+        raise ValueError("Category not found")
+    lo, hi = _validate_amount_bounds(amount_min, amount_max)
+    if date_from and date_to and date_from > date_to:
+        raise ValueError("The rule's start date can't be after its end date")
+    return [category_id, cleaned, match_on, lo, hi, date_from, date_to]
 
 
 def create_category_rule(
@@ -4251,27 +4322,20 @@ def create_category_rule(
     pattern: str,
     amount_min: Optional[float] = None,
     amount_max: Optional[float] = None,
+    match_on: str = "description",
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
 ) -> int:
-    """Create a rule and apply it immediately. Returns the new rule id."""
-    cleaned = (pattern or "").strip()
-    if not cleaned:
-        raise ValueError("A match pattern is required")
-    if not load_category_by_id(user_id, category_id):
-        raise ValueError("Category not found")
-
-    with get_connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO category_rules (user_id, category_id, pattern, amount_min, amount_max)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            [user_id, category_id, cleaned, amount_min, amount_max],
-        )
-        rule_id = int(conn.execute(
-            "SELECT MAX(id) FROM category_rules WHERE user_id = ?", [user_id]
-        ).fetchone()[0])
-    apply_category_rules(user_id, rule_ids=[rule_id])
-    return rule_id
+    """Create a rule, then work out every rule-set category again. Returns the
+    new rule's id."""
+    values = _clean_rule(user_id, category_id, pattern, match_on, amount_min, amount_max, date_from, date_to)
+    row = fetch_one(
+        "INSERT INTO category_rules (user_id, category_id, pattern, match_on, amount_min, amount_max, date_from, "
+        "date_to) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        [user_id, *values],
+    )
+    resync_category_rules(user_id)
+    return int(row[0])
 
 
 def update_category_rule(
@@ -4281,21 +4345,17 @@ def update_category_rule(
     pattern: str,
     amount_min: Optional[float] = None,
     amount_max: Optional[float] = None,
+    match_on: str = "description",
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
 ) -> None:
-    """Edit a rule, then rebuild every rule-owned category so rows the old
-    pattern claimed are released and the new one is applied."""
-    cleaned = (pattern or "").strip()
-    if not cleaned:
-        raise ValueError("A match pattern is required")
-    if not load_category_by_id(user_id, category_id):
-        raise ValueError("Category not found")
-
+    """Edit a rule, then work out every rule-set category again, so rows the old
+    rule claimed are released and the new one applies."""
+    values = _clean_rule(user_id, category_id, pattern, match_on, amount_min, amount_max, date_from, date_to)
     execute(
-        """
-        UPDATE category_rules SET category_id = ?, pattern = ?, amount_min = ?, amount_max = ?
-        WHERE id = ? AND user_id = ?
-        """,
-        [category_id, cleaned, amount_min, amount_max, rule_id, user_id],
+        "UPDATE category_rules SET category_id = ?, pattern = ?, match_on = ?, amount_min = ?, amount_max = ?, "
+        "date_from = ?, date_to = ? WHERE id = ? AND user_id = ?",
+        [*values, rule_id, user_id],
     )
     resync_category_rules(user_id)
 
@@ -4305,80 +4365,87 @@ def delete_category_rule(user_id: int, rule_id: int) -> None:
     resync_category_rules(user_id)
 
 
-def apply_category_rules(
-    user_id: int, rule_ids: Optional[List[int]] = None, import_ids: Optional[List[int]] = None
-) -> int:
-    """Categorize imported rows whose description contains a rule pattern. Runs
-    retroactively (rule create/edit) and on new imports (pass import_ids). Rows
-    you categorized by hand are left alone. Returns the number of rows changed."""
-    categorized = 0
-    with get_connection() as conn:
-        rule_columns = "id, category_id, pattern, amount_min, amount_max"
-        if rule_ids is not None:
-            if not rule_ids:
-                return 0
-            placeholders = ", ".join("?" for _ in rule_ids)
-            rules = conn.execute(
-                f"SELECT {rule_columns} FROM category_rules WHERE user_id = ? AND id IN ({placeholders})",
-                [user_id, *rule_ids],
-            ).fetchall()
-        else:
-            rules = conn.execute(
-                f"SELECT {rule_columns} FROM category_rules WHERE user_id = ? ORDER BY id",
-                [user_id],
-            ).fetchall()
+def _rule_matches(rule: Dict[str, Any], row: Dict[str, Any]) -> bool:
+    magnitude = abs(float(row["amount"]))
+    if rule["amount_min"] is not None and magnitude < float(rule["amount_min"]) - 0.005:
+        return False
+    if rule["amount_max"] is not None and magnitude > float(rule["amount_max"]) + 0.005:
+        return False
+    if rule["date_from"] is not None and row["tx_date"] < rule["date_from"]:
+        return False
+    if rule["date_to"] is not None and row["tx_date"] > rule["date_to"]:
+        return False
+    if rule["match_on"] == "merchant":
+        return row["spending"] and row["merchant_key"] == rule["pattern"]
+    return rule["pattern"].upper() in str(row["description"] or "").upper()
 
-        for _rule_id, category_id, pattern, amount_min, amount_max in rules:
-            if not pattern.strip():
-                continue
-            where_params: List[Any] = [user_id, f"%{pattern.upper()}%"]
-            # Optional amount constraint, compared against the magnitude. A small
-            # epsilon absorbs float rounding so an "exact" bound matches cleanly.
-            amount_filter = ""
-            if amount_min is not None:
-                amount_filter += " AND ABS(amount) >= ?"
-                where_params.append(float(amount_min) - 0.005)
-            if amount_max is not None:
-                amount_filter += " AND ABS(amount) <= ?"
-                where_params.append(float(amount_max) + 0.005)
-            import_filter = ""
-            if import_ids is not None:
-                if not import_ids:
-                    continue
-                placeholders = ", ".join("?" for _ in import_ids)
-                import_filter = f" AND id IN ({placeholders})"
-                where_params.extend(import_ids)
 
-            where_sql = f"""
-                WHERE user_id = ?
-                  AND UPPER(description) LIKE ?
-                  AND (category_id IS NULL OR category_via = 'rule')
-                  {amount_filter}
-                  {import_filter}
-                """
-            # Count only rows this rule actually moves, so re-running is honest.
-            changed = conn.execute(
-                f"SELECT COUNT(*) FROM imported_transactions {where_sql} "
-                f"AND category_id IS DISTINCT FROM ?",
-                [*where_params, int(category_id)],
-            ).fetchone()[0]
-            conn.execute(
-                f"UPDATE imported_transactions SET category_id = ?, category_via = 'rule' {where_sql}",
-                [int(category_id), *where_params],
-            )
-            categorized += int(changed)
-    return categorized
+def category_rule_candidates(user_id: int, where: str = "", params: Sequence[Any] = ()) -> List[Dict[str, Any]]:
+    """Rows a rule may categorize: uncategorized, or set by a rule. Each with
+    what matching reads: description, merchant_key, amount, tx_date and
+    whether it is spending (money out that is not a transfer, or a card
+    refund), as spending_parts counts it."""
+    from merchants import merchant_key  # merchants is pure; imported here to keep services' imports flat
+
+    rows = query_all(f"""
+            SELECT i.id, i.description, COALESCE(NULLIF(i.merchant, ''), i.description) AS merchant, i.amount,
+                   i.tx_date, i.category_id, i.category_rule_id,
+                   (NOT i.is_transfer AND (i.amount < 0 OR COALESCE(acct.account_type = 'credit_card', FALSE)))
+                       AS spending
+            FROM imported_transactions i
+            LEFT JOIN accounts acct ON acct.id = i.account_id AND acct.user_id = i.user_id
+            WHERE i.user_id = ? AND (i.category_id IS NULL OR i.category_via = 'rule') {where}
+            """, [user_id, *params])
+    for row in rows:
+        row["tx_date"] = _as_date(row["tx_date"])
+        row["merchant_key"] = merchant_key(row["merchant"])
+        row["spending"] = bool(row["spending"])
+    return rows
+
+
+def winning_rule(rules: List[Dict[str, Any]], row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The rule that sets this row's category: rules come merchant first,
+    newest first, as load_category_rules orders them."""
+    for rule in rules:
+        if _rule_matches(rule, row):
+            return rule
+    return None
+
+
+def _in_chunks(ids: List[int], size: int = 500):
+    for start in range(0, len(ids), size):
+        yield ids[start:start + size]
 
 
 def resync_category_rules(user_id: int) -> int:
-    """Release every rule-owned category, then re-apply all rules from scratch.
-    Hand-picked categories (category_via IS NULL) survive untouched."""
-    execute(
-        "UPDATE imported_transactions SET category_id = NULL, category_via = NULL "
-        "WHERE user_id = ? AND category_via = 'rule'",
-        [user_id],
-    )
-    return apply_category_rules(user_id)
+    """Work out every rule-set category again from all rules. Hand-picked
+    categories (category_via IS NULL) are never touched. Returns how many rows
+    changed."""
+    rules = load_category_rules(user_id)
+    wanted: Dict[tuple, List[int]] = {}
+    released: List[int] = []
+    for row in category_rule_candidates(user_id):
+        rule = winning_rule(rules, row)
+        if rule is None:
+            if row["category_rule_id"] is not None or row["category_id"] is not None:
+                released.append(int(row["id"]))
+            continue
+        target = (int(rule["category_id"]), int(rule["id"]))
+        current = (row["category_id"], row["category_rule_id"])
+        if current != target:
+            wanted.setdefault(target, []).append(int(row["id"]))
+    with get_connection() as conn:
+        for chunk in _in_chunks(released):
+            conn.execute(
+                f"UPDATE imported_transactions SET category_id = NULL, category_via = NULL, category_rule_id = NULL "
+                f"WHERE user_id = ? AND id IN ({', '.join('?' for _ in chunk)})", [user_id, *chunk])
+        for (category_id, rule_id), ids in wanted.items():
+            for chunk in _in_chunks(ids):
+                conn.execute(
+                    f"UPDATE imported_transactions SET category_id = ?, category_via = 'rule', category_rule_id = ? "
+                    f"WHERE user_id = ? AND id IN ({', '.join('?' for _ in chunk)})",
+                    [category_id, rule_id, user_id, *chunk])
+    return len(released) + sum(len(ids) for ids in wanted.values())
 
 
 def settled_one_time_ids(user_id: int, through: date) -> set:

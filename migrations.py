@@ -274,6 +274,125 @@ def _bill_source_type(conn: duckdb.DuckDBPyConnection) -> None:
         conn.execute(f"UPDATE {table} SET source_type = 'bill' WHERE source_type = 'recurring'")
 
 
+def _category_parents(conn: duckdb.DuckDBPyConnection) -> None:
+    """A category may sit under one parent (#100). Every existing category
+    stays top-level."""
+    if "parent_id" not in _columns(conn, "categories"):
+        conn.execute("ALTER TABLE categories ADD COLUMN parent_id BIGINT")
+
+
+TRANSFER_RULES_TABLE = """
+    CREATE TABLE transfer_rules (
+        id BIGINT PRIMARY KEY DEFAULT nextval('transfer_rules_id_seq'),
+        user_id BIGINT NOT NULL,
+        merchant_key TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, merchant_key)
+    )
+"""
+
+
+def _action_payloads(conn: duckdb.DuckDBPyConnection, kind: str):
+    return [(action_id, json.loads(payload)) for action_id, payload in conn.execute(
+        "SELECT id, payload FROM inbox_actions WHERE kind = ? ORDER BY id", [kind]).fetchall()]
+
+
+def _merged_rules(conn: duckdb.DuckDBPyConnection) -> None:
+    """The inbox's per-merchant category decisions become merchant rules in
+    category_rules, each owning the rows it set. Transfer decisions become
+    transfer_rules, keeping their ids. Recorded actions follow, so Undo still
+    works. Rows still carry the old decision_id column here; transaction_marks
+    renames it."""
+    columns = _columns(conn, "category_rules")
+    for name, kind in (("match_on", "TEXT DEFAULT 'description'"), ("date_from", "DATE"), ("date_to", "DATE")):
+        if name not in columns:
+            conn.execute(f"ALTER TABLE category_rules ADD COLUMN {name} {kind}")
+    conn.execute("UPDATE category_rules SET match_on = 'description' WHERE match_on IS NULL")
+    if not _exists(conn, "merchant_decisions"):
+        return
+
+    rule_for: dict = {}
+    for decision_id, user_id, key, category_id, created_at in conn.execute(
+            "SELECT id, user_id, merchant_key, category_id, created_at FROM merchant_decisions "
+            "WHERE kind = 'category' ORDER BY id").fetchall():
+        rule_id = conn.execute(
+            "INSERT INTO category_rules (user_id, category_id, pattern, match_on, created_at) "
+            "VALUES (?, ?, ?, 'merchant', ?) RETURNING id", [user_id, category_id, key, created_at]).fetchone()[0]
+        rule_for[int(decision_id)] = int(rule_id)
+        conn.execute("UPDATE imported_transactions SET category_via = 'rule', decision_id = ? "
+                     "WHERE user_id = ? AND decision_id = ?", [rule_id, user_id, decision_id])
+    # A row a decision once set and nothing owns now is a hand pick.
+    conn.execute("UPDATE imported_transactions SET category_via = NULL WHERE category_via = 'merchant'")
+
+    highest = conn.execute(
+        "SELECT COALESCE(MAX(id), 0) FROM merchant_decisions WHERE kind = 'transfer'").fetchone()[0]
+    conn.execute(f"CREATE SEQUENCE transfer_rules_id_seq START {int(highest) + 1}")
+    conn.execute(TRANSFER_RULES_TABLE)
+    conn.execute("INSERT INTO transfer_rules (id, user_id, merchant_key, created_at) "
+                 "SELECT id, user_id, merchant_key, created_at FROM merchant_decisions WHERE kind = 'transfer'")
+
+    for action_id, data in _action_payloads(conn, "decision"):
+        if data.get("kind") == "transfer":
+            kind, payload = "transfer", {"transfer_rule_id": data.get("decision_id")}
+        else:
+            kind = "rule"
+            payload = {"rule_id": rule_for.get(int(data.get("decision_id") or 0)),
+                       "created_category_id": data.get("created_category_id")}
+        conn.execute("UPDATE inbox_actions SET kind = ?, payload = ? WHERE id = ?",
+                     [kind, json.dumps(payload), action_id])
+    for action_id, data in _action_payloads(conn, "charge"):
+        decision_id = data.pop("decision_id", None)
+        data["category_rule_id"] = rule_for.get(int(decision_id)) if decision_id else None
+        data["transfer_rule_id"] = data.pop("transfer_decision_id", None)
+        if data.get("category_via") == "merchant":
+            data["category_via"] = "rule"
+        conn.execute("UPDATE inbox_actions SET payload = ? WHERE id = ?", [json.dumps(data), action_id])
+
+    conn.execute("DROP TABLE merchant_decisions")
+    conn.execute("DROP SEQUENCE IF EXISTS merchant_decisions_id_seq")
+
+
+IMPORTED_TRANSACTIONS_TABLE = """
+    CREATE TABLE imported_transactions (
+        id BIGINT PRIMARY KEY DEFAULT nextval('imported_transactions_id_seq'),
+        user_id BIGINT NOT NULL,
+        account TEXT NOT NULL,
+        tx_date DATE NOT NULL,
+        description TEXT NOT NULL,
+        merchant TEXT NOT NULL DEFAULT '',
+        amount DOUBLE NOT NULL,
+        flow TEXT NOT NULL,
+        is_transfer BOOLEAN NOT NULL DEFAULT FALSE,
+        raw_type TEXT NOT NULL DEFAULT '',
+        category_id BIGINT,
+        source_file TEXT NOT NULL DEFAULT '',
+        fingerprint TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        account_id BIGINT,
+        category_via TEXT,
+        category_rule_id BIGINT,
+        transfer_rule_id BIGINT,
+        unexpected BOOLEAN NOT NULL DEFAULT FALSE,
+        note TEXT
+    )
+"""
+
+
+def _transaction_marks(conn: duckdb.DuckDBPyConnection) -> None:
+    """A transaction can be marked unexpected and carry a note (#105, #106).
+    decision_id becomes category_rule_id and transfer_decision_id becomes
+    transfer_rule_id."""
+    if "decision_id" not in _columns(conn, "imported_transactions"):
+        return
+    _replace(conn, "imported_transactions", "imported_transactions", IMPORTED_TRANSACTIONS_TABLE,
+             "INSERT INTO imported_transactions (id, user_id, account, tx_date, description, merchant, amount, flow, "
+             "is_transfer, raw_type, category_id, source_file, fingerprint, created_at, account_id, category_via, "
+             "category_rule_id, transfer_rule_id) "
+             "SELECT id, user_id, account, tx_date, description, merchant, amount, flow, is_transfer, raw_type, "
+             "category_id, source_file, fingerprint, created_at, account_id, category_via, decision_id, "
+             "transfer_decision_id FROM {source}")
+
+
 # The steps that bring a v0.4.0 database to this version's shape, in order.
 STEPS: List[Step] = [
     ("inbox_actions", _inbox_actions),
@@ -281,4 +400,7 @@ STEPS: List[Step] = [
     ("bill_overrides", _bill_overrides),
     ("one_time_items", _one_time_items),
     ("bill_source_type", _bill_source_type),
+    ("category_parents", _category_parents),
+    ("merged_rules", _merged_rules),
+    ("transaction_marks", _transaction_marks),
 ]

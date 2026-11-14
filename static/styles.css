@@ -2619,3 +2619,65 @@ body.amounts-hidden .amount-sensitive {
     color: var(--muted);
   }
 }
+
+/* The category picker (static/category-picker.js). The select stays in the
+   form, hidden, and carries the value. */
+.picker-native {
+  display: none;
+}
+
+.picker {
+  position: relative;
+  display: inline-block;
+  min-width: 12rem;
+}
+
+.picker-input {
+  width: 100%;
+}
+
+.picker-list {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  left: 0;
+  min-width: 100%;
+  max-height: 16rem;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0.3rem;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-solid);
+  box-shadow: var(--shadow-md);
+  z-index: 20;
+}
+
+.picker-group {
+  padding: 0.35rem 0.5rem 0.15rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.picker-option {
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.picker-child {
+  padding-left: 1.25rem;
+}
+
+.picker-option.is-active,
+.picker-option:hover {
+  background: var(--primary-soft);
+}
+
+.picker-add {
+  color: var(--primary-ink);
+  font-weight: 700;
+}

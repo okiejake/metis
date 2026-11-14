@@ -59,7 +59,7 @@ def test_confirming_a_merchant_categorizes_exactly_its_uncategorized_charges(db,
 
     inbox.confirm_category(user_id, ACME, groceries)
 
-    assert [category_of(db, tx) for tx in acme] == [(groceries, "merchant")] * 3
+    assert [category_of(db, tx) for tx in acme] == [(groceries, "rule")] * 3
     assert category_of(db, hand_picked) == (dining, None)
     assert category_of(db, fuel) == (None, None)
 
@@ -69,25 +69,25 @@ def test_a_later_import_from_that_merchant_arrives_categorized(db, user_id, card
     inbox.confirm_category(user_id, ACME, groceries)
 
     later = charge(db, user_id, card, 20, "ACME GROCER #9")
-    inbox.apply_inbox_decisions(user_id)
+    db.resync_category_rules(user_id)
 
-    assert category_of(db, later) == (groceries, "merchant")
+    assert category_of(db, later) == (groceries, "rule")
 
 
 def test_undo_reverts_rows_imported_after_the_decision(db, user_id, card, groceries):
     first = charge(db, user_id, card, 1, "ACME GROCER #1")
     action = inbox.confirm_category(user_id, ACME, groceries)
     later = charge(db, user_id, card, 20, "ACME GROCER #9")
-    inbox.apply_inbox_decisions(user_id)
+    db.resync_category_rules(user_id)
 
     inbox.undo(user_id, action)
     next_import = charge(db, user_id, card, 25, "ACME GROCER #10")
-    inbox.apply_inbox_decisions(user_id)
+    db.resync_category_rules(user_id)
 
     assert [category_of(db, tx) for tx in (first, later, next_import)] == [(None, None)] * 3
 
 
-def test_a_rule_resync_never_takes_a_row_the_decision_set(db, user_id, card, groceries):
+def test_a_description_rule_never_takes_a_row_a_merchant_rule_set(db, user_id, card, groceries):
     household = db.create_category(user_id, "Household")
     tx = charge(db, user_id, card, 1, "ACME GROCER #1")
     inbox.confirm_category(user_id, ACME, groceries)
@@ -95,10 +95,10 @@ def test_a_rule_resync_never_takes_a_row_the_decision_set(db, user_id, card, gro
     db.create_category_rule(user_id, household, "ACME")
     db.resync_category_rules(user_id)
 
-    assert category_of(db, tx) == (groceries, "merchant")
+    assert category_of(db, tx) == (groceries, "rule")
 
 
-def test_deleting_the_category_removes_its_decisions(db, user_id, card, groceries):
+def test_deleting_the_category_removes_its_merchant_rules(db, user_id, card, groceries):
     charge(db, user_id, card, 1, "ACME GROCER #1")
     inbox.confirm_category(user_id, ACME, groceries)
     db.set_user_password(user_id, "synthetic-password-for-tests")
@@ -107,10 +107,10 @@ def test_deleting_the_category_removes_its_decisions(db, user_id, card, grocerie
         client.post(f"/categories/{groceries}/delete", follow_redirects=False)
 
     later = charge(db, user_id, card, 20, "ACME GROCER #9")
-    inbox.apply_inbox_decisions(user_id)
+    db.resync_category_rules(user_id)
 
     assert category_of(db, later) == (None, None)
-    assert db.fetch_one("SELECT COUNT(*) FROM merchant_decisions")[0] == 0
+    assert db.fetch_one("SELECT COUNT(*) FROM category_rules")[0] == 0
 
 
 def test_confirming_again_with_nothing_left_records_nothing(db, user_id, card, groceries):

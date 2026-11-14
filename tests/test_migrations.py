@@ -353,3 +353,117 @@ def test_a_step_that_fails_keeps_the_old_table_until_the_next_start(v040, monkey
     v040.init_db()
 
     assert v040.fetch_one("SELECT COUNT(*) FROM one_time_items")[0] == 3
+
+
+# --- v0.4.0 to v0.5.0: categories and rules -----------------------------------
+
+
+def test_categories_gain_an_empty_parent(v040):
+    v040.init_db()
+
+    assert "parent_id" in columns(v040, "categories")
+    assert v040.fetch_all("SELECT id, parent_id FROM categories ORDER BY id") == [(n, None) for n in range(1, 6)]
+
+
+def test_category_rules_gain_a_kind_and_dates_and_keep_their_ids(v040):
+    before = v040.fetch_all("SELECT id, user_id, category_id, pattern, amount_min, amount_max FROM category_rules ORDER BY id")
+
+    v040.init_db()
+
+    after = v040.fetch_all(
+        "SELECT id, user_id, category_id, pattern, amount_min, amount_max, match_on, date_from, date_to "
+        "FROM category_rules WHERE id IN (1, 2) ORDER BY id"
+    )
+    assert [row[:6] for row in after] == before
+    assert [row[6:] for row in after] == [("description", None, None)] * 2
+
+
+def test_each_category_decision_becomes_a_merchant_rule_that_owns_its_rows(v040):
+    v040.init_db()
+
+    rules = v040.fetch_all(
+        "SELECT id, user_id, category_id, pattern FROM category_rules WHERE match_on = 'merchant' ORDER BY id"
+    )
+    assert [row[1:] for row in rules] == [(1, 3, "ACME DINER"), (2, 5, "ACME CAFE")]
+    diner, cafe = rules[0][0], rules[1][0]
+    owned = v040.fetch_all(
+        "SELECT id, category_id, category_via, category_rule_id FROM imported_transactions "
+        "WHERE category_rule_id IS NOT NULL ORDER BY id"
+    )
+    assert owned == [(4, 3, "rule", diner), (12, 3, "rule", diner), (14, 5, "rule", cafe)]
+    assert v040.fetch_one("SELECT COUNT(*) FROM imported_transactions WHERE category_via = 'merchant'")[0] == 0
+
+
+def test_transfer_decisions_become_transfer_rules_with_the_same_ids(v040):
+    v040.init_db()
+
+    assert "merchant_decisions" not in table_names(v040)
+    assert v040.fetch_all("SELECT id, user_id, merchant_key FROM transfer_rules") == [(2, 1, "TRANSFER TO SAVINGS")]
+    assert v040.fetch_all(
+        "SELECT id, is_transfer, transfer_rule_id FROM imported_transactions WHERE transfer_rule_id IS NOT NULL"
+    ) == [(7, True, 2)]
+
+
+def test_transactions_gain_an_unexpected_mark_and_a_note_and_keep_every_row(v040):
+    keep = "id, user_id, account, tx_date, description, merchant, amount, flow, is_transfer, category_id, fingerprint"
+    before = v040.fetch_all(f"SELECT {keep} FROM imported_transactions ORDER BY id")
+
+    v040.init_db()
+
+    assert v040.fetch_all(f"SELECT {keep} FROM imported_transactions ORDER BY id") == before
+    names = columns(v040, "imported_transactions")
+    assert {"unexpected", "note", "category_rule_id", "transfer_rule_id"} <= set(names)
+    assert not {"decision_id", "transfer_decision_id"} & set(names)
+    assert v040.fetch_one("SELECT COUNT(*) FROM imported_transactions WHERE unexpected OR note IS NOT NULL")[0] == 0
+
+
+def test_a_new_transaction_takes_the_next_id_after_the_upgrade(v040):
+    v040.init_db()
+
+    new_id = v040.fetch_one(
+        "INSERT INTO imported_transactions (user_id, account, tx_date, description, amount, flow, fingerprint) "
+        "VALUES (1, 'Example Checking', DATE '2026-02-01', 'EXAMPLE', -1, 'expense', 'fp-new') RETURNING id"
+    )[0]
+
+    assert new_id == 15
+
+
+def test_a_rule_resync_after_the_upgrade_keeps_every_category(v040):
+    v040.init_db()
+    before = v040.fetch_all("SELECT id, category_id FROM imported_transactions ORDER BY id")
+
+    v040.resync_category_rules(1)
+    v040.resync_category_rules(2)
+
+    assert v040.fetch_all("SELECT id, category_id FROM imported_transactions ORDER BY id") == before
+
+
+def test_a_category_decision_recorded_before_the_upgrade_can_still_be_undone(v040):
+    v040.init_db()
+    import inbox
+
+    inbox.undo(1, 1)
+
+    assert v040.fetch_one("SELECT COUNT(*) FROM category_rules WHERE pattern = 'ACME DINER'")[0] == 0
+    assert v040.fetch_all("SELECT category_id FROM imported_transactions WHERE id IN (4, 12) ORDER BY id") == [
+        (None,), (None,)
+    ]
+
+
+def test_a_transfer_decision_recorded_before_the_upgrade_can_still_be_undone(v040):
+    v040.init_db()
+    import inbox
+
+    inbox.undo(1, 2)
+
+    assert v040.fetch_one("SELECT COUNT(*) FROM transfer_rules")[0] == 0
+    assert v040.fetch_one("SELECT is_transfer FROM imported_transactions WHERE id = 7")[0] is False
+
+
+def test_a_charge_recorded_before_the_upgrade_can_still_be_undone(v040):
+    v040.init_db()
+    import inbox
+
+    inbox.undo(1, 3)
+
+    assert v040.fetch_one("SELECT category_id, category_via FROM imported_transactions WHERE id = 6") == (None, None)

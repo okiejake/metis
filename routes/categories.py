@@ -4,22 +4,32 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 
 from services import (
+    category_children,
     create_category,
-    DEFAULT_CATEGORY_COLOR,
     create_category_rule,
+    delete_category,
     delete_category_rule,
     get_connection,
     load_categories,
     load_category_by_id,
     load_category_rules,
     normalize_hex_color,
+    parse_optional_date,
     parse_optional_float,
     redirect_with_message,
     set_category_budget,
+    set_category_parent,
 )
 from web import CurrentUser, render
 
 router = APIRouter()
+
+
+def _parent_id(value: str) -> Optional[int]:
+    try:
+        return int(value) if str(value).strip() else None
+    except ValueError as exc:
+        raise ValueError("parent not found") from exc
 
 
 @router.get("/categories")
@@ -29,9 +39,13 @@ def categories_page(request: Request, user: CurrentUser):
 
 
 @router.post("/categories")
-def create_category_route(request: Request, user: CurrentUser, name: str = Form(...), color: str = Form(DEFAULT_CATEGORY_COLOR)):
+def create_category_route(request: Request, user: CurrentUser, name: str = Form(...), color: str = Form(""),
+                          parent_id: str = Form("")):
+    """Add a category. A sub-category starts with its parent's color, so the
+    color field only counts for a top-level one."""
     try:
-        create_category(user["id"], name, color)
+        parent = _parent_id(parent_id)
+        create_category(user["id"], name, None if parent else (color or None), parent)
     except ValueError as exc:
         return redirect_with_message("/budget", str(exc), is_error=True)
 
@@ -44,20 +58,25 @@ def edit_category_page(request: Request, user: CurrentUser, category_id: int, ms
     if not category:
         return redirect_with_message("/budget", "Category not found", is_error=True)
 
-    rules = [rule for rule in load_category_rules(user["id"]) if int(rule["category_id"]) == category_id]
+    has_children = bool(category_children(user["id"], category_id))
+    parents = [] if has_children else [
+        c for c in load_categories(user["id"]) if c["parent_id"] is None and c["id"] != category_id
+    ]
     return render(
         request,
         "category_edit.html",
         msg,
         err,
         category=category,
-        rules=rules,
-        categories=load_categories(user["id"]),
+        rules=load_category_rules(user["id"], category_id=category_id),
+        parents=parents,
+        has_children=has_children,
     )
 
 
 @router.post("/categories/{category_id}/edit")
-def edit_category(request: Request, user: CurrentUser, category_id: int, name: str = Form(...), color: str = Form(...)):
+def edit_category(request: Request, user: CurrentUser, category_id: int, name: str = Form(...), color: str = Form(...),
+                  parent_id: str = Form("")):
     category = load_category_by_id(user["id"], category_id)
     if not category:
         return redirect_with_message("/budget", "Category not found", is_error=True)
@@ -67,6 +86,7 @@ def edit_category(request: Request, user: CurrentUser, category_id: int, name: s
         if not cleaned_name:
             raise ValueError("Category name is required")
         normalized_color = normalize_hex_color(color)
+        set_category_parent(user["id"], category_id, _parent_id(parent_id))
 
         with get_connection() as conn:
             existing = conn.execute(
@@ -109,18 +129,19 @@ def add_category_rule(
     pattern: str = Form(...),
     amount_min: str = Form(""),
     amount_max: str = Form(""),
+    date_from: str = Form(""),
+    date_to: str = Form(""),
 ):
     try:
         create_category_rule(
             user["id"], category_id, pattern,
             parse_optional_float(amount_min), parse_optional_float(amount_max),
+            date_from=parse_optional_date(date_from), date_to=parse_optional_date(date_to),
         )
     except ValueError as exc:
         return redirect_with_message(f"/categories/{category_id}/edit", str(exc), is_error=True)
 
-    return redirect_with_message(
-        f"/categories/{category_id}/edit", "Rule saved — matching transactions categorized"
-    )
+    return redirect_with_message(f"/categories/{category_id}/edit", "rule saved")
 
 
 @router.post("/categories/{category_id}/rules/{rule_id}/delete")
@@ -130,36 +151,11 @@ def remove_category_rule(request: Request, user: CurrentUser, category_id: int, 
 
 
 @router.post("/categories/{category_id}/delete")
-def delete_category(request: Request, user: CurrentUser, category_id: int):
+def delete_category_route(request: Request, user: CurrentUser, category_id: int, children: str = Form("")):
     if not load_category_by_id(user["id"], category_id):
         return redirect_with_message("/budget", "Category not found", is_error=True)
-
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE bills SET category_id = NULL WHERE category_id = ? AND user_id = ?",
-            [category_id, user["id"]],
-        )
-        conn.execute(
-            "UPDATE one_time_items SET category_id = NULL WHERE category_id = ? AND user_id = ?",
-            [category_id, user["id"]],
-        )
-        # Anything that pointed imported rows at this category goes with it,
-        # otherwise deleted categories leave orphaned splits and rules behind.
-        conn.execute(
-            "UPDATE imported_transactions SET category_id = NULL, category_via = NULL "
-            "WHERE category_id = ? AND user_id = ?",
-            [category_id, user["id"]],
-        )
-        conn.execute("DELETE FROM category_rules WHERE category_id = ? AND user_id = ?", [category_id, user["id"]])
-        conn.execute("DELETE FROM transaction_splits WHERE category_id = ? AND user_id = ?", [category_id, user["id"]])
-        # The inbox's decisions for this category go too, so a later import from
-        # those merchants is not pointed at a category that no longer exists.
-        conn.execute(
-            "UPDATE imported_transactions SET decision_id = NULL WHERE user_id = ? AND decision_id IN "
-            "(SELECT id FROM merchant_decisions WHERE user_id = ? AND category_id = ?)",
-            [user["id"], user["id"], category_id],
-        )
-        conn.execute("DELETE FROM merchant_decisions WHERE category_id = ? AND user_id = ?", [category_id, user["id"]])
-        conn.execute("DELETE FROM categories WHERE id = ? AND user_id = ?", [category_id, user["id"]])
-
+    try:
+        delete_category(user["id"], category_id, children)
+    except ValueError as exc:
+        return redirect_with_message(f"/categories/{category_id}/edit", str(exc), is_error=True)
     return redirect_with_message("/budget", "Category deleted")
