@@ -57,7 +57,7 @@ def _from_expected(h: Household) -> List[Draft]:
         lines = [] if _transfer(h, account, counterparty) else [(e.amount, None, e.key)]
         for seq, due in enumerate(occurrences(e.repeats, e.starts, h.end, e.ends)):
             posted = due if income else due + timedelta(days=rng.randint(0, 2))
-            if posted > h.end:
+            if due < h.start or posted > h.end:     # a schedule may begin before the household does
                 continue
             drafts.append(Draft(posted, 0 if income else 1, f"expected:{e.key}", seq, account, counterparty,
                                 amount, e.name, list(lines)))

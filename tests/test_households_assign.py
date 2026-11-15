@@ -62,3 +62,23 @@ def test_adding_an_item_leaves_other_items_rows_alone(tmp_path):
     a = generate(household_from(tmp_path, MINIMAL + SPENDING))
     b = generate(household_from(tmp_path, MINIMAL + SPENDING + EXTRA_BILL))
     assert transactions_by_source(a) == {k: v for k, v in transactions_by_source(b).items() if k != "extra"}
+
+
+STORY = '\n[[assignment]]\nmonth = 1\nday = 2\nfrom = "{source}"\nto = "housing"\namount = {amount}\n'
+
+
+def test_a_story_assignment_cannot_overdraw_a_budget(tmp_path):
+    with pytest.raises(HouseholdError, match=r"mini: budget groceries: goes below zero on 2026-01-02"):
+        generate(household_from(tmp_path, MINIMAL + STORY.format(source="groceries", amount=5000)))
+
+
+def test_to_assign_cannot_go_below_zero(tmp_path):
+    with pytest.raises(HouseholdError, match=r"mini: budget to-assign: goes below zero on 2026-01-02"):
+        generate(household_from(tmp_path, MINIMAL + STORY.format(source="to-assign", amount=50000)))
+
+
+def test_an_overspend_moment_may_go_below_zero(tmp_path):
+    broke = (MINIMAL.replace("opening_balance = 1000", "opening_balance = 0")
+             + BIG_PURCHASE.replace('description = "acme grocery"', 'description = "acme grocery"\noverspend = true'))
+    rows = generate(household_from(tmp_path, broke))
+    assert min(fund_balances(rows, "groceries")) < 0

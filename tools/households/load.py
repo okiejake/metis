@@ -1,13 +1,13 @@
 """Read a household file, fill in catalog items, and check the result."""
 
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from typing import List, Optional
 
 from .catalog import CATALOG_PATH, HOUSEHOLDS_DIR, Catalog, load_catalog, read_toml
 from .check import check_household
 from .errors import HouseholdError
-from .model import (Account, Budget, Expected, Fill, Household, Line, Moment, Spending, StoryAssignment,
+from .model import (TO_ASSIGN, Account, Budget, Expected, Fill, Household, Line, Moment, Spending, StoryAssignment,
                     money, month_day)
 
 
@@ -26,6 +26,12 @@ def _need(item: dict, field: str, where: str):
     return item[field]
 
 
+def _new_key(found: dict, key: str, where: str) -> str:
+    if key in found:
+        raise HouseholdError(where, "appears twice")
+    return key
+
+
 def _optional_money(value) -> Optional:
     return None if value is None else money(value)
 
@@ -36,6 +42,8 @@ def load_household(path: Path, catalog: Optional[Catalog] = None) -> Household:
     head = _need(data, "household", str(path))
     key = _need(head, "key", str(path))
     start = _need(head, "start", key)
+    if not isinstance(start, date) or start.day != 1:
+        raise HouseholdError(f"{key}: household", "starts on the 1st of a month, written as a date")
 
     accounts = {}
     for item in data.get("account", []):
@@ -44,7 +52,7 @@ def load_household(path: Path, catalog: Optional[Catalog] = None) -> Household:
         if kind is None:
             raise HouseholdError(where, f"unknown account type '{item['type']}'")
         opening = _optional_money(item.get("opening_balance"))
-        accounts[_need(item, "key", where)] = Account(
+        accounts[_new_key(accounts, _need(item, "key", where), where)] = Account(
             key=item["key"], name=_need(item, "name", where), type=item["type"], cls=kind["class"],
             on_budget=kind["on_budget"], parent=item.get("parent"), default_budget=item.get("default_budget"),
             url=item.get("url"), opening_balance=opening,
@@ -59,7 +67,9 @@ def load_household(path: Path, catalog: Optional[Catalog] = None) -> Household:
             raise HouseholdError(where, f"unknown catalog budget '{use}'")
         merged = _merge(catalog.budgets[use], item) if use else dict(item)
         fill = merged.get("fill")
-        budgets[_need(merged, "key", where)] = Budget(
+        if merged.get("key") == TO_ASSIGN:
+            raise HouseholdError(where, "is reserved; Metis makes the to assign budget itself")
+        budgets[_new_key(budgets, _need(merged, "key", where), where)] = Budget(
             key=merged["key"], name=_need(merged, "name", where), parent=merged.get("parent"),
             priority=merged.get("priority"),
             fill=Fill(fill.get("basis", "amount"), _optional_money(fill.get("value")), fill.get("every"))
@@ -77,7 +87,7 @@ def load_household(path: Path, catalog: Optional[Catalog] = None) -> Household:
             if base is None:
                 raise HouseholdError(where, f"unknown catalog bill or income '{use}'")
         merged = _merge(base, item) if base else dict(item)
-        expected[_need(merged, "key", where)] = Expected(
+        expected[_new_key(expected, _need(merged, "key", where), where)] = Expected(
             key=merged["key"], name=_need(merged, "name", where), type=_need(merged, "type", where),
             from_account=_need(merged, "from", where), to_account=_need(merged, "to", where),
             budget=merged.get("budget"), amount=money(_need(merged, "amount", where)),

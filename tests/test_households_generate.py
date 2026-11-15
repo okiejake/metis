@@ -44,3 +44,11 @@ def test_to_assign_is_the_first_budget(tmp_path):
 def test_same_household_same_rows(tmp_path):
     h = household_from(tmp_path, MINIMAL)
     assert generate(h) == generate(h)
+
+
+def test_nothing_is_dated_before_the_household_starts(tmp_path):
+    early = MINIMAL.replace('amount = 500.00\nstarts = 2026-01-01', 'amount = 500.00\nstarts = 2025-10-01')
+    rows = generate(household_from(tmp_path, early))
+    assert min(t["posted_on"] for t in rows["transactions"]) >= date(2026, 1, 1)
+    rent_id = key_id(rows, "expected_transactions", "rent")
+    assert sum(1 for line in rows["transaction_lines"] if line["expected_transaction_id"] == rent_id) == 2

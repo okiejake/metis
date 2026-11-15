@@ -100,6 +100,8 @@ def run_assignments(h: Household, rows: Rows) -> List[dict]:
                         move(day, b.key, TO_ASSIGN, balance[b.key], "leftover")
             fill_spending(day, "month start")
         for story in stories_by_day[day]:
+            if balance[story.from_budget] < story.amount:
+                raise HouseholdError(f"{h.key}: budget {story.from_budget}", f"goes below zero on {day}")
             move(day, story.from_budget, story.to_budget, story.amount, "story")
         for t in transactions_by_day[day]:
             income = ZERO
@@ -107,6 +109,9 @@ def run_assignments(h: Household, rows: Rows) -> List[dict]:
                 key = line_budget(line)
                 if key is None or key == TO_ASSIGN:
                     change = line["amount"] if t["amount"] > 0 else -line["amount"]
+                    exempt = (t["posted_on"], t["description"], t["amount"]) in overspend
+                    if balance[TO_ASSIGN] + change < 0 and not exempt:
+                        raise HouseholdError(f"{h.key}: budget {TO_ASSIGN}", f"goes below zero on {day}")
                     balance[TO_ASSIGN] += change
                     income += max(change, ZERO)
                 elif t["amount"] > 0:

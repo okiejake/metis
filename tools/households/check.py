@@ -61,13 +61,22 @@ def check_household(h: Household) -> None:
         account(where, e.to_account)
         if not (h.own(e.from_account) or h.own(e.to_account)):
             raise HouseholdError(where, "has none of the household's own accounts on either side")
+        income = h.accounts[e.from_account].cls == "income"
+        transfer = (h.own(e.from_account) and h.own(e.to_account)
+                    and h.on_budget(e.from_account) and h.on_budget(e.to_account))
         if e.budget is not None:
             budget(where, e.budget)
-            if h.accounts[e.from_account].cls == "income":
+            if income:
                 raise HouseholdError(where, "income has no budget; it lands in to assign")
+        elif not income and not transfer:
+            raise HouseholdError(where, "money going out needs a budget")
 
+    spending_budgets = set()
     for s in h.spending:
         where = f"{h.key}: spending {s.budget}"
+        if s.budget in spending_budgets:
+            raise HouseholdError(where, "appears twice; list every merchant in one entry's `at`")
+        spending_budgets.add(s.budget)
         budget(where, s.budget)
         if not h.budgets[s.budget].spending:
             raise HouseholdError(where, "everyday spending needs a budget filled by amount, with no priority")
@@ -83,6 +92,8 @@ def check_household(h: Household) -> None:
         if m.counterparty is not None:
             account(where, m.counterparty)
         for line in m.lines:
+            if line.amount <= 0:
+                raise HouseholdError(where, "a line's amount is positive; the transaction's sign gives the direction")
             if (line.budget is None) == (line.expected is None):
                 raise HouseholdError(where, "a line points at exactly one of a budget or an expected transaction")
             if line.budget is not None:
