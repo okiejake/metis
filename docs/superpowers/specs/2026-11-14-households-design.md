@@ -78,8 +78,9 @@ fixtures/households/
   example-family.toml
   sam-sample.toml
   dana-demo.toml
-tools/households.py       reads and checks the files, generates the rows
-tests/test_households.py
+tools/households/         reads and checks the files, generates the rows
+  __main__.py             python -m tools.households summary <household>
+tests/test_households*.py
 ```
 
 They land on `main` through a pull request. They depend on no 0.x code, so the
@@ -185,6 +186,16 @@ lines = [{ budget = "groceries", amount = 120 }, { budget = "household", amount 
 Items with `use` take the catalog item's fields, then the file's. Items with
 `key` stand alone. Every reference is by key.
 
+Three more pieces of a file:
+
+- A card account gives `paid_on` (day of the month) and `paid_from` (the
+  account that pays it).
+- `to-assign` is a reserved budget key. A line pointing at it is income with no
+  plan, such as a returned deposit.
+- `[[assignment]]` entries are story moments that move money between budgets,
+  such as the emergency fund covering a car repair:
+  `month`, `day`, `from`, `to`, `amount`.
+
 ## Generating the rows
 
 `tools/households.py` returns plain rows per table, keyed like the map. A loader
@@ -197,17 +208,27 @@ into the Metis 1.0 database comes with that database.
 - **Income.** Pay posts on schedule, with one line pointing at the expected
   income, so it lands in to assign.
 - **Everyday spending.** Each `spending` entry makes `per_month` purchases at its
-  merchants, totalling between 85% and 105% of the budget's fill for that month,
-  each with one line to the budget.
+  merchants, totalling between 85% and 105% of the budget's fill for that month
+  less what story moments already spent from it that month, each with one line
+  to the budget.
 - **Cards.** Each card is paid in full from checking on the day its file entry
   gives (`paid_on = 25`), for what was charged since the last payment. It's a
   transfer between the household's own accounts, with no lines.
 - **Loans.** A loan starts at its opening balance and goes down by each payment.
   It has no interest until the map gives loans an interest rate.
-- **Assignments.** When income lands, the generator assigns it the way Metis
-  would propose and the household would confirm. Spending budgets get their
-  monthly fill first. Funds and goals then fill in priority order, by amount or
-  by percent of that income. Anything left stays in to assign.
+- **Assignments.** The generator assigns money the way Metis would propose and
+  the household would confirm:
+  - On the start date, the opening cash of every on-budget account lands in to
+    assign.
+  - On the 1st of each month, each spending budget (no priority, filled by
+    amount) gets its monthly fill from to assign. A spending budget that
+    doesn't roll over first returns last month's leftover to to assign.
+  - When income lands: spending budgets not yet filled this month are topped
+    up, then budgets without a priority that fill by percent of income get
+    their share, then budgets with a priority fill in order (1 first), by
+    amount once per fill period or by percent of that income. Nothing fills
+    past its target. Anything left stays in to assign.
+  - When a spending budget would go below zero, it is topped up from to assign.
 - **Story moments** are added exactly as written.
 - **Seeds.** Every item draws from its own random stream, seeded by the
   household's seed and the item's key, so adding an item never changes another
@@ -227,8 +248,11 @@ Loading a household fails, naming the item, when:
 - a key it refers to doesn't exist, in the file or in the catalog;
 - a transaction's lines don't add up to its amount;
 - a line points at both a budget and an expected transaction, or at neither;
-- a transfer between the household's own accounts has lines;
-- a budget goes below zero, unless a story moment is marked `overspend = true`;
+- a transfer between two of the household's on-budget accounts has lines (a
+  card payment). A payment to an off-budget account, such as a loan, is
+  budgeted spending and needs its line;
+- a budget goes below zero after to assign has run out, unless a story moment
+  is marked `overspend = true`;
 - a name or description doesn't pass the privacy guard's checks.
 
 ## The households
@@ -329,6 +353,7 @@ type, budget and schedule. The user gives the amount.
 - Fixed start dates: the family and Dana from 2025-11-01 for 12 months, Sam from
   2026-05-01 for 6 months.
 - The files land on `main`, and the v1 branch inherits them.
+- `tools/households/` is a package of small modules rather than one file.
 - Accounts gain an opening balance and date in the map.
 - A card's payment day is given in the household file.
 - Loans have no interest until the map gives them a rate.
