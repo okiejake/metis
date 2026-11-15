@@ -6,5 +6,8 @@ imports the 0.x app.
 
 from .catalog import CATALOG_PATH, HOUSEHOLDS_DIR, Catalog, load_catalog, read_toml
 from .errors import HouseholdError
+from .load import load_household
+from .model import TO_ASSIGN, Household, Rows
 
-__all__ = ["CATALOG_PATH", "HOUSEHOLDS_DIR", "Catalog", "HouseholdError", "load_catalog", "read_toml"]
+__all__ = ["CATALOG_PATH", "HOUSEHOLDS_DIR", "TO_ASSIGN", "Catalog", "Household", "HouseholdError", "Rows",
+           "load_catalog", "load_household", "read_toml"]
