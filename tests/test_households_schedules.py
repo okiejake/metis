@@ -16,7 +16,7 @@ def test_first_and_fifteenth():
     assert len(days) == 12 and days[:2] == [date(2026, 5, 1), date(2026, 5, 15)]
 
 
-def test_the_31st_lands_on_each_months_last_day():                    # Review Focus 1
+def test_the_31st_lands_on_each_months_last_day():                    # focus 1 (see the plan)
     days = occurrences("FREQ=MONTHLY", date(2026, 1, 31), date(2026, 12, 31))
     assert len(days) == 12 and date(2026, 2, 28) in days and date(2026, 4, 30) in days
 

@@ -29,25 +29,25 @@ def test_leftover_returns_on_the_first(tmp_path):
     assert any(a["note"] == "leftover" and a["assigned_on"] == date(2026, 2, 1) for a in rows["assignments"])
 
 
-def test_shortfall_is_topped_up_from_to_assign(tmp_path):                     # Review Focus 3
+def test_shortfall_is_topped_up_from_to_assign(tmp_path):                     # focus 3 (see the plan)
     rows = generate(household_from(tmp_path, MINIMAL + BIG_GROCERY))
     assert any(a["note"] == "top up" and a["amount"] == Decimal("50.00") for a in rows["assignments"])
 
 
-def test_overspending_past_to_assign_names_the_budget(tmp_path):              # Review Focus 3
+def test_overspending_past_to_assign_names_the_budget(tmp_path):              # focus 3 (see the plan)
     broke = MINIMAL.replace("opening_balance = 1000", "opening_balance = 0") + BIG_PURCHASE
     with pytest.raises(HouseholdError, match=r"mini: budget groceries: goes below zero on 2026-01-02"):
         generate(household_from(tmp_path, broke))
 
 
-def test_percent_fill_takes_exactly_its_share(tmp_path):                       # Review Focus 4
+def test_percent_fill_takes_exactly_its_share(tmp_path):                       # focus 4 (see the plan)
     rows = generate(household_from(tmp_path, MINIMAL + TAXES_25 + PAYMENTS))
     taxes = key_id(rows, "budgets", "taxes")
     got = sorted(a["amount"] for a in rows["assignments"] if a["to_budget_id"] == taxes and a["note"] == "income")
     assert Decimal("83.33") in got and Decimal("250.00") in got
 
 
-def test_fund_stops_at_its_target_and_refills(tmp_path):                        # Review Focus 5
+def test_fund_stops_at_its_target_and_refills(tmp_path):                        # focus 5 (see the plan)
     rows = generate(household_from(tmp_path, LONG_MINIMAL + KIDS_FUND + DRAW))
     balances = fund_balances(rows, "kids-fund")
     assert max(balances) == Decimal("500.00") and balances[-1] == Decimal("450.00")

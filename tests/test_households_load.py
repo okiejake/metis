@@ -23,7 +23,7 @@ def test_minimal_household_loads(tmp_path):
     assert h.budgets["groceries"].fill == Fill("amount", Decimal("300.00"), "FREQ=MONTHLY")
 
 
-def test_month_counts_across_a_year_boundary():                    # Review Focus 2
+def test_month_counts_across_a_year_boundary():                    # focus 2 (see the plan)
     assert month_day(date(2025, 11, 1), 3, 14) == date(2026, 1, 14)
 
 
