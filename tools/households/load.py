@@ -2,9 +2,9 @@
 
 from datetime import timedelta
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
-from .catalog import Catalog, load_catalog, read_toml
+from .catalog import CATALOG_PATH, HOUSEHOLDS_DIR, Catalog, load_catalog, read_toml
 from .check import check_household
 from .errors import HouseholdError
 from .model import (Account, Budget, Expected, Fill, Household, Line, Moment, Spending, StoryAssignment,
@@ -124,3 +124,17 @@ def _day(start, months, item, where):
         return month_day(start, month, day)
     except ValueError:
         raise HouseholdError(where, f"month {month} has no day {day}") from None
+
+
+def load_all(catalog: Optional[Catalog] = None) -> List[Household]:
+    """Every household in fixtures/households, sorted by key."""
+    catalog = catalog or load_catalog()
+    paths = [p for p in sorted(HOUSEHOLDS_DIR.glob("*.toml")) if p.resolve() != CATALOG_PATH.resolve()]
+    return sorted((load_household(p, catalog) for p in paths), key=lambda h: h.key)
+
+
+def find(key: str) -> Household:
+    for household in load_all():
+        if household.key == key:
+            return household
+    raise HouseholdError(key, f"unknown household '{key}'")

@@ -286,3 +286,24 @@ def transactions_by_source(rows) -> dict:
                   else "spending:" + _budget_key(rows, line["budget_id"]))
         out.setdefault(source, []).append((t["posted_on"], t["amount"]))
     return out
+
+
+def lines_to(rows, budget: str, negative: bool = False) -> list:
+    """Line amounts pointing straight at a budget, on money in (or out, when negative)."""
+    budget_id = key_id(rows, "budgets", budget)
+    out = {t["id"]: t["amount"] < 0 for t in rows["transactions"]}
+    return [line["amount"] for line in rows["transaction_lines"]
+            if line["budget_id"] == budget_id and out[line["transaction_id"]] == negative]
+
+
+def monthly_income(rows) -> dict:
+    """Money with no plan landing in to assign, by YYYY-MM."""
+    to_assign = key_id(rows, "budgets", "to-assign")
+    posted = {t["id"]: t for t in rows["transactions"]}
+    out: dict = {}
+    for line in rows["transaction_lines"]:
+        t = posted[line["transaction_id"]]
+        if line["budget_id"] == to_assign and t["amount"] > 0:
+            month = f"{t['posted_on']:%Y-%m}"
+            out[month] = out.get(month, Decimal("0")) + line["amount"]
+    return out
