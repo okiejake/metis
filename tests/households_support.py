@@ -111,3 +111,12 @@ def household_from(tmp_path: Path, text: str):
     path = tmp_path / "household.toml"
     path.write_text(text)
     return load_household(path)
+
+
+def key_id(rows, table: str, key: str) -> int:
+    """The id of the row in `table` with this key."""
+    return next(r["id"] for r in rows[table] if r.get("key") == key)
+
+
+def lines_of(rows, transaction: dict) -> list:
+    return [line for line in rows["transaction_lines"] if line["transaction_id"] == transaction["id"]]
