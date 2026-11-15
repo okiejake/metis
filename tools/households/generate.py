@@ -5,14 +5,16 @@ by the household's seed and the item's key, so adding an item never changes
 another item's rows.
 """
 
+import calendar
 import random
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Dict, List, Optional, Tuple
 
+from .assign import run_assignments
 from .check import check_rows
-from .model import TO_ASSIGN, Household, Rows, month_day
+from .model import TO_ASSIGN, Household, Rows, money, month_day
 from .schedules import occurrences
 
 
@@ -68,6 +70,32 @@ def _from_moments(h: Household) -> List[Draft]:
             for m in h.moments]
 
 
+def _purchases(h: Household) -> List[Draft]:
+    """Everyday spending: each entry's purchases come to 85-105% of its budget's
+    monthly fill, less what story moments already spent from it that month."""
+    drafts = []
+    for s in h.spending:
+        fill = h.budgets[s.budget].fill.value
+        for month in range(1, h.months + 1):
+            first = month_day(h.start, month, 1)
+            rng = stream(h, "spending", f"{s.budget}:{first:%Y-%m}")
+            drawn = sum((line.amount for m in h.moments if m.amount < 0 and (m.on.year, m.on.month) == (first.year, first.month)
+                         for line in m.lines if line.budget == s.budget), Decimal("0"))
+            total = money((fill - drawn) * Decimal(str(rng.uniform(0.85, 1.05))))
+            if total <= 0:
+                continue
+            count = s.per_month if total >= s.per_month else 1   # never a purchase under 1.00 from rounding
+            weights = [Decimal(str(rng.uniform(0.5, 1.5))) for _ in range(count)]
+            parts = [money(total * w / sum(weights)) for w in weights]
+            parts[-1] = total - sum(parts[:-1])
+            days = sorted(rng.randint(1, calendar.monthrange(first.year, first.month)[1]) for _ in range(count))
+            for seq, (day, part) in enumerate(zip(days, parts)):
+                merchant = rng.choice(s.at)
+                drafts.append(Draft(first.replace(day=day), 1, f"spending:{s.budget}", month * 100 + seq, s.on,
+                                    merchant, -part, h.accounts[merchant].name.lower(), [(part, s.budget, None)]))
+    return drafts
+
+
 def _card_payments(h: Household, drafts: List[Draft]) -> List[Draft]:
     """Each card is paid in full on its day for what was charged since the last payment."""
     payments = []
@@ -95,7 +123,7 @@ def generate(h: Household) -> Rows:
     budget_ids = _ids([TO_ASSIGN, *h.budgets])
     expected_ids = _ids(h.expected)
 
-    drafts = _from_expected(h) + _from_moments(h)
+    drafts = _from_expected(h) + _from_moments(h) + _purchases(h)
     drafts += _card_payments(h, drafts)
     drafts.sort(key=lambda d: (d.posted_on, d.rank, d.source, d.seq))
 
@@ -109,11 +137,6 @@ def generate(h: Household) -> Rows:
             lines.append({"id": len(lines) + 1, "transaction_id": number, "amount": amount,
                           "budget_id": budget_ids[budget] if budget else None,
                           "expected_transaction_id": expected_ids[expected] if expected else None})
-
-    assignments = [{"from_budget_id": budget_ids[a.from_budget], "to_budget_id": budget_ids[a.to_budget],
-                    "amount": a.amount, "assigned_on": a.on, "note": "story"} for a in h.assignments]
-    for number, a in enumerate(assignments, start=1):
-        a["id"] = number
 
     rows: Rows = {
         "users": [{"id": 1, "slug": h.key, "display_name": h.name}],
@@ -138,7 +161,8 @@ def generate(h: Household) -> Rows:
             "rrule": e.repeats} for e in h.expected.values()],
         "transactions": transactions,
         "transaction_lines": lines,
-        "assignments": assignments,
     }
+    # Transactions and lines have their ids first; the engine replays them in id order.
+    rows["assignments"] = [{"id": number, **a} for number, a in enumerate(run_assignments(h, rows), start=1)]
     check_rows(rows, h)
     return rows
