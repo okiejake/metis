@@ -224,10 +224,10 @@ def test_loan_payment_moment_needs_its_line(tmp_path):
 
 def test_private_looking_text_fails(tmp_path):
     with pytest.raises(HouseholdError, match="privacy"):
-        household_from(tmp_path, MINIMAL.replace('name = "Example Employer"', 'name = "Employer 10.0.0.7"'))
+        household_from(tmp_path, MINIMAL.replace('name = "Example Employer"', f'name = "Employer {PRIVATE}"'))
 ```
 
-`MOMENT` (in the helper) is a `[[moment]]` on the card at the grocer, month 1, day 5, amount -50, `lines = [{lines}]`. `TRANSFER` is a `[[moment]]` from checking to `{to}`, month 1, day 6, amount -50, `lines = {lines}`. A privacy finding raises `HouseholdError(item, f"privacy guard: {finding}")`. `10.0.0.7` is a private address, which `scan_text` flags.
+`MOMENT` (in the helper) is a `[[moment]]` on the card at the grocer, month 1, day 5, amount -50, `lines = [{lines}]`. `TRANSFER` is a `[[moment]]` from checking to `{to}`, month 1, day 6, amount -50, `lines = {lines}`. A privacy finding raises `HouseholdError(item, f"privacy guard: {finding}")`. `PRIVATE` is a private address that `scan_text` flags, built in two pieces (`"10." + ...`) as `tests/test_no_real_data.py` does, so no tracked file holds one.
 
 - [ ] **Step 2: Run them and confirm they fail.** Run `.venv/bin/python -m pytest tests/test_households_load.py -v`. Expected: FAIL (import errors).
 - [ ] **Step 3: Implement `model.py`, `load.py`, `check.py` and the helper**, with the signatures above.

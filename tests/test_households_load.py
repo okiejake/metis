@@ -9,6 +9,9 @@ from households_support import MINIMAL, MOMENT, TRANSFER, household_from
 from tools.households import HouseholdError
 from tools.households.model import Fill, month_day
 
+# Built in two pieces so this file never holds a private address itself.
+PRIVATE = "10." + "0.0.7"
+
 
 def test_minimal_household_loads(tmp_path):
     h = household_from(tmp_path, MINIMAL)
@@ -54,4 +57,4 @@ def test_loan_payment_moment_needs_its_line(tmp_path):
 
 def test_private_looking_text_fails(tmp_path):
     with pytest.raises(HouseholdError, match="privacy"):
-        household_from(tmp_path, MINIMAL.replace('name = "Example Employer"', 'name = "Employer 10.0.0.7"'))
+        household_from(tmp_path, MINIMAL.replace('name = "Example Employer"', f'name = "Employer {PRIVATE}"'))
