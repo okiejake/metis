@@ -1785,7 +1785,7 @@ body.amounts-hidden .amount-sensitive {
 
   td,
   th {
-    overflow-wrap: anywhere;
+    overflow-wrap: break-word;
   }
 
   .panel {
@@ -2292,8 +2292,12 @@ body.amounts-hidden .amount-sensitive {
   letter-spacing: 0.04em;
   color: var(--accent);
 }
+/* Positioned with a layer of its own, so the filter opens over the ledger:
+   .panel's backdrop-filter gives the section a layer too, and it comes later. */
 .ledger-bar {
   justify-content: space-between;
+  position: relative;
+  z-index: 10;
 }
 .ledger-bar-left,
 .ledger-bar-right {
@@ -2378,8 +2382,14 @@ body.amounts-hidden .amount-sensitive {
 .filter-category label {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 0.45rem;
   font-weight: 600;
+}
+.filter-category input[type="checkbox"] {
+  width: auto;
+  flex: 0 0 auto;
+  margin: 0;
 }
 .filter-category.is-child {
   padding-left: 1.2rem;
@@ -2432,14 +2442,10 @@ body.amounts-hidden .amount-sensitive {
     display: block;
   }
   .ledger-table tr.ledger-row:not(.month-summary-row) {
-    display: grid;
-    grid-template-columns: auto 1fr auto auto auto;
-    grid-template-areas:
-      "date desc desc pay chg"
-      "bill cat type bal menu";
+    display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    column-gap: 0.6rem;
-    row-gap: 0.25rem;
+    gap: 0.3rem 0.6rem;
     padding: 0.55rem 0.5rem;
     border-bottom: 1px solid var(--line);
   }
@@ -2448,17 +2454,36 @@ body.amounts-hidden .amount-sensitive {
     padding: 0;
     border: 0;
   }
-  .ledger-table .ledger-date { grid-area: date; }
-  .ledger-table .ledger-description { grid-area: desc; }
-  .ledger-table .ledger-payments { grid-area: pay; }
-  .ledger-table .ledger-charges { grid-area: chg; }
-  .ledger-table .ledger-bill { grid-area: bill; }
-  .ledger-table .ledger-category { grid-area: cat; }
-  .ledger-table .ledger-type { grid-area: type; }
-  .ledger-table .ledger-balance { grid-area: bal; }
-  .ledger-table .row-action-cell { grid-area: menu; }
-  .ledger-table .is-empty {
+  /* First line: date, description, amount and the row's menu. An empty,
+     full-width item after them breaks the line, so bill, category, type and
+     balance always start the second. */
+  .ledger-table tr.ledger-row:not(.month-summary-row)::after {
+    content: "";
+    order: 6;
+    flex: 0 0 100%;
+    height: 0;
+  }
+  .ledger-table .ledger-date { order: 1; flex: 0 0 auto; }
+  .ledger-table .ledger-description { order: 2; flex: 1 1 0; min-width: 0; }
+  .ledger-table .ledger-payments { order: 3; flex: 0 0 auto; }
+  .ledger-table .ledger-charges { order: 4; flex: 0 0 auto; }
+  .ledger-table .row-action-cell { order: 5; flex: 0 0 auto; width: auto; }
+  .ledger-table .ledger-bill { order: 7; flex: 0 0 auto; }
+  .ledger-table .ledger-category { order: 8; flex: 0 1 auto; }
+  .ledger-table .ledger-type { order: 9; flex: 0 0 auto; }
+  .ledger-table .ledger-balance { order: 10; flex: 0 0 auto; margin-left: auto; }
+  .ledger-table .category-pill {
+    white-space: nowrap;
+  }
+  .ledger-table tr.ledger-row > td.is-empty {
     display: none;
+  }
+  .ledger-table {
+    font-size: 0.84rem;
+  }
+  .ledger-table .table-pill,
+  .ledger-table .category-pill {
+    font-size: 0.72rem;
   }
   .ledger-row.line-matched { border-left: 3px solid var(--success); }
   .ledger-row.line-unsettled { border-left: 3px solid var(--danger); }
