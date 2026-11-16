@@ -11,6 +11,10 @@ name: metis
 x-metis: &metis
   restart: unless-stopped
   mem_limit: ${METIS_MEM_LIMIT:-256m}
+  # Closing the database writes everything to the file, which takes several
+  # seconds on a small server. Docker's default 10 can run out first, and a
+  # killed container is reported as stopped unexpectedly.
+  stop_grace_period: 60s
 
 x-environment: &environment
   FINANCE_DB_PATH: /data/finance.duckdb

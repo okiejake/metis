@@ -33,7 +33,7 @@ Copy this folder to the server, for example to `/volume1/docker/metis`, then:
 ```sh
 cd /volume1/docker/metis
 cp .env.example .env      # adjust if you need other ports or paths
-./metis.sh update         # downloads the images and starts prod
+./metis.sh prod           # downloads prod's image and starts it
 ```
 
 `./metis.sh status` should show `prod` running. Its first start creates the
@@ -52,36 +52,44 @@ On a Synology the `tailscale` command is at
 `.env`. Open `https://<server>.<tailnet>.ts.net/metis_prod` and create your
 login. The environment that isn't running answers with an error page.
 
-## 4. Schedule updates and backups
+## 4. Tasks
 
-Two tasks, both run as root:
+Three tasks you run yourself, and a daily backup. All run as root:
 
 | Task | When | Command |
 | --- | --- | --- |
-| metis update | every 15 minutes | `/volume1/docker/metis/metis.sh update >> /volume1/docker/metis/update.log 2>&1` |
-| metis backup | daily at 3:00 | `/volume1/docker/metis/metis.sh backup >> /volume1/docker/metis/update.log 2>&1` |
+| metis update | when you run it | `/volume1/docker/metis/metis.sh update` |
+| metis prod | when you run it | `/volume1/docker/metis/metis.sh prod` |
+| metis qa | when you run it | `/volume1/docker/metis/metis.sh qa` |
+| metis backup | daily at 3:00 | `/volume1/docker/metis/metis.sh backup` |
 
-`update` is quiet unless something changed. When the running environment has a
-new image it restarts it, backing up prod first, and checks that it answers. A
-stopped environment only downloads; it starts on the new image next time.
-`backup` keeps the newest `KEEP_BACKUPS` copies of prod's database in
-`backups/`, pausing prod for a few seconds if it is running.
+Every run appends what it did to `update.log` next to the script, including
+`update: nothing new`, and an `ERROR` line with the exit code if it stops early.
+
+`update` downloads new images. When the running environment has a new image it
+restarts it, backing up prod first, and checks that it answers. A stopped
+environment only downloads; it starts on the new image next time. `backup`
+keeps the newest `KEEP_BACKUPS` copies of prod's database in `backups/`,
+pausing prod for a few seconds if it is running.
 
 On a Synology: Control Panel → Task Scheduler → Create → Scheduled Task →
-User-defined script, user `root`, with the schedule and command above.
+User-defined script, user `root`, with the command above. For a task you run
+yourself, untick **Enabled** in the task list once it is saved: a disabled task
+never runs on its own, and **Run** still starts it.
 
 A GitHub webhook can't reach a server that is only on your tailnet, which is
-why the server checks instead.
+why updates are pulled from the server.
 
 ## 5. Switch between prod and qa
 
 ```sh
-./metis.sh qa     # stop prod, copy prod's data to qa, start qa
-./metis.sh prod   # stop qa, back up prod, start prod
+./metis.sh qa     # download qa's image, stop prod, copy prod's data to qa, start qa
+./metis.sh prod   # download prod's image, stop qa, back up prod, start prod
 ```
 
-qa follows `main`, so a merged change is ready to try within minutes of GitHub
-finishing its build. Changes made in qa never reach prod's data. Whichever
+Each switch downloads the environment's latest image first. qa follows `main`,
+so a merged change is ready to try once GitHub finishes its build: run `qa`, or
+`update` if qa is already running. Changes made in qa never reach prod's data. Whichever
 environment is running comes back after the server restarts.
 
 To try a branch before it is merged, run the `image` workflow on that branch
