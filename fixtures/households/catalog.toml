@@ -1,0 +1,257 @@
+# The catalog: what most households track, with no amounts.
+# Households pick items by key; Metis offers them as suggestions at setup.
+# Schedules are iCalendar repeat rules (RFC 5545).
+
+# --- Account types -----------------------------------------------------------
+# class: asset, liability, income or expense. on_budget: whether the account's
+# money is routed through budgets.
+
+[[account_type]]
+key = "checking"
+name = "checking"
+class = "asset"
+on_budget = true
+
+[[account_type]]
+key = "savings"
+name = "savings"
+class = "asset"
+on_budget = true
+
+[[account_type]]
+key = "credit-card"
+name = "credit card"
+class = "liability"
+on_budget = true
+
+[[account_type]]
+key = "loan"
+name = "loan"
+class = "liability"
+on_budget = false
+
+[[account_type]]
+key = "brokerage"
+name = "brokerage"
+class = "asset"
+on_budget = false
+
+[[account_type]]
+key = "employer"
+name = "employer"
+class = "income"
+on_budget = false
+
+[[account_type]]
+key = "client"
+name = "client"
+class = "income"
+on_budget = false
+
+[[account_type]]
+key = "merchant"
+name = "merchant"
+class = "expense"
+on_budget = false
+
+[[account_type]]
+key = "service-provider"
+name = "service provider"
+class = "expense"
+on_budget = false
+
+[[account_type]]
+key = "landlord"
+name = "landlord"
+class = "expense"
+on_budget = false
+
+[[account_type]]
+key = "tax-agency"
+name = "tax agency"
+class = "expense"
+on_budget = false
+
+# --- Budgets -----------------------------------------------------------------
+
+[[budget]]
+key = "groceries"
+name = "groceries"
+fill = { basis = "amount", every = "FREQ=MONTHLY" }
+rolls_over = false
+
+[[budget]]
+key = "gas"
+name = "gas"
+fill = { basis = "amount", every = "FREQ=MONTHLY" }
+rolls_over = false
+
+[[budget]]
+key = "household"
+name = "household"
+fill = { basis = "amount", every = "FREQ=MONTHLY" }
+rolls_over = false
+
+[[budget]]
+key = "fun-money"
+name = "fun money"
+fill = { basis = "amount", every = "FREQ=MONTHLY" }
+rolls_over = false
+
+[[budget]]
+key = "housing"
+name = "housing"
+fill = { basis = "amount", every = "FREQ=MONTHLY" }
+rolls_over = false
+
+[[budget]]
+key = "phone"
+name = "phone"
+fill = { basis = "amount", every = "FREQ=MONTHLY" }
+rolls_over = false
+
+[[budget]]
+key = "subscriptions"
+name = "subscriptions"
+fill = { basis = "amount", every = "FREQ=MONTHLY" }
+rolls_over = false
+
+[[budget]]
+key = "transit"
+name = "transit"
+fill = { basis = "amount", every = "FREQ=MONTHLY" }
+rolls_over = false
+
+[[budget]]
+key = "loans"
+name = "loans"
+fill = { basis = "amount", every = "FREQ=MONTHLY" }
+rolls_over = false
+
+[[budget]]
+key = "coworking"
+name = "coworking"
+fill = { basis = "amount", every = "FREQ=MONTHLY" }
+rolls_over = false
+
+[[budget]]
+key = "software"
+name = "software"
+fill = { basis = "amount", every = "FREQ=MONTHLY" }
+rolls_over = false
+
+[[budget]]
+key = "car"
+name = "car"
+fill = { basis = "amount", every = "FREQ=MONTHLY" }
+rolls_over = true
+
+[[budget]]
+key = "insurance"
+name = "insurance"
+fill = { basis = "amount", every = "FREQ=MONTHLY" }
+rolls_over = true
+
+[[budget]]
+key = "emergency-fund"
+name = "emergency fund"
+fill = { basis = "amount", every = "FREQ=MONTHLY" }
+rolls_over = true
+
+[[budget]]
+key = "taxes"
+name = "taxes"
+fill = { basis = "income_percent" }
+rolls_over = true
+
+# --- Bills: anything scheduled that money goes to -----------------------------
+
+[[bill]]
+key = "rent"
+name = "rent"
+type = "rent"
+budget = "housing"
+repeats = "FREQ=MONTHLY"
+
+[[bill]]
+key = "phone"
+name = "phone"
+type = "subscription"
+budget = "phone"
+repeats = "FREQ=MONTHLY"
+
+[[bill]]
+key = "streaming"
+name = "streaming"
+type = "subscription"
+budget = "subscriptions"
+repeats = "FREQ=MONTHLY"
+
+[[bill]]
+key = "software"
+name = "software"
+type = "subscription"
+budget = "software"
+repeats = "FREQ=MONTHLY"
+
+[[bill]]
+key = "car-loan"
+name = "car loan"
+type = "loan-payment"
+budget = "car"
+repeats = "FREQ=MONTHLY"
+
+[[bill]]
+key = "student-loan"
+name = "student loan"
+type = "loan-payment"
+budget = "loans"
+repeats = "FREQ=MONTHLY"
+
+[[bill]]
+key = "car-insurance"
+name = "car insurance"
+type = "insurance"
+budget = "car"
+repeats = "FREQ=MONTHLY;INTERVAL=6"
+
+[[bill]]
+key = "renters-insurance"
+name = "renters insurance"
+type = "insurance"
+budget = "insurance"
+repeats = "FREQ=YEARLY"
+
+[[bill]]
+key = "health-insurance"
+name = "health insurance"
+type = "insurance"
+budget = "insurance"
+repeats = "FREQ=MONTHLY"
+
+[[bill]]
+key = "estimated-taxes"
+name = "estimated taxes"
+type = "tax"
+budget = "taxes"
+repeats = "FREQ=MONTHLY;INTERVAL=3"
+
+# --- Income ------------------------------------------------------------------
+
+[[income]]
+key = "pay-biweekly"
+name = "pay biweekly"
+type = "pay"
+repeats = "FREQ=WEEKLY;INTERVAL=2"
+
+[[income]]
+key = "pay-semimonthly"
+name = "pay semimonthly"
+type = "pay"
+repeats = "FREQ=MONTHLY;BYMONTHDAY=1,15"
+
+[[income]]
+key = "interest"
+name = "interest"
+type = "interest"
+repeats = "FREQ=MONTHLY"

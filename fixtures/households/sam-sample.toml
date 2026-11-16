@@ -1,0 +1,226 @@
+# Sam Sample: single, renting, first full-time job. Everything here is invented.
+
+[household]
+key = "sam-sample"
+name = "Sam Sample"
+shows = ["starting out", "suggestions at setup", "a first budget", "building an emergency fund", "a forgotten subscription"]
+seed = 2
+start = 2026-05-01
+months = 6
+
+# --- Accounts ----------------------------------------------------------------
+
+[[account]]
+key = "checking"
+name = "Example Credit Union checking"
+type = "checking"
+opening_balance = 1500
+
+[[account]]
+key = "savings"
+name = "Example Credit Union savings"
+type = "savings"
+opening_balance = 500
+
+[[account]]
+key = "card"
+name = "Example Card"
+type = "credit-card"
+paid_on = 20
+paid_from = "checking"
+
+[[account]]
+key = "student-loan"
+name = "Example Student Loan"
+type = "loan"
+opening_balance = -18000
+
+[[account]]
+key = "employer"
+name = "Example Employer"
+type = "employer"
+
+[[account]]
+key = "grocer"
+name = "Acme Grocery"
+type = "merchant"
+default_budget = "groceries"
+
+[[account]]
+key = "arcade"
+name = "Acme Cinema"
+type = "merchant"
+default_budget = "fun-money"
+
+[[account]]
+key = "transit"
+name = "Example Transit"
+type = "merchant"
+default_budget = "transit"
+
+[[account]]
+key = "landlord"
+name = "Example Rent Co."
+type = "landlord"
+
+[[account]]
+key = "phone-co"
+name = "Example Phone Co."
+type = "service-provider"
+
+[[account]]
+key = "streaming"
+name = "Example Streaming"
+type = "service-provider"
+
+[[account]]
+key = "insurer"
+name = "Example Insurance"
+type = "service-provider"
+
+[[account]]
+key = "vet"
+name = "Example Vet"
+type = "service-provider"
+
+[[account]]
+key = "cloud"
+name = "Example Cloud Storage"
+type = "service-provider"
+
+# --- Budgets -----------------------------------------------------------------
+
+[[budget]]
+use = "groceries"
+fill = { value = 300 }
+
+[[budget]]
+use = "transit"
+fill = { value = 90 }
+
+[[budget]]
+use = "fun-money"
+fill = { value = 100 }
+
+[[budget]]
+use = "housing"
+fill = { value = 1100 }
+
+[[budget]]
+use = "phone"
+fill = { value = 50 }
+
+[[budget]]
+use = "subscriptions"
+fill = { value = 15 }
+
+[[budget]]
+use = "loans"
+fill = { value = 250 }
+
+[[budget]]
+use = "insurance"
+fill = { value = 15 }
+
+# About three months of expenses.
+[[budget]]
+use = "emergency-fund"
+priority = 1
+fill = { basis = "income_percent", value = 10 }
+target = 6000
+
+# --- Expected transactions ---------------------------------------------------
+
+[[expected]]
+use = "pay-semimonthly"
+from = "employer"
+to = "checking"
+amount = 1600
+starts = 2026-05-01
+
+[[expected]]
+use = "rent"
+from = "checking"
+to = "landlord"
+amount = 1100
+starts = 2026-05-01
+
+[[expected]]
+use = "student-loan"
+from = "checking"
+to = "student-loan"
+amount = 250
+starts = 2026-05-10
+
+[[expected]]
+use = "phone"
+from = "card"
+to = "phone-co"
+amount = 50
+starts = 2026-05-08
+
+[[expected]]
+use = "streaming"
+from = "card"
+to = "streaming"
+amount = 15
+starts = 2026-05-05
+
+[[expected]]
+use = "renters-insurance"
+from = "checking"
+to = "insurer"
+amount = 180
+starts = 2026-06-01
+
+# --- Everyday spending -------------------------------------------------------
+
+[[spending]]
+budget = "groceries"
+at = ["grocer"]
+on = "card"
+per_month = 5
+
+[[spending]]
+budget = "transit"
+at = ["transit"]
+on = "card"
+per_month = 4
+
+[[spending]]
+budget = "fun-money"
+at = ["arcade"]
+on = "card"
+per_month = 2
+
+# --- Story moments -----------------------------------------------------------
+
+# The old apartment's security deposit comes back.
+[[moment]]
+month = 2
+day = 3
+account = "checking"
+counterparty = "landlord"
+amount = 1000
+description = "example rent co. deposit returned"
+lines = [{ budget = "to-assign", amount = 1000 }]
+
+# A vet bill the emergency fund pays.
+[[moment]]
+month = 3
+day = 18
+account = "card"
+counterparty = "vet"
+amount = -400
+description = "example vet"
+lines = [{ budget = "emergency-fund", amount = 400 }]
+
+# A yearly subscription Sam forgot about renews.
+[[moment]]
+month = 4
+day = 2
+account = "card"
+counterparty = "cloud"
+amount = -99
+description = "example cloud storage yearly plan"
+lines = [{ budget = "subscriptions", amount = 99 }]

@@ -1,0 +1,274 @@
+# Dana Demo: a freelancer whose income arrives unevenly. Everything here is invented.
+#
+# Client income varies, and an expected transaction has one fixed amount, so the
+# data map can't express it yet. Until it can, each client payment is a story
+# moment with a line to to assign.
+
+[household]
+key = "dana-demo"
+name = "Dana Demo"
+shows = ["irregular income", "percent-of-income funds", "quarterly estimated taxes", "lean and big months", "business spending kept apart"]
+seed = 3
+start = 2025-11-01
+months = 12
+
+# --- Accounts ----------------------------------------------------------------
+
+[[account]]
+key = "checking"
+name = "Example Bank checking"
+type = "checking"
+opening_balance = 9000
+
+[[account]]
+key = "savings"
+name = "Example Bank savings"
+type = "savings"
+opening_balance = 3000
+
+[[account]]
+key = "card"
+name = "Example Card"
+type = "credit-card"
+paid_on = 20
+paid_from = "checking"
+
+[[account]]
+key = "brokerage"
+name = "Example Brokerage"
+type = "brokerage"
+opening_balance = 20000
+
+[[account]]
+key = "client-a"
+name = "Acme Design Co."
+type = "client"
+
+[[account]]
+key = "client-b"
+name = "Example Studio"
+type = "client"
+
+[[account]]
+key = "coworking"
+name = "Acme Coworking"
+type = "service-provider"
+default_budget = "coworking"
+
+[[account]]
+key = "tax-agency"
+name = "Example Tax Agency"
+type = "tax-agency"
+
+[[account]]
+key = "landlord"
+name = "Example Rentals"
+type = "landlord"
+
+[[account]]
+key = "insurer"
+name = "Example Health"
+type = "service-provider"
+
+[[account]]
+key = "software-co"
+name = "Example Software"
+type = "service-provider"
+
+[[account]]
+key = "grocer"
+name = "Acme Grocery"
+type = "merchant"
+default_budget = "groceries"
+
+# --- Budgets -----------------------------------------------------------------
+
+[[budget]]
+use = "groceries"
+fill = { value = 400 }
+
+[[budget]]
+use = "coworking"
+fill = { value = 250 }
+
+[[budget]]
+use = "software"
+fill = { value = 60 }
+
+[[budget]]
+use = "housing"
+fill = { value = 1400 }
+
+[[budget]]
+use = "insurance"
+fill = { value = 450 }
+
+[[budget]]
+use = "taxes"
+fill = { value = 25 }
+
+# About two lean months.
+[[budget]]
+key = "buffer"
+name = "buffer"
+priority = 1
+fill = { basis = "amount", value = 500, every = "FREQ=MONTHLY" }
+target = 8000
+rolls_over = true
+
+[[budget]]
+key = "travel"
+name = "travel"
+priority = 3
+fill = { basis = "amount", value = 300, every = "FREQ=MONTHLY" }
+target = 3000
+target_date = 2026-07-01
+rolls_over = true
+
+# --- Expected transactions ---------------------------------------------------
+
+[[expected]]
+use = "rent"
+from = "checking"
+to = "landlord"
+amount = 1400
+starts = 2025-11-01
+
+[[expected]]
+use = "health-insurance"
+from = "checking"
+to = "insurer"
+amount = 450
+starts = 2025-11-05
+
+[[expected]]
+use = "software"
+from = "card"
+to = "software-co"
+amount = 60
+starts = 2025-11-11
+
+[[expected]]
+use = "estimated-taxes"
+from = "checking"
+to = "tax-agency"
+amount = 2400
+starts = 2026-01-15
+
+# --- Everyday spending -------------------------------------------------------
+
+[[spending]]
+budget = "groceries"
+at = ["grocer"]
+on = "card"
+per_month = 5
+
+[[spending]]
+budget = "coworking"
+at = ["coworking"]
+on = "card"
+per_month = 1
+
+# --- Client payments (story moments) -----------------------------------------
+
+[[moment]]
+month = 1
+day = 10
+account = "checking"
+counterparty = "client-a"
+amount = 5000
+description = "acme design co. invoice"
+lines = [{ budget = "to-assign", amount = 5000 }]
+
+[[moment]]
+month = 2
+day = 10
+account = "checking"
+counterparty = "client-a"
+amount = 6500
+description = "acme design co. invoice"
+lines = [{ budget = "to-assign", amount = 6500 }]
+
+# A lean month.
+[[moment]]
+month = 3
+day = 12
+account = "checking"
+counterparty = "client-b"
+amount = 2500
+description = "example studio invoice"
+lines = [{ budget = "to-assign", amount = 2500 }]
+
+[[moment]]
+month = 4
+day = 10
+account = "checking"
+counterparty = "client-a"
+amount = 7000
+description = "acme design co. invoice"
+lines = [{ budget = "to-assign", amount = 7000 }]
+
+# One large one-off project.
+[[moment]]
+month = 5
+day = 22
+account = "checking"
+counterparty = "client-b"
+amount = 12000
+description = "example studio project"
+lines = [{ budget = "to-assign", amount = 12000 }]
+
+[[moment]]
+month = 6
+day = 10
+account = "checking"
+counterparty = "client-a"
+amount = 3000
+description = "acme design co. invoice"
+lines = [{ budget = "to-assign", amount = 3000 }]
+
+# Month 7 has no payment: the client pays late, and month 8 brings two invoices.
+[[moment]]
+month = 8
+day = 4
+account = "checking"
+counterparty = "client-a"
+amount = 8000
+description = "acme design co. two invoices, one late"
+lines = [{ budget = "to-assign", amount = 8000 }]
+
+[[moment]]
+month = 9
+day = 10
+account = "checking"
+counterparty = "client-a"
+amount = 6000
+description = "acme design co. invoice"
+lines = [{ budget = "to-assign", amount = 6000 }]
+
+[[moment]]
+month = 10
+day = 10
+account = "checking"
+counterparty = "client-b"
+amount = 5500
+description = "example studio invoice"
+lines = [{ budget = "to-assign", amount = 5500 }]
+
+[[moment]]
+month = 11
+day = 12
+account = "checking"
+counterparty = "client-a"
+amount = 2500
+description = "acme design co. invoice"
+lines = [{ budget = "to-assign", amount = 2500 }]
+
+[[moment]]
+month = 12
+day = 10
+account = "checking"
+counterparty = "client-a"
+amount = 7500
+description = "acme design co. invoice"
+lines = [{ budget = "to-assign", amount = 7500 }]

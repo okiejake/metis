@@ -1,0 +1,257 @@
+# The Example family: two adults, two kids. Everything here is invented.
+
+[household]
+key = "example-family"
+name = "the Example family"
+shows = ["funds and goals by priority", "splits", "a loan with a balance", "a bill every six months"]
+seed = 1
+start = 2025-11-01
+months = 12
+
+# --- Accounts ----------------------------------------------------------------
+
+[[account]]
+key = "checking"
+name = "Example Bank checking"
+type = "checking"
+opening_balance = 4000
+
+[[account]]
+key = "savings"
+name = "Example Bank savings"
+type = "savings"
+opening_balance = 2000
+
+[[account]]
+key = "card"
+name = "Example Card"
+type = "credit-card"
+paid_on = 25
+paid_from = "checking"
+
+[[account]]
+key = "auto-loan"
+name = "Example Auto loan"
+type = "loan"
+opening_balance = -12000
+
+[[account]]
+key = "employer"
+name = "Example Employer"
+type = "employer"
+
+[[account]]
+key = "grocer"
+name = "Acme Grocery"
+type = "merchant"
+default_budget = "groceries"
+
+[[account]]
+key = "fuel"
+name = "Acme Fuel"
+type = "merchant"
+default_budget = "gas"
+
+[[account]]
+key = "warehouse"
+name = "Acme Warehouse"
+type = "merchant"
+default_budget = "household"
+
+[[account]]
+key = "auto-shop"
+name = "Acme Auto Repair"
+type = "merchant"
+default_budget = "car"
+
+[[account]]
+key = "arcade"
+name = "Acme Arcade"
+type = "merchant"
+default_budget = "fun-money"
+
+[[account]]
+key = "landlord"
+name = "Example Rentals"
+type = "landlord"
+
+[[account]]
+key = "phone-co"
+name = "Example Phone Co."
+type = "service-provider"
+
+[[account]]
+key = "streaming"
+name = "Example Streaming"
+type = "service-provider"
+
+[[account]]
+key = "insurer"
+name = "Example Insurance"
+type = "service-provider"
+
+# --- Budgets -----------------------------------------------------------------
+
+[[budget]]
+use = "groceries"
+fill = { value = 600 }
+
+[[budget]]
+use = "gas"
+fill = { value = 200 }
+
+[[budget]]
+use = "household"
+fill = { value = 100 }
+
+[[budget]]
+use = "fun-money"
+fill = { value = 150 }
+
+[[budget]]
+use = "housing"
+fill = { value = 1800 }
+
+[[budget]]
+use = "phone"
+fill = { value = 65 }
+
+[[budget]]
+use = "subscriptions"
+fill = { value = 20 }
+
+[[budget]]
+use = "car"
+fill = { value = 450 }
+
+[[budget]]
+key = "kids-fund"
+name = "kids' fund"
+priority = 2
+fill = { basis = "amount", value = 50, every = "FREQ=MONTHLY" }
+target = 500
+rolls_over = true
+
+[[budget]]
+key = "college"
+name = "college"
+priority = 1
+fill = { basis = "income_percent", value = 5 }
+target = 20000
+target_date = 2040-09-01
+rolls_over = true
+
+[[budget]]
+use = "emergency-fund"
+priority = 3
+fill = { value = 300 }
+target = 10000
+
+# --- Expected transactions ---------------------------------------------------
+
+[[expected]]
+use = "pay-biweekly"
+from = "employer"
+to = "checking"
+amount = 2400
+starts = 2025-11-07
+
+[[expected]]
+use = "rent"
+from = "checking"
+to = "landlord"
+amount = 1800
+starts = 2025-11-01
+
+[[expected]]
+use = "car-loan"
+from = "checking"
+to = "auto-loan"
+amount = 350
+starts = 2025-11-15
+
+[[expected]]
+use = "phone"
+from = "card"
+to = "phone-co"
+amount = 65
+starts = 2025-11-12
+
+[[expected]]
+use = "streaming"
+from = "card"
+to = "streaming"
+amount = 20
+starts = 2025-11-03
+
+[[expected]]
+use = "car-insurance"
+from = "checking"
+to = "insurer"
+amount = 600
+starts = 2025-12-10
+
+# --- Everyday spending -------------------------------------------------------
+
+[[spending]]
+budget = "groceries"
+at = ["grocer"]
+on = "card"
+per_month = 6
+
+[[spending]]
+budget = "gas"
+at = ["fuel"]
+on = "card"
+per_month = 4
+
+[[spending]]
+budget = "household"
+at = ["warehouse"]
+on = "card"
+per_month = 2
+
+[[spending]]
+budget = "fun-money"
+at = ["arcade"]
+on = "card"
+per_month = 3
+
+# --- Story moments -----------------------------------------------------------
+
+# A warehouse run split across groceries and household.
+[[moment]]
+month = 5
+day = 14
+account = "card"
+counterparty = "warehouse"
+amount = -180
+description = "acme warehouse #12"
+lines = [{ budget = "groceries", amount = 120 }, { budget = "household", amount = 60 }]
+
+# A refund on groceries.
+[[moment]]
+month = 6
+day = 9
+account = "card"
+counterparty = "grocer"
+amount = 45
+description = "acme grocery refund"
+lines = [{ budget = "groceries", amount = 45 }]
+
+# The emergency fund covers a car repair: money moves first, then the repair is paid from car.
+[[assignment]]
+month = 8
+day = 19
+from = "emergency-fund"
+to = "car"
+amount = 900
+
+[[moment]]
+month = 8
+day = 20
+account = "checking"
+counterparty = "auto-shop"
+amount = -900
+description = "acme auto repair"
+lines = [{ budget = "car", amount = 900 }]
