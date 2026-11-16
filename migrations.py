@@ -450,6 +450,32 @@ def _paid_from(conn: duckdb.DuckDBPyConnection) -> None:
              "END FROM {source} a")
 
 
+# A split line can carry its own bill (#123). The rest of the transaction, what
+# no line takes, keeps the transaction's own category and bill.
+TRANSACTION_SPLITS_TABLE = """
+    CREATE TABLE transaction_splits (
+        id BIGINT PRIMARY KEY DEFAULT nextval('transaction_splits_id_seq'),
+        user_id BIGINT NOT NULL,
+        imported_transaction_id BIGINT NOT NULL,
+        category_id BIGINT NOT NULL,
+        amount DOUBLE NOT NULL,
+        note TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        bill_id BIGINT
+    )
+"""
+
+
+def _split_bills(conn: duckdb.DuckDBPyConnection) -> None:
+    """Split lines gain a bill (v0.5.1). Every existing line starts with none."""
+    if "bill_id" in _columns(conn, "transaction_splits"):
+        return
+    _replace(conn, "transaction_splits", "transaction_splits", TRANSACTION_SPLITS_TABLE,
+             "INSERT INTO transaction_splits (id, user_id, imported_transaction_id, category_id, amount, note, "
+             "created_at) SELECT id, user_id, imported_transaction_id, category_id, amount, note, created_at "
+             "FROM {source}")
+
+
 # The steps that bring a v0.4.0 database to this version's shape, in order.
 STEPS: List[Step] = [
     ("inbox_actions", _inbox_actions),
@@ -461,4 +487,5 @@ STEPS: List[Step] = [
     ("merged_rules", _merged_rules),
     ("transaction_marks", _transaction_marks),
     ("paid_from", _paid_from),
+    ("split_bills", _split_bills),
 ]

@@ -8,7 +8,6 @@ from fastapi.responses import HTMLResponse
 
 import inbox as inbox_module
 import ledger
-import settle
 from services import (
     account_balance_before,
     account_cutover,
@@ -23,10 +22,8 @@ from services import (
     get_setting_float,
     load_accounts,
     load_categories,
-    load_transaction_splits,
     redirect_with_message,
     resolve_forecast_window,
-    split_remainder,
 )
 from inbox import build_inbox
 from web import CurrentUser, render, render_part
@@ -35,12 +32,13 @@ router = APIRouter()
 
 
 def _ledger_context(user: Dict[str, Any], start: str, end: str, account: str, q: str, category: List[str],
-                    merchant: str, open: str, rule_tx: str, rule_kind: str) -> Dict[str, Any]:
+                    merchant: str) -> Dict[str, Any]:
     """Everything the ledger page and its table need: one account's rows for
-    the window, what a filter keeps, and the one row whose panel is open."""
+    the window and what a filter keeps. A row is edited in the dialog over the
+    table (routes/transactions.py), so the table never carries a form."""
     user_id = int(user["id"])
     window_start, window_end, invalid = resolve_forecast_window(user_id, start, end)
-    view = ledger.LedgerView.from_params(account, q, category, merchant, open, start, end)
+    view = ledger.LedgerView.from_params(account, q, category, merchant, start, end)
     selected, fell_back = ledger.resolve_account(user_id, view.account_id)
     if selected:
         view = replace(view, account_id=int(selected["id"]))
@@ -66,9 +64,6 @@ def _ledger_context(user: Dict[str, Any], start: str, end: str, account: str, q:
         "fell_back": fell_back,
         "invalid_window": invalid,
         "rows": rows,
-        "panel": _panel(user_id, view, shown, categories),
-        "rule_prompt": (settle.rule_prompt(user_id, int(rule_tx), rule_kind, window_start)
-                        if rule_tx.strip().isdigit() else None),
         "chips": view.chips({int(c["id"]): (c.get("label") or c["name"]) for c in categories}),
         "categories": categories,
         "has_forecast": any(row.get("row_type") != "month_summary" and row.get("type") != "actual"
@@ -89,33 +84,10 @@ def _ledger_context(user: Dict[str, Any], start: str, end: str, account: str, q:
     }
 
 
-def _panel(user_id: int, view: "ledger.LedgerView", rows: List[Dict[str, Any]],
-           categories: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """The open row's action panel: which transaction, which action, and what
-    that action's form needs. Only one row carries a panel, so the page stays
-    light however many rows it shows."""
-    tx_id, action = view.opened()
-    row = next((r for r in rows if r.get("type") == "actual" and r.get("id") == tx_id), None)
-    if row is None or action not in PANEL_ACTIONS:
-        return None
-    panel: Dict[str, Any] = {"tx_id": tx_id, "action": action, "row": row}
-    if action == "split":
-        panel["splits"] = load_transaction_splits(user_id, tx_id)
-        panel["remainder"] = split_remainder(user_id, tx_id)
-        panel["magnitude"] = abs(float(row["delta"]))
-    elif action == "match":
-        panel["tx"] = {"id": tx_id, "kind": row["kind"], "bills": settle.bills_to_match(user_id, {"signed": row["delta"], "amount": abs(row["delta"])})}
-    return panel
-
-
-PANEL_ACTIONS = ("category", "split", "match", "note")
-
-
 @router.get("/ledger", response_class=HTMLResponse)
 def ledger_page(request: Request, user: CurrentUser, start: str = "", end: str = "", account: str = "", q: str = "",
-                category: List[str] = Query([]), merchant: str = "", open: str = "", rule_tx: str = "",
-                rule_kind: str = "", msg: str = "", err: int = 0):
-    context = _ledger_context(user, start, end, account, q, category, merchant, open, rule_tx, rule_kind)
+                category: List[str] = Query([]), merchant: str = "", msg: str = "", err: int = 0):
+    context = _ledger_context(user, start, end, account, q, category, merchant)
     if context["invalid_window"]:
         msg, err = "Invalid date filter. Using saved/default range.", 1
     elif context["fell_back"]:
@@ -125,9 +97,8 @@ def ledger_page(request: Request, user: CurrentUser, start: str = "", end: str =
 
 @router.get("/ledger/table", response_class=HTMLResponse)
 def ledger_table(request: Request, user: CurrentUser, start: str = "", end: str = "", account: str = "", q: str = "",
-                 category: List[str] = Query([]), merchant: str = "", open: str = "", rule_tx: str = "",
-                 rule_kind: str = "", msg: str = "", err: int = 0):
-    context = _ledger_context(user, start, end, account, q, category, merchant, open, rule_tx, rule_kind)
+                 category: List[str] = Query([]), merchant: str = "", msg: str = "", err: int = 0):
+    context = _ledger_context(user, start, end, account, q, category, merchant)
     return render_part(request, "_ledger_section.html", msg, err, section_only=True, **context)
 
 

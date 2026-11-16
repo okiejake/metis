@@ -167,11 +167,13 @@
           </td>
           <td><span class="table-pill {{ 'success' if l.matched_via == 'rule' else 'neutral' }}">{{ l.matched_via }}</span></td>
           <td>
+            {% if l.matched_via != 'split' %}
             <form method="post" action="{{ base_path() }}/expected/reconcile/{{ l.recon_id }}/unlink">
               <input type="hidden" name="source_type" value="{{ item.source_type }}" />
               <input type="hidden" name="source_id" value="{{ item.id }}" />
               <button type="submit" class="button-link danger">unlink</button>
             </form>
+            {% endif %}
           </td>
         </tr>
         {% endfor %}

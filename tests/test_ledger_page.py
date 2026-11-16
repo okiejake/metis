@@ -140,88 +140,95 @@ def test_an_imported_row_shows_the_bill_it_is_matched_to(client, db, user_id, ac
     gym = checking_import(db, user_id, accounts, TODAY - timedelta(days=7), "EXMPL FITNESS 99", -30.00)
     reconcile(db, user_id, "bill", bill, gym)
     row = re.search(r"<tr[^>]*>(?:(?!</tr>).)*EXMPL FITNESS 99(?:(?!</tr>).)*</tr>", page(client), re.S).group(0)
-    assert re.search(r'<td class="ledger-bill">\s*example gym', row)
+    assert text(bill_cell(row)) == ["example", "gym"]
 
 
-def test_a_rows_note_shows_under_its_description(client, db, user_id, accounts, month):
+def test_a_rows_note_shows_beside_its_description(client, db, user_id, accounts, month):
     db.execute("UPDATE imported_transactions SET note = 'for the office' WHERE id = ?", [month["grocer"]])
     assert re.search(r'class="ledger-note"[^>]*>\s*for the office', page(client))
+
+
+def row_of(html, text):
+    return re.search(rf"<tr[^>]*>(?:(?!</tr>).)*{re.escape(text)}(?:(?!</tr>).)*</tr>", html, re.S).group(0)
+
+
+def bill_cell(row):
+    return re.search(r'<td class="ledger-bill">(.*?)</td>', row, re.S).group(1)
+
+
+def text(html):
+    return re.sub(r"<[^>]+>", " ", html).split()
+
+
+def test_an_unmatched_row_leaves_the_bill_blank(client, accounts, month):
+    assert text(bill_cell(row_of(page(client), "EXAMPLE GROCER 0042"))) == []
+
+
+def test_an_unexpected_row_shows_a_warning_in_the_bill_column(client, db, accounts, month):
+    db.execute("UPDATE imported_transactions SET unexpected = TRUE WHERE id = ?", [month["grocer"]])
+    cell = bill_cell(row_of(page(client), "EXAMPLE GROCER 0042"))
+    assert 'data-lucide="triangle-alert"' in cell and 'aria-label="unexpected"' in cell
+
+
+def test_a_forecast_row_names_its_bill_and_reads_expected_transaction(client, accounts, month):
+    row = row_of(page(client), "acme utilities")
+    assert text(bill_cell(row)) == ["acme", "utilities"]
+    description = re.search(r'<td class="ledger-description">(.*?)</td>', row, re.S).group(1)
+    assert text(description) == ["expected", "transaction"] and 'class="ledger-expected"' in description
+
+
+def test_a_split_row_shows_every_lines_category_and_bill(client, db, user_id, accounts, month):
+    home = db.create_category(user_id, "home")
+    garden = db.create_category(user_id, "garden")
+    gym = add_bill(db, user_id, "Example Gym", 30.00, TODAY - timedelta(days=37), account_id=accounts["Example Checking"])
+    db.execute("UPDATE imported_transactions SET category_id = ? WHERE id = ?", [home, month["grocer"]])
+    db.save_transaction_splits(user_id, month["grocer"], [{"category_id": garden, "amount": 15.00, "note": "", "bill_id": gym}])
+    row = row_of(page(client), "EXAMPLE GROCER 0042")
+    category = re.search(r'<td class="ledger-category">(.*?)</td>', row, re.S).group(1)
+    assert re.findall(r'class="category-pill">.*?</span>(\w+)</span>', category) == ["home", "garden"]
+    assert "example gym" in bill_cell(row)
 
 
 # --- Settling a row in place -------------------------------------------------------------------
 
 
-def test_the_row_menu_offers_every_action(client, accounts, month):
+def test_each_imported_row_has_one_edit_button_that_opens_the_form(client, accounts, month):
+    row = row_of(page(client), "EXAMPLE GROCER 0042")
+    tx = month["grocer"]
+    assert re.search(rf'href="/transactions/{tx}/edit\?next=[^"]+"[^>]*data-edit-href="/transactions/{tx}/edit\?part=1"', row)
+    assert "row-action-menu" not in row
+
+
+def test_an_uncategorized_rows_categorize_opens_the_form(client, accounts, month):
+    category = re.search(r'<td class="ledger-category">(.*?)</td>', row_of(page(client), "EXAMPLE GROCER 0042"),
+                         re.S).group(1)
+    assert f'data-edit-href="/transactions/{month["grocer"]}/edit?part=1"' in category and "categorize" in category
+
+
+def test_the_edit_dialog_sits_outside_the_table_so_opening_it_leaves_the_table_alone(client, accounts, month):
     html = page(client)
-    tx = month["grocer"]
-    for action in ("category", "split", "match", "note"):
-        assert re.search(rf'href="[^"]*open={tx}%3A{action}', html), action
-    assert f'action="/transactions/{tx}/transfer"' in html
+    assert re.search(r'<dialog id="tx-edit-dialog"', html)
+    section = html[html.index('id="ledger-section"'):]
+    assert 'id="tx-edit-dialog"' not in section[:section.index("</section>")]
 
 
-@pytest.mark.parametrize("action, marker", [
-    ("category", 'action="/transactions/{tx}/category"'),
-    ("split", 'action="/transactions/{tx}/split"'),
-    ("match", 'action="/transactions/{tx}/one-time"'),
-    ("note", 'action="/transactions/{tx}/note"'),
-])
-def test_each_action_opens_its_panel_under_the_row(client, accounts, month, action, marker):
-    tx = month["grocer"]
-    html = page(client, open=f"{tx}:{action}")
-    assert 'class="ledger-panel-row"' in html
-    assert marker.format(tx=tx) in html
-
-
-def test_only_the_open_row_carries_a_panel(client, accounts, month):
-    assert 'class="ledger-panel-row"' not in page(client)
-
-
-def test_a_matched_row_offers_unmatch(client, db, user_id, accounts, month):
-    bill = add_bill(db, user_id, "Example Gym", 30.00, TODAY - timedelta(days=37),
-                    account_id=accounts["Example Checking"])
-    gym = checking_import(db, user_id, accounts, TODAY - timedelta(days=7), "EXMPL FITNESS 99", -30.00)
-    reconcile(db, user_id, "bill", bill, gym)
-    assert f'action="/transactions/{gym}/unmatch"' in page(client)
+def test_the_ledger_never_shows_the_rule_at_the_top_of_the_table(client, db, user_id, accounts, month):
+    home = db.create_category(user_id, "home")
+    db.execute("UPDATE imported_transactions SET category_id = ? WHERE id = ?", [home, month["grocer"]])
+    assert "data-rule-prompt" not in page(client, rule_tx=month["grocer"], rule_kind="category")
 
 
 def test_actions_post_in_the_background_and_keep_the_view(client, accounts, month):
-    html = page(client, q="grocer", open=f"{month['grocer']}:note")
+    html = page(client, q="grocer")
     section = re.search(r'<section class="panel ledger-section" id="ledger-section"([^>]*)>', html).group(1)
     assert 'data-section-url="/ledger/table"' in section
     assert re.search(r'data-state-query="[^"]*q=grocer', section)
-    assert "open=" not in re.search(r'data-state-query="([^"]*)"', section).group(1)
-    note_form = re.search(r'<form[^>]*action="/transactions/\d+/note"[^>]*>', html).group(0)
-    assert "data-partial" in note_form
 
 
 def test_the_ledger_table_comes_alone(client, accounts, month):
     response = client.get("/ledger/table", params={"start": START.isoformat(), "end": END.isoformat()})
     assert response.status_code == 200
     assert 'id="ledger-section"' in response.text and "<html" not in response.text
-
-
-def test_a_note_is_saved_from_the_ledger(client, db, accounts, month):
-    response = client.post(f"/transactions/{month['grocer']}/note",
-                           data={"note": "for the office", "next": "/ledger?q=grocer"}, follow_redirects=False)
-    assert response.status_code == 303 and response.headers["location"].startswith("/ledger?q=grocer")
-    assert db.fetch_one("SELECT note FROM imported_transactions WHERE id = ?", [month["grocer"]])[0] == "for the office"
-
-
-def test_a_row_is_marked_a_transfer_and_back(client, db, accounts, month):
-    tx = month["grocer"]
-    client.post(f"/transactions/{tx}/transfer", data={"transfer": "1", "next": "/ledger"})
-    assert db.fetch_one("SELECT is_transfer FROM imported_transactions WHERE id = ?", [tx])[0] is True
-    client.post(f"/transactions/{tx}/transfer", data={"transfer": "0", "next": "/ledger"})
-    assert db.fetch_one("SELECT is_transfer FROM imported_transactions WHERE id = ?", [tx])[0] is False
-
-
-def test_a_card_charge_is_never_made_a_transfer(client, db, user_id, accounts, month):
-    charge = add_imported(db, user_id, accounts["Example Card"], "Example Card", TODAY - timedelta(days=3),
-                          "ACME BOOKS", -20.00)
-    response = client.post(f"/transactions/{charge}/transfer", data={"transfer": "1", "next": "/ledger"},
-                           follow_redirects=False)
-    assert "err=1" in response.headers["location"]
-    assert db.fetch_one("SELECT is_transfer FROM imported_transactions WHERE id = ?", [charge])[0] is False
 
 
 # --- Transfers by merchant -----------------------------------------------------------------------

@@ -9,7 +9,8 @@
 //   choosing only sets the field.
 //
 // window.metisPicker.init(root) wires the pickers inside root; partial.js calls
-// it after it replaces a section.
+// it after it replaces a section. A script that sets the select's value fires
+// "picker:sync" on it, and the box shows the new choice.
 (() => {
   let nextId = 0;
 
@@ -166,6 +167,7 @@
     }
 
     input.value = currentText();
+    select.addEventListener('picker:sync', () => { input.value = currentText(); });
     input.addEventListener('focus', () => { input.select(); open(); });
     input.addEventListener('input', () => { active = -1; open(); move(1); });
     input.addEventListener('keydown', (event) => {
@@ -176,7 +178,11 @@
           event.preventDefault();
           choose(shown[active]);
         }
-      } else if (event.key === 'Escape') { close(true); }
+      } else if (event.key === 'Escape') {
+        // An open list closes first; the dialog around it stays open.
+        if (!list.classList.contains('hidden')) { event.preventDefault(); }
+        close(true);
+      }
       else if (event.key === 'Tab') { close(true); }
     });
     list.addEventListener('mousedown', (event) => {

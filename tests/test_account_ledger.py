@@ -200,7 +200,10 @@ def test_each_row_says_its_type_and_only_imported_rows_name_a_bill(db, user_id, 
     assert types["Example Employer"] == "income"
     assert types["Example Repair"] == "one-time"
     assert types["Example Card statement"] == "card"
-    assert all(row["bill"] == "" for row in rows if row["type"] != "actual")
+    bills = {row["description"]: row["bill"] for row in rows if row["type"] not in ("actual", "card")}
+    assert bills == {"Acme Utilities": "Acme Utilities", "Example Employer": "Example Employer",
+                     "Example Repair": "Example Repair"}
+    assert all(row["bill"] == "" for row in rows if row["type"] == "card")
 
 
 def test_the_line_on_an_imported_row_follows_its_state(db, user_id, accounts):

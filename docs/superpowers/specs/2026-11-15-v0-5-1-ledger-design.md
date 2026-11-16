@@ -408,3 +408,78 @@ Built test-first, with synthetic data only.
   - new: one account at a time with "paid from"; statements always shown;
     filter and search; jump to forecast.
 - Tag v0.5.1 after the merge.
+
+## After testing: one edit form (#123)
+
+Added 2026-11-16, from the owner's testing notes on this branch. The notes
+change sections 4 to 6 and 9 as below. Where they disagree, this section
+stands.
+
+### Why
+
+- Opening a row's panel inserted a row and pushed the table down. After a
+  match, the rule prompt appeared at the top of the table and took the cursor
+  with it, so a scrolled page jumped back to the top.
+- A split's remainder stayed on the transaction's own category, which no pill
+  showed. The category picker edited that hidden remainder, so splitting
+  seemed to break category edit.
+- "add another part" could be clicked by accident, with no way to take the
+  extra parts back off.
+- The unexpected line used `--warning`, which in this palette is a
+  steel-blue mix, so marking a row unexpected looked like it did nothing.
+
+### Decided by the owner
+
+- **One edit form per row.** It opens over the table in a dialog with a
+  faded background, like the date range picker. It replaces the row menu and
+  the panel. Categorizing keeps the searchable picker.
+- **The rule is step 2 of the form**, never at the top of the table.
+- **Splits start as two lines**, the original and the new one, prefilled half
+  and half. Changing one amount changes the other, so the lines always add up
+  to the transaction. **Save** waits until the split is valid, with a short
+  notice beside it saying why. "remove all parts" becomes **un-split**. Each
+  added line can be taken off.
+- **Each split line has its own category and bill** (option A). A bill
+  counts the lines that carry it.
+- **The bill column** is blank when a row isn't matched, and shows an orange
+  warning icon when the row is marked unexpected.
+- **Forecast rows** show the bill's name in `bill` and "expected transaction"
+  in `description`, in muted italics.
+- **No text wraps in the ledger table.** Text that doesn't fit fades out.
+
+### Design
+
+- `transaction_splits.bill_id` (may be empty). Migration step `split_bills`
+  copies the table and gives every existing line none.
+- The original line is the transaction's own category and bill. It keeps what
+  the other lines don't. In the form it is the first line, and its amount is
+  worked out, never stored.
+- A bill counts its split lines everywhere it counts linked actuals: the
+  reconcile list (where a line is listed as `split`, with no unlink), the due
+  dates the forecast treats as paid, and budget actuals.
+- `GET /transactions/{id}/edit` is the form: alone for the dialog (`part=1`),
+  or as a page without script. `?split=1` opens it on two lines.
+  `?step=rule&rule_kind=…` is step 2.
+- `POST /transactions/{id}/edit` saves everything at once: transfer, bill,
+  category, note, then the lines. A new bill match goes on to the bill's rule,
+  otherwise a new category goes on to the category rule, otherwise it returns
+  to `next`.
+- `GET /transactions/{id}/split` (the inbox's link) opens the form on its
+  lines. The split page and its POST routes are gone, and so are this
+  branch's `/note` and `/transfer` routes. The form does all of them.
+- The dialog sits outside the table, so opening it never moves the table.
+  Saving refreshes the table behind it without dimming. A message floats over
+  the page as a toast instead of pushing the table down.
+- `--unexpected` is an orange that passes contrast in both themes, for the icon
+  and the row's line.
+
+### Calls made in building (the owner can overturn any)
+
+- Picking a bill on a line sets that line's category to the bill's.
+- The original line may keep $0. Each added line needs an amount above $0
+  and a category.
+- Changing the original's amount moves the difference to the final line.
+- An edit has no undo. Cancel discards it, and each value can be set back.
+- Card statement rows keep their description and status. They are not bills.
+- The note shows beside the description on one line, and fades with it.
+- When the form opens, focus lands on its header, so no list pops open over it.

@@ -559,17 +559,7 @@ SCHEMA = (
         created_at TIMESTAMP NOT NULL DEFAULT NOW()
     )
     """,
-    """
-    CREATE TABLE IF NOT EXISTS transaction_splits (
-        id BIGINT PRIMARY KEY DEFAULT nextval('transaction_splits_id_seq'),
-        user_id BIGINT NOT NULL,
-        imported_transaction_id BIGINT NOT NULL,
-        category_id BIGINT NOT NULL,
-        amount DOUBLE NOT NULL,
-        note TEXT,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW()
-    )
-    """,
+    migrations.TRANSACTION_SPLITS_TABLE.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS"),
     """
     CREATE TABLE IF NOT EXISTS category_rules (
         id BIGINT PRIMARY KEY DEFAULT nextval('category_rules_id_seq'),
@@ -1610,7 +1600,7 @@ def generate_bill_transactions(
                 "date": due["date"],
                 "description": bill["name"],
                 "type": bill_item_type(bill),
-                "bill": "",
+                "bill": bill["name"],
                 "income": amount if kind == "income" else 0.0,
                 "expense": amount if kind == "expense" else 0.0,
                 "delta": amount if kind == "income" else -amount,
@@ -1708,7 +1698,7 @@ def load_one_time_transactions(user_id: int, window_start: date, window_end: dat
                 "date": item["expected_date"],
                 "description": item["name"],
                 "type": "one-time",
-                "bill": "",
+                "bill": item["name"],
                 "income": amount if kind == "income" else 0.0,
                 "expense": amount if kind == "expense" else 0.0,
                 "delta": amount if kind == "income" else -amount,
@@ -1979,9 +1969,10 @@ def _splits_for(user_id: int, tx_ids: List[int]) -> Dict[int, List[Dict[str, Any
         return {}
     placeholders = ", ".join("?" for _ in tx_ids)
     rows = query_all(f"""
-                SELECT ts.imported_transaction_id AS tx_id, ts.category_id, ts.amount,
+                SELECT ts.imported_transaction_id AS tx_id, ts.category_id, ts.amount, ts.bill_id, b.name AS bill,
                        {category_label("c")} AS category_name, c.color AS category_color
                 FROM transaction_splits ts
+                LEFT JOIN bills b ON b.id = ts.bill_id AND b.user_id = ts.user_id
                 {category_join("c", "ts.category_id", "ts.user_id", "")}
                 WHERE ts.user_id = ? AND ts.imported_transaction_id IN ({placeholders})
                 ORDER BY ts.id
@@ -1993,6 +1984,8 @@ def _splits_for(user_id: int, tx_ids: List[int]) -> Dict[int, List[Dict[str, Any
             "category_name": row.get("category_name") or "",
             "category_color": safe_hex_color(row.get("category_color")),
             "amount": round(float(row["amount"]), 2),
+            "bill_id": int(row["bill_id"]) if row.get("bill_id") is not None else None,
+            "bill": row.get("bill") or "",
         })
     return found
 
@@ -2696,23 +2689,34 @@ def income_total(user_id: int, window_start: date, window_end: date) -> float:
 def _item_actuals(user_id: int, window_start: date, window_end: date) -> Dict[tuple, float]:
     """What the actuals linked to each expected transaction add up to in the
     window, as a positive amount: (source_type, source_id) -> amount. Split
-    parts are taken off, since money moved to another category is no longer
-    this item's."""
+    parts are taken off, since money moved to another line is no longer this
+    item's, and a bill on a split line counts that line."""
     rows = fetch_all("""
             WITH allocated AS (
                 SELECT imported_transaction_id AS tx_id, COALESCE(SUM(amount), 0) AS part_total
                 FROM transaction_splits WHERE user_id = ? GROUP BY 1
+            ),
+            linked AS (
+                SELECT r.source_type, r.source_id,
+                       SIGN(i.amount) * (ABS(i.amount) - COALESCE(a.part_total, 0)) AS amount
+                FROM imported_transactions i
+                JOIN expected_reconciliations r
+                       ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
+                LEFT JOIN allocated a ON a.tx_id = i.id
+                WHERE i.user_id = ? AND NOT i.is_transfer
+                  AND i.tx_date >= ? AND i.tx_date <= ?
+                UNION ALL
+                SELECT 'bill', ts.bill_id, SIGN(i.amount) * ts.amount
+                FROM transaction_splits ts
+                JOIN imported_transactions i
+                       ON i.id = ts.imported_transaction_id AND i.user_id = ts.user_id
+                WHERE ts.user_id = ? AND ts.bill_id IS NOT NULL AND NOT i.is_transfer
+                  AND i.tx_date >= ? AND i.tx_date <= ?
             )
-            SELECT r.source_type, r.source_id,
-                   COALESCE(SUM(SIGN(i.amount) * (ABS(i.amount) - COALESCE(a.part_total, 0))), 0) AS total
-            FROM imported_transactions i
-            JOIN expected_reconciliations r
-                   ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
-            LEFT JOIN allocated a ON a.tx_id = i.id
-            WHERE i.user_id = ? AND NOT i.is_transfer
-              AND i.tx_date >= ? AND i.tx_date <= ?
+            SELECT source_type, source_id, COALESCE(SUM(amount), 0) AS total
+            FROM linked
             GROUP BY 1, 2
-            """, [user_id, user_id, window_start, window_end])
+            """, [user_id, user_id, window_start, window_end, user_id, window_start, window_end])
     return {(source_type, int(source_id)): round(abs(float(total)), 2) for source_type, source_id, total in rows}
 
 
@@ -4142,21 +4146,34 @@ def unlink_reconciliation(user_id: int, recon_id: int) -> None:
 def _load_reconciliation_rows(
     user_id: int, source_type: str, source_id: Optional[int] = None
 ) -> List[Dict[str, Any]]:
-    """Linked actuals for one source type, optionally narrowed to a single item."""
-    sql = """
+    """Linked actuals for one source type, optionally narrowed to a single item.
+    A bill also lists each split line that carries it, at the line's amount, as
+    matched_via 'split' with a negative recon_id: it is unlinked from the
+    transaction's split, not here."""
+    item_clause = " AND r.source_id = ?" if source_id is not None else ""
+    params: List[Any] = [user_id, source_type] + ([source_id] if source_id is not None else [])
+    sql = f"""
                 SELECT r.source_id, r.id AS recon_id, r.matched_via, r.imported_transaction_id,
                        i.account, i.tx_date, i.description, i.merchant, i.amount, i.flow
                 FROM expected_reconciliations r
                 JOIN imported_transactions i
                   ON i.id = r.imported_transaction_id AND i.user_id = r.user_id
-                WHERE r.user_id = ? AND r.source_type = ?
+                WHERE r.user_id = ? AND r.source_type = ?{item_clause}
                 """
-    params: List[Any] = [user_id, source_type]
-    if source_id is not None:
-        sql += " AND r.source_id = ?"
-        params.append(source_id)
+    if source_type == "bill":
+        line_clause = " AND ts.bill_id = ?" if source_id is not None else ""
+        sql += f"""
+                UNION ALL
+                SELECT ts.bill_id, -ts.id, 'split', ts.imported_transaction_id,
+                       i.account, i.tx_date, i.description, i.merchant, SIGN(i.amount) * ts.amount, i.flow
+                FROM transaction_splits ts
+                JOIN imported_transactions i
+                  ON i.id = ts.imported_transaction_id AND i.user_id = ts.user_id
+                WHERE ts.user_id = ? AND ts.bill_id IS NOT NULL{line_clause}
+                """
+        params += [user_id] + ([source_id] if source_id is not None else [])
 
-    rows = query_all(sql + " ORDER BY i.tx_date DESC", params)
+    rows = query_all(sql + " ORDER BY tx_date DESC", params)
     for row in rows:
         if isinstance(row["tx_date"], datetime):
             row["tx_date"] = row["tx_date"].date()
@@ -4269,11 +4286,14 @@ def load_imported_transaction_by_id(user_id: int, tx_id: int) -> Optional[Dict[s
     rows = query_all(f"""
                 SELECT i.id, i.tx_date, i.description, i.merchant, i.amount, i.account, i.account_id,
                        i.is_transfer, i.category_id, i.category_via, i.category_rule_id, i.transfer_rule_id,
-                       i.unexpected, i.note,
+                       i.unexpected, i.note, acct.account_type,
+                       COALESCE(ec.id, ic.id) AS effective_category_id,
                        COALESCE({category_label("ec")}, {category_label("ic")}) AS category_name,
                        COALESCE(ec.color, ic.color) AS category_color,
-                       COALESCE(b.name, ot.name) AS expected_name
+                       COALESCE(b.name, ot.name) AS expected_name,
+                       r.source_type AS linked_type, r.source_id AS linked_id
                 FROM imported_transactions i
+                LEFT JOIN accounts acct ON acct.id = i.account_id AND acct.user_id = i.user_id
                 LEFT JOIN expected_reconciliations r
                        ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
                 LEFT JOIN bills b
@@ -4297,9 +4317,10 @@ def load_imported_transaction_by_id(user_id: int, tx_id: int) -> Optional[Dict[s
 def load_transaction_splits(user_id: int, tx_id: int) -> List[Dict[str, Any]]:
     """Split parts for one transaction, oldest first."""
     rows = query_all(f"""
-                SELECT ts.id, ts.category_id, ts.amount, ts.note,
+                SELECT ts.id, ts.category_id, ts.amount, ts.note, ts.bill_id, b.name AS bill,
                        {category_label("c")} AS category_name, c.color AS category_color
                 FROM transaction_splits ts
+                LEFT JOIN bills b ON b.id = ts.bill_id AND b.user_id = ts.user_id
                 {category_join("c", "ts.category_id", "ts.user_id", "")}
                 WHERE ts.user_id = ? AND ts.imported_transaction_id = ?
                 ORDER BY ts.id
@@ -4307,6 +4328,8 @@ def load_transaction_splits(user_id: int, tx_id: int) -> List[Dict[str, Any]]:
     for row in rows:
         row["amount"] = round(float(row["amount"]), 2)
         row["category_color"] = safe_hex_color(row.get("category_color"))
+        row["bill_id"] = int(row["bill_id"]) if row.get("bill_id") is not None else None
+        row["bill"] = row.get("bill") or ""
     return rows
 
 
@@ -4323,8 +4346,9 @@ def save_transaction_splits(
     user_id: int, tx_id: int, parts: List[Dict[str, Any]]
 ) -> float:
     """Replace a transaction's split parts wholesale. `parts` is a list of
-    {category_id, amount, note}; blank/zero amounts are dropped so an emptied row
-    in the editor simply removes that part. Returns the resulting remainder."""
+    {category_id, amount, note, bill_id}; bill_id may be left out or empty.
+    Blank/zero amounts are dropped so an emptied row in the editor simply
+    removes that part. Returns the resulting remainder."""
     transaction = load_imported_transaction_by_id(user_id, tx_id)
     if not transaction:
         raise ValueError("Transaction not found")
@@ -4338,7 +4362,11 @@ def save_transaction_splits(
         category_id = int(part["category_id"])
         if not load_category_by_id(user_id, category_id):
             raise ValueError("Category not found")
-        cleaned.append({"category_id": category_id, "amount": amount, "note": (part.get("note") or "").strip()})
+        bill_id = int(part["bill_id"]) if part.get("bill_id") else None
+        if bill_id is not None and not load_bill_by_id(user_id, bill_id):
+            raise ValueError("Bill not found")
+        cleaned.append({"category_id": category_id, "amount": amount, "note": (part.get("note") or "").strip(),
+                        "bill_id": bill_id})
 
     allocated = round(sum(part["amount"] for part in cleaned), 2)
     if allocated > magnitude + 0.005:
@@ -4355,10 +4383,10 @@ def save_transaction_splits(
         for part in cleaned:
             conn.execute(
                 """
-                INSERT INTO transaction_splits (user_id, imported_transaction_id, category_id, amount, note)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO transaction_splits (user_id, imported_transaction_id, category_id, amount, note, bill_id)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                [user_id, tx_id, part["category_id"], part["amount"], part["note"] or None],
+                [user_id, tx_id, part["category_id"], part["amount"], part["note"] or None, part["bill_id"]],
             )
     return round(magnitude - allocated, 2)
 

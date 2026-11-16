@@ -44,13 +44,12 @@ class LedgerView:
     q: str = ""
     categories: Tuple[str, ...] = field(default_factory=tuple)
     merchant: str = ""
-    open: str = ""
     start: str = ""
     end: str = ""
 
     @classmethod
     def from_params(cls, account: str = "", q: str = "", category: Optional[Iterable[str]] = None,
-                    merchant: str = "", open: str = "", start: str = "", end: str = "") -> "LedgerView":
+                    merchant: str = "", start: str = "", end: str = "") -> "LedgerView":
         """A window pinned in the address (start and end) is kept in every link
         the page makes; otherwise the saved date range applies."""
         account = str(account or "").strip()
@@ -60,7 +59,6 @@ class LedgerView:
             q=(q or "").strip(),
             categories=tuple(_picks(category)),
             merchant="".join(ch for ch in (merchant or "") if ch.isalnum())[:32],
-            open=(open or "").strip(),
             start=start.strip() if pinned else "",
             end=end.strip() if pinned else "",
         )
@@ -73,19 +71,13 @@ class LedgerView:
     def category_ids(self) -> Set[int]:
         return {int(pick) for pick in self.categories if pick.isdigit()}
 
-    def opened(self) -> Tuple[Optional[int], str]:
-        """(transaction id, action) of the one row whose panel is open."""
-        tx_id, _sep, action = self.open.partition(":")
-        return (int(tx_id), action) if tx_id.isdigit() and action else (None, "")
-
     def params(self, **changes: Any) -> List[Tuple[str, Any]]:
-        """The view as address parameters. `open` is left out unless asked
-        for, so an action's panel closes once it is saved."""
+        """The view as address parameters."""
         values = {"account": self.account_id, "q": self.q, "category": list(self.categories),
-                  "merchant": self.merchant, "open": "", "start": self.start, "end": self.end}
+                  "merchant": self.merchant, "start": self.start, "end": self.end}
         values.update(changes)
         pairs: List[Tuple[str, Any]] = []
-        for key in ("account", "q", "category", "merchant", "open", "start", "end"):
+        for key in ("account", "q", "category", "merchant", "start", "end"):
             value = values[key]
             for item in (value if isinstance(value, (list, tuple)) else [value]):
                 if item not in (None, ""):
@@ -160,8 +152,10 @@ def filter_rows(user_id: int, rows: List[Dict[str, Any]], view: LedgerView,
     def keep(row: Dict[str, Any]) -> bool:
         if view.merchant and (row["type"] != "actual" or merchant_token(row.get("merchant")) != view.merchant):
             return False
+        lines = row.get("splits") or []
         if needle and needle not in " ".join(
-                (row.get("description") or "", row.get("bill") or "", row.get("note") or "")).lower():
+                [row.get("description") or "", row.get("bill") or "", row.get("note") or ""]
+                + [line.get("bill") or "" for line in lines]).lower():
             return False
         if wanted or uncategorized:
             if row["type"] == "card":
