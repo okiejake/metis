@@ -25,6 +25,17 @@
       </select>
     </label>
     {{ parts.cycle_fields(account) }}
+    {% if checking_accounts %}
+    <div data-field="paid_from" class="conditional" data-card-only>
+      <label>paid from
+        <select name="paid_from">
+          {% for checking in checking_accounts %}
+          <option value="{{ checking.id }}"{{ ' selected' if checking.id == paying_id else '' }}>{% filter lower %}{{ checking.name }}{% endfilter %}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+    {% endif %}
     <div data-field="payment_pattern" class="conditional full-row" data-card-only>
       <label>how payments to this card appear on your other statement
         <input type="text" name="payment_pattern" value="{{ account.payment_pattern }}"

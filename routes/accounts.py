@@ -19,6 +19,7 @@ from services import (
     load_account_by_id,
     load_accounts,
     load_unmapped_import_labels,
+    paying_account,
     parse_day,
     parse_form_bool,
     redirect_with_message,
@@ -125,6 +126,17 @@ def _create_account(user_id: int, name: str, account_type: str, statement_day: s
     return int(row[0])
 
 
+def _parse_paid_from(user_id: int, account_type: str, value: str) -> Optional[int]:
+    """The checking account a card is paid from. Only cards keep one, and it
+    must be one of the user's checking accounts. Empty means the default."""
+    if account_type != "credit_card" or not value.strip():
+        return None
+    payer = load_account_by_id(user_id, int(value)) if value.strip().isdigit() else None
+    if not payer or payer["account_type"] != "checking":
+        raise ValueError("Choose a checking account to pay this card from")
+    return int(payer["id"])
+
+
 @router.get("/accounts/new", response_class=HTMLResponse)
 def new_account_page(request: Request, user: CurrentUser, msg: str = "", err: int = 0):
     return render(request, "account_new.html", msg, err, templates=it.load_templates(user["id"]))
@@ -162,12 +174,15 @@ def edit_account_page(request: Request, user: CurrentUser, account_id: int, msg:
     account = load_account_by_id(user["id"], account_id)
     if not account:
         return redirect_with_message("/accounts", "Account not found", is_error=True)
+    paying = paying_account(user["id"], account)
     return render(
         request,
         "account_edit.html",
         msg,
         err,
         account=account,
+        checking_accounts=[a for a in load_accounts(user["id"]) if a["account_type"] == "checking"],
+        paying_id=paying["id"] if paying else None,
         suggested_pattern=suggest_payment_pattern(account["name"]),
         templates=it.load_templates(user["id"]),
     )
@@ -185,6 +200,7 @@ def edit_account(
     statement_eom: str = Form(""),
     due_eom: str = Form(""),
     default_template_id: Optional[str] = Form(None),
+    paid_from: str = Form(""),
 ):
     if not load_account_by_id(user["id"], account_id):
         return redirect_with_message("/accounts", "Account not found", is_error=True)
@@ -198,6 +214,7 @@ def edit_account(
         )
         # Only cards fund payments from another account, so only cards carry one.
         cleaned_pattern = payment_pattern.strip().upper() if account_type == "credit_card" else ""
+        paid_from_id = _parse_paid_from(user["id"], account_type, paid_from)
 
         with get_connection() as conn:
             existing = conn.execute(
@@ -207,8 +224,10 @@ def edit_account(
             if existing:
                 raise ValueError("An account with this name already exists")
             conn.execute(
-                "UPDATE accounts SET name = ?, account_type = ?, statement_day = ?, due_day = ?, payment_pattern = ? WHERE id = ? AND user_id = ?",
-                [cleaned_name, account_type, parsed_statement, parsed_due, cleaned_pattern, account_id, user["id"]],
+                "UPDATE accounts SET name = ?, account_type = ?, statement_day = ?, due_day = ?, payment_pattern = ?, "
+                "paid_from_account_id = ? WHERE id = ? AND user_id = ?",
+                [cleaned_name, account_type, parsed_statement, parsed_due, cleaned_pattern, paid_from_id, account_id,
+                 user["id"]],
             )
             # Cascade the rename to imported rows anchored to this account so their
             # display label follows the account (rows match by stable account_id).

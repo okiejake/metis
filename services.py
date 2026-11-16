@@ -586,19 +586,8 @@ SCHEMA = (
     """,
     # payment_pattern is how a payment to this card appears on the funding
     # account's statement. Per account, so no issuer name lives in the code.
-    """
-    CREATE TABLE IF NOT EXISTS accounts (
-        id BIGINT PRIMARY KEY DEFAULT nextval('accounts_id_seq'),
-        user_id BIGINT NOT NULL,
-        name TEXT NOT NULL,
-        account_type TEXT NOT NULL,
-        statement_day INTEGER,
-        due_day INTEGER,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        payment_pattern TEXT,
-        default_template_id BIGINT
-    )
-    """,
+    # paid_from_account_id: the checking account that pays a card's statements.
+    migrations.ACCOUNTS_TABLE.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS"),
     # Templates stand alone, shared by any number of accounts; an account
     # points at its default one.
     """
@@ -1845,7 +1834,8 @@ def account_cycle_status(account: Dict[str, Any], today: Optional[date] = None) 
     return {"next_close": close, "next_due": due}
 
 
-ACCOUNT_COLUMNS = "id, name, account_type, statement_day, due_day, payment_pattern, default_template_id"
+ACCOUNT_COLUMNS = ("id, name, account_type, statement_day, due_day, payment_pattern, default_template_id, "
+                   "paid_from_account_id")
 
 
 def load_accounts(user_id: int) -> List[Dict[str, Any]]:
@@ -1864,6 +1854,25 @@ def load_account_by_id(user_id: int, account_id: int) -> Optional[Dict[str, Any]
 
 def load_accounts_map(user_id: int) -> Dict[int, Dict[str, Any]]:
     return {int(account["id"]): account for account in load_accounts(user_id)}
+
+
+def default_checking_account(user_id: int) -> Optional[Dict[str, Any]]:
+    """The user's checking account with the lowest id: the ledger's default
+    account, and the one that pays any card with no paid-from of its own."""
+    rows = query_all(f"SELECT {ACCOUNT_COLUMNS} FROM accounts WHERE user_id = ? AND account_type = 'checking' "
+                     "ORDER BY id LIMIT 1", [user_id])
+    return rows[0] if rows else None
+
+
+def paying_account(user_id: int, card: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The checking account that pays a card's statements: the one it names, or
+    the default checking account when it names none (or one that is gone)."""
+    named = card.get("paid_from_account_id")
+    if named:
+        account = load_account_by_id(user_id, int(named))
+        if account and account.get("account_type") == "checking":
+            return account
+    return default_checking_account(user_id)
 
 
 def parse_optional_account_id(user_id: int, value: str) -> Optional[int]:

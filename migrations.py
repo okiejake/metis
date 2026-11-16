@@ -413,6 +413,43 @@ def _transaction_marks(conn: duckdb.DuckDBPyConnection) -> None:
              "transfer_decision_id FROM {source}")
 
 
+# --- v0.5.0 to v0.5.1 ---------------------------------------------------------
+
+# paid_from_account_id is the checking account that pays a card's statements.
+# Empty means the user's default checking account, the one with the lowest id.
+ACCOUNTS_TABLE = """
+    CREATE TABLE accounts (
+        id BIGINT PRIMARY KEY DEFAULT nextval('accounts_id_seq'),
+        user_id BIGINT NOT NULL,
+        name TEXT NOT NULL,
+        account_type TEXT NOT NULL,
+        statement_day INTEGER,
+        due_day INTEGER,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        payment_pattern TEXT,
+        default_template_id BIGINT,
+        paid_from_account_id BIGINT
+    )
+"""
+
+
+def _paid_from(conn: duckdb.DuckDBPyConnection) -> None:
+    """Cards gain the account that pays them (v0.5.1). A user with exactly one
+    checking account has every card pointed at it; otherwise it stays empty.
+    The table is copied, because DuckDB can't alter one an index depends on."""
+    if "paid_from_account_id" in _columns(conn, "accounts"):
+        return
+    _replace(conn, "accounts", "accounts", ACCOUNTS_TABLE,
+             "INSERT INTO accounts (id, user_id, name, account_type, statement_day, due_day, created_at, "
+             "payment_pattern, default_template_id, paid_from_account_id) "
+             "SELECT a.id, a.user_id, a.name, a.account_type, a.statement_day, a.due_day, a.created_at, "
+             "a.payment_pattern, a.default_template_id, "
+             "CASE WHEN a.account_type = 'credit_card' AND (SELECT COUNT(*) FROM {source} c "
+             "WHERE c.user_id = a.user_id AND c.account_type = 'checking') = 1 "
+             "THEN (SELECT MIN(c.id) FROM {source} c WHERE c.user_id = a.user_id AND c.account_type = 'checking') "
+             "END FROM {source} a")
+
+
 # The steps that bring a v0.4.0 database to this version's shape, in order.
 STEPS: List[Step] = [
     ("inbox_actions", _inbox_actions),
@@ -423,4 +460,5 @@ STEPS: List[Step] = [
     ("category_parents", _category_parents),
     ("merged_rules", _merged_rules),
     ("transaction_marks", _transaction_marks),
+    ("paid_from", _paid_from),
 ]
