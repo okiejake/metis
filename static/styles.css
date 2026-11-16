@@ -358,11 +358,13 @@ body.is-ready .container > *:nth-child(4) {
 
 .neu-press:active,
 .neu-press[aria-pressed="true"],
+.neu-press[aria-current="page"],
 .neu-press[aria-expanded="true"] {
   box-shadow: inset -4px -4px 10px var(--neu-light), inset 4px 4px 10px var(--neu-dark);
 }
 
-.neu-press[aria-pressed="true"] {
+.neu-press[aria-pressed="true"],
+.neu-press[aria-current="page"] {
   color: var(--neu-accent);
 }
 
@@ -2311,6 +2313,24 @@ body.amounts-hidden .amount-sensitive {
   gap: 0.5rem;
   min-width: 0;
 }
+/* The ledger's modes (#124), a pair of pressable segments like the date
+   range's grain. */
+.ledger-modes {
+  display: inline-flex;
+  gap: 0.35rem;
+}
+.ledger-mode {
+  padding: 0.4rem 0.8rem;
+  border-radius: 0.7rem;
+  font-size: 0.82rem;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.filter-accounts {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
 .ledger-account {
   font-size: 1.05rem;
   font-weight: 800;
@@ -2675,6 +2695,7 @@ body.amounts-hidden .amount-sensitive {
   .ledger-table .ledger-payments { order: 3; flex: 0 0 auto; }
   .ledger-table .ledger-charges { order: 4; flex: 0 0 auto; }
   .ledger-table .row-action-cell { order: 5; flex: 0 0 auto; width: auto; }
+  .ledger-table .ledger-account-cell { order: 7; flex: 0 1 auto; min-width: 0; }
   .ledger-table .ledger-bill { order: 7; flex: 0 0 auto; }
   .ledger-table .ledger-category { order: 8; flex: 0 1 auto; }
   .ledger-table .ledger-type { order: 9; flex: 0 0 auto; }

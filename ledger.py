@@ -1,10 +1,10 @@
-"""The ledger page's view (v0.5.1): which account it shows, and which of that
-account's rows a filter keeps.
+"""The ledger page's view: its mode (#124), which accounts it shows, and which
+rows a filter keeps.
 
 A filter is a search of descriptions, bills and notes, a set of categories (with
-"uncategorized"), or a merchant. It only hides rows. Choosing the account is not
-a filter: every account's ledger is its own real run-down. The view lives in the
-address, so the back button works and a filtered ledger can be linked to.
+"uncategorized"), or a merchant. It only hides rows. In cash flow, choosing the
+account is not a filter: every account's ledger is its own real run-down. The
+view lives in the address, so the back button works and a view can be linked to.
 """
 
 import hashlib
@@ -18,6 +18,12 @@ from merchants import merchant_key
 
 UNCATEGORIZED = "uncategorized"
 ALL = "all"
+
+# The ledger's two modes (#124): every account's transactions in one list, or
+# one account's run-down with its forecast.
+TRANSACTIONS = "transactions"
+CASH_FLOW = "cash-flow"
+MODES = (TRANSACTIONS, CASH_FLOW)
 
 
 def merchant_token(text: Any) -> str:
@@ -38,9 +44,25 @@ def _picks(values: Optional[Iterable[str]]) -> List[str]:
     return cleaned
 
 
+def _account_picks(values: Any) -> List[int]:
+    """Account ids as written in the address: one, or several in a list."""
+    values = values if isinstance(values, (list, tuple)) else [values]
+    picked: List[int] = []
+    for value in values:
+        value = str(value or "").strip()
+        if value.isdigit() and int(value) not in picked:
+            picked.append(int(value))
+    return picked
+
+
 @dataclass(frozen=True)
 class LedgerView:
+    """What the ledger shows (#124). In transactions, account_ids are the
+    accounts picked (none means all of them). In cash flow, account_id is the
+    one account shown (none means the default checking account)."""
+    mode: str = TRANSACTIONS
     account_id: Optional[int] = None
+    account_ids: Tuple[int, ...] = field(default_factory=tuple)
     q: str = ""
     categories: Tuple[str, ...] = field(default_factory=tuple)
     merchant: str = ""
@@ -48,20 +70,28 @@ class LedgerView:
     end: str = ""
 
     @classmethod
-    def from_params(cls, account: str = "", q: str = "", category: Optional[Iterable[str]] = None,
-                    merchant: str = "", start: str = "", end: str = "") -> "LedgerView":
+    def from_params(cls, account: Any = "", q: str = "", category: Optional[Iterable[str]] = None,
+                    merchant: str = "", start: str = "", end: str = "", mode: str = "") -> "LedgerView":
         """A window pinned in the address (start and end) is kept in every link
-        the page makes; otherwise the saved date range applies."""
-        account = str(account or "").strip()
+        the page makes; otherwise the saved date range applies. An unknown
+        mode is transactions."""
+        mode = mode if mode in MODES else TRANSACTIONS
+        picked = _account_picks(account)
         pinned = bool((start or "").strip() and (end or "").strip())
         return cls(
-            account_id=int(account) if account.isdigit() else None,
+            mode=mode,
+            account_id=picked[0] if mode == CASH_FLOW and picked else None,
+            account_ids=tuple(picked) if mode == TRANSACTIONS else (),
             q=(q or "").strip(),
             categories=tuple(_picks(category)),
             merchant="".join(ch for ch in (merchant or "") if ch.isalnum())[:32],
             start=start.strip() if pinned else "",
             end=end.strip() if pinned else "",
         )
+
+    @property
+    def transactions(self) -> bool:
+        return self.mode == TRANSACTIONS
 
     @property
     def filtered(self) -> bool:
@@ -73,11 +103,12 @@ class LedgerView:
 
     def params(self, **changes: Any) -> List[Tuple[str, Any]]:
         """The view as address parameters."""
-        values = {"account": self.account_id, "q": self.q, "category": list(self.categories),
-                  "merchant": self.merchant, "start": self.start, "end": self.end}
+        values = {"account": list(self.account_ids) if self.transactions else self.account_id, "mode": self.mode,
+                  "q": self.q, "category": list(self.categories), "merchant": self.merchant, "start": self.start,
+                  "end": self.end}
         values.update(changes)
         pairs: List[Tuple[str, Any]] = []
-        for key in ("account", "q", "category", "merchant", "start", "end"):
+        for key in ("account", "mode", "q", "category", "merchant", "start", "end"):
             value = values[key]
             for item in (value if isinstance(value, (list, tuple)) else [value]):
                 if item not in (None, ""):
@@ -91,9 +122,24 @@ class LedgerView:
         query = self.query(**changes)
         return f"{base}?{query}" if query else base
 
-    def chips(self, category_names: Dict[int, str]) -> List[Dict[str, str]]:
-        """One chip per active filter, each with the address that removes it."""
+    def switch(self, mode: str) -> str:
+        """The address of the other mode, with the same search, categories and
+        window. Cash flow keeps an account only when exactly one was picked;
+        transactions opens on every account."""
+        if mode == CASH_FLOW:
+            account = self.account_ids[0] if len(self.account_ids) == 1 else (
+                None if self.transactions else self.account_id)
+            return self.url(mode=CASH_FLOW, account=account)
+        return self.url(mode=TRANSACTIONS, account=[])
+
+    def chips(self, category_names: Dict[int, str],
+              account_names: Optional[Dict[int, str]] = None) -> List[Dict[str, str]]:
+        """One chip per active filter, each with the address that removes it.
+        In transactions, each picked account is one."""
         found: List[Dict[str, str]] = []
+        for picked in self.account_ids:
+            rest = [other for other in self.account_ids if other != picked]
+            found.append({"label": (account_names or {}).get(picked, "account"), "url": self.url(account=rest)})
         if self.q:
             found.append({"label": f"search: {self.q}", "url": self.url(q="")})
         for pick in self.categories:

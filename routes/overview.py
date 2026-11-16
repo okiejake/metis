@@ -1,7 +1,7 @@
 import json
 from dataclasses import replace
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse
@@ -21,6 +21,7 @@ from services import (
     collect_blended_transactions,
     get_setting_float,
     load_accounts,
+    load_actual_transactions,
     load_categories,
     redirect_with_message,
     resolve_forecast_window,
@@ -31,14 +32,66 @@ from web import CurrentUser, render, render_part
 router = APIRouter()
 
 
-def _ledger_context(user: Dict[str, Any], start: str, end: str, account: str, q: str, category: List[str],
-                    merchant: str) -> Dict[str, Any]:
-    """Everything the ledger page and its table need: one account's rows for
-    the window and what a filter keeps. A row is edited in the dialog over the
-    table (routes/transactions.py), so the table never carries a form."""
+def _ledger_context(user: Dict[str, Any], start: str, end: str, mode: str, account: List[str], q: str,
+                    category: List[str], merchant: str) -> Dict[str, Any]:
+    """Everything the ledger page and its table need, in either mode (#124),
+    and what a filter keeps. A row is edited in the dialog over the table
+    (routes/transactions.py), so the table never carries a form."""
     user_id = int(user["id"])
     window_start, window_end, invalid = resolve_forecast_window(user_id, start, end)
-    view = ledger.LedgerView.from_params(account, q, category, merchant, start, end)
+    view = ledger.LedgerView.from_params(account, q, category, merchant, start, end, mode)
+    accounts = load_accounts(user_id)
+    if view.transactions:
+        view, rows = _transaction_rows(user_id, view, accounts, window_start, window_end)
+        flow: Dict[str, Any] = {"account": None, "fell_back": False, "rows": rows, "has_forecast": False,
+                                "current_balance": 0.0, "payments": 0.0, "charges": 0.0, "projected_balance": 0.0,
+                                "forecast_start_iso": "", "first_actual_iso": "", "window_all_future": False}
+    else:
+        view, flow = _cash_flow(user_id, view, window_start, window_end)
+
+    categories = load_categories(user_id)
+    state_query = view.query()
+    return {
+        **flow,
+        "view": view,
+        "accounts": accounts,
+        "invalid_window": invalid,
+        "chips": view.chips({int(c["id"]): (c.get("label") or c["name"]) for c in categories},
+                            {int(a["id"]): a["name"] for a in accounts}),
+        "categories": categories,
+        "state_query": state_query,
+        "page_next": f"/ledger?{state_query}",
+        "section_next": f"/ledger/table?{state_query}",
+        "start": window_start.isoformat(),
+        "end": window_end.isoformat(),
+        "today_iso": date.today().isoformat(),
+    }
+
+
+def _transaction_rows(user_id: int, view: "ledger.LedgerView", accounts: List[Dict[str, Any]],
+                      window_start: date, window_end: date) -> Tuple["ledger.LedgerView", List[Dict[str, Any]]]:
+    """transactions: the picked accounts' imported rows (every account's when
+    none, or all, are picked), newest first, each naming its account."""
+    known = {int(a["id"]) for a in accounts}
+    picked = tuple(account_id for account_id in view.account_ids if account_id in known)
+    if set(picked) == known:
+        picked = ()
+    view = replace(view, account_ids=picked)
+    rows: List[Dict[str, Any]] = []
+    for account in accounts:
+        if picked and int(account["id"]) not in picked:
+            continue
+        for row in load_actual_transactions(user_id, account, window_start, window_end):
+            row["account_name"] = account["name"]
+            rows.append(row)
+    rows.sort(key=lambda row: (row["date"], row["id"]), reverse=True)
+    return view, ledger.filter_rows(user_id, rows, view, window_start, window_end)
+
+
+def _cash_flow(user_id: int, view: "ledger.LedgerView", window_start: date,
+               window_end: date) -> Tuple["ledger.LedgerView", Dict[str, Any]]:
+    """cash flow: one account's rows for the window, its forecast and its
+    running balance."""
     selected, fell_back = ledger.resolve_account(user_id, view.account_id)
     if selected:
         view = replace(view, account_id=int(selected["id"]))
@@ -52,20 +105,11 @@ def _ledger_context(user: Dict[str, Any], start: str, end: str, account: str, q:
     rows = shown if view.filtered else add_month_summary_rows(ledger_rows, window_start, window_end, start_balance)
     payments = sum(tx["income"] for tx in transactions)
     charges = sum(tx["expense"] for tx in transactions)
-
-    categories = load_categories(user_id)
-    state_query = view.query()
-    page_next = f"/ledger?{state_query}"
     first_actual = account_first_date(user_id, selected)
-    return {
-        "view": view,
+    return view, {
         "account": selected,
-        "accounts": load_accounts(user_id),
         "fell_back": fell_back,
-        "invalid_window": invalid,
         "rows": rows,
-        "chips": view.chips({int(c["id"]): (c.get("label") or c["name"]) for c in categories}),
-        "categories": categories,
         "has_forecast": any(row.get("row_type") != "month_summary" and row.get("type") != "actual"
                             and not row.get("due_not_posted") for row in rows),
         "current_balance": current_balance,
@@ -75,19 +119,14 @@ def _ledger_context(user: Dict[str, Any], start: str, end: str, account: str, q:
         "forecast_start_iso": (cutover + timedelta(days=1)).isoformat() if cutover else "",
         "first_actual_iso": first_actual.isoformat() if first_actual else "",
         "window_all_future": bool(cutover and window_start > cutover),
-        "state_query": state_query,
-        "page_next": page_next,
-        "section_next": f"/ledger/table?{state_query}",
-        "start": window_start.isoformat(),
-        "end": window_end.isoformat(),
-        "today_iso": date.today().isoformat(),
     }
 
 
 @router.get("/ledger", response_class=HTMLResponse)
-def ledger_page(request: Request, user: CurrentUser, start: str = "", end: str = "", account: str = "", q: str = "",
-                category: List[str] = Query([]), merchant: str = "", msg: str = "", err: int = 0):
-    context = _ledger_context(user, start, end, account, q, category, merchant)
+def ledger_page(request: Request, user: CurrentUser, start: str = "", end: str = "", mode: str = "",
+                account: List[str] = Query([]), q: str = "", category: List[str] = Query([]), merchant: str = "",
+                msg: str = "", err: int = 0):
+    context = _ledger_context(user, start, end, mode, account, q, category, merchant)
     if context["invalid_window"]:
         msg, err = "Invalid date filter. Using saved/default range.", 1
     elif context["fell_back"]:
@@ -96,9 +135,10 @@ def ledger_page(request: Request, user: CurrentUser, start: str = "", end: str =
 
 
 @router.get("/ledger/table", response_class=HTMLResponse)
-def ledger_table(request: Request, user: CurrentUser, start: str = "", end: str = "", account: str = "", q: str = "",
-                 category: List[str] = Query([]), merchant: str = "", msg: str = "", err: int = 0):
-    context = _ledger_context(user, start, end, account, q, category, merchant)
+def ledger_table(request: Request, user: CurrentUser, start: str = "", end: str = "", mode: str = "",
+                 account: List[str] = Query([]), q: str = "", category: List[str] = Query([]), merchant: str = "",
+                 msg: str = "", err: int = 0):
+    context = _ledger_context(user, start, end, mode, account, q, category, merchant)
     return render_part(request, "_ledger_section.html", msg, err, section_only=True, **context)
 
 

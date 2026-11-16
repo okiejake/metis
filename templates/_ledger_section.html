@@ -1,12 +1,18 @@
 {% import "_parts.html" as parts %}
 {% import "_statement_macros.html" as stmt %}
-{# One account's ledger: its summary cards and its rows. The page shows it
-   whole; GET /ledger/table returns it alone, for static/partial.js to swap in
-   after a background action. A filter hides the balance, the summary cards and
-   the month summaries, because the rows shown are no longer the account's
-   run-down. #}
+{# The ledger's table, in either mode (#124). The page shows it whole; GET
+   /ledger/table returns it alone, for static/partial.js to swap in after a
+   background action.
+   - transactions: every picked account's imported rows, newest first, each
+     naming its account. Several accounts' totals add up to nothing real, so
+     there is no balance, no summary cards and no type (every row is actual).
+   - cash flow: one account's run-down. A filter hides the balance, the summary
+     cards and the month summaries, because the rows shown are no longer the
+     account's run-down. #}
 {% set filtered = view.filtered %}
-{% set columns = 8 if filtered else 9 %}
+{% set transactions = view.transactions %}
+{% set run_down = not transactions and not filtered %}
+{% set columns = 9 if run_down else 8 %}
 {# A link that opens a row's edit form: in the dialog over the table
    (static/tx-edit.js), or as a page without script. #}
 {% macro edit_link(row, cls) -%}
@@ -28,7 +34,7 @@
   </div>
   {% endif %}
 
-  {% if not filtered %}
+  {% if run_down %}
   <div class="summary-grid compact-grid">
     <article class="card compact-card">
       <h3>current balance</h3>
@@ -70,13 +76,14 @@
       <thead>
         <tr>
           <th>date</th>
+          {% if transactions %}<th>account</th>{% endif %}
           <th>description</th>
           <th>bill</th>
           <th>category</th>
-          <th>type</th>
+          {% if not transactions %}<th>type</th>{% endif %}
           <th>payments</th>
           <th>charges</th>
-          {% if not filtered %}<th>balance</th>{% endif %}
+          {% if run_down %}<th>balance</th>{% endif %}
           <th></th>
         </tr>
       </thead>
@@ -114,6 +121,7 @@
             {% endif %}
             {{ row.date }}
           </td>
+          {% if transactions %}<td class="ledger-account-cell"><div class="fade">{{ row.account_name|lower }}</div></td>{% endif %}
           {# Text never wraps here: a long cell fades out at its edge. #}
           <td class="ledger-description"><div class="fade">
             {% if row.statement %}
@@ -136,16 +144,18 @@
             {% elif row.category_name %}{{ parts.category_pill(row.category_name, row.category_color) }}
             {% endif %}
           </div></td>
+          {% if not transactions %}
           <td class="ledger-type">
             <span class="table-pill type-{{ row.type }}">{{ row.type }}</span>
             {% if row.due_not_posted %}
             <span class="table-pill due-pill" title="due today — your imported data ends today, so this may simply not have posted yet. it still counts toward the projected balance.">due, not yet posted</span>
             {% endif %}
           </td>
+          {% endif %}
           <td class="amount-value ledger-payments{{ '' if row.income > 0 else ' is-empty' }}" data-label="payments">{% if row.income > 0 %}${{ row.income|currency }}{% else %}-{% endif %}</td>
           {% set statement_out = row.type == 'card' and row.income == 0 %}
           <td class="amount-value negative ledger-charges{{ '' if row.expense > 0 or statement_out else ' is-empty' }}" data-label="charges">{% if row.expense > 0 or statement_out %}${{ row.expense|currency }}{% else %}-{% endif %}</td>
-          {% if not filtered %}
+          {% if run_down %}
           <td class="amount-value ledger-balance {{ 'negative' if row.running_balance < 0 else '' }}{% if row.date.isoformat() == today_iso %} today-balance{% endif %}" data-label="balance">${{ row.running_balance|currency }}</td>
           {% endif %}
           <td class="row-action-cell">

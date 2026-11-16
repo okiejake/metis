@@ -30,7 +30,9 @@ def client(db, user_id):
 
 
 def page(client, **params):
-    params = {"start": START.isoformat(), "end": END.isoformat(), **params}
+    """The ledger in cash flow, one account at a time (see test_ledger_modes.py
+    for transactions)."""
+    params = {"start": START.isoformat(), "end": END.isoformat(), "mode": "cash-flow", **params}
     return client.get("/ledger", params=params).text
 
 
@@ -226,7 +228,8 @@ def test_actions_post_in_the_background_and_keep_the_view(client, accounts, mont
 
 
 def test_the_ledger_table_comes_alone(client, accounts, month):
-    response = client.get("/ledger/table", params={"start": START.isoformat(), "end": END.isoformat()})
+    response = client.get("/ledger/table", params={"start": START.isoformat(), "end": END.isoformat(),
+                                                   "mode": "cash-flow"})
     assert response.status_code == 200
     assert 'id="ledger-section"' in response.text and "<html" not in response.text
 

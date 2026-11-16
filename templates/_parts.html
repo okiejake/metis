@@ -309,21 +309,34 @@
 </li>
 {%- endmacro %}
 
-{# The ledger's filter: the account, a search of descriptions, bills and notes,
-   and categories ("all" first, then uncategorized, then each one). Apply
-   submits it once, as an address. static/ledger-filter.js narrows the category
-   list as you type and keeps "all" apart from the other picks. #}
+{# The ledger's filter: the accounts, a search of descriptions, bills and
+   notes, and categories ("all" first, then uncategorized, then each one). In
+   transactions it picks accounts, several at a time and all of them unless
+   narrowed; in cash flow it picks the one account shown. Apply submits it once,
+   as an address. static/ledger-filter.js narrows the category list as you type
+   and keeps "all" apart from the other picks. #}
 {% macro filter_dialog(view, accounts, categories) -%}
 <details class="filter-popover">
   <summary class="button-link neu-press filter-button"><i data-lucide="filter" class="menu-icon" aria-hidden="true"></i> filter</summary>
   <div class="filter-panel neu-raised">
     <form method="get" action="{{ base_path() }}/ledger" class="filter-form">
+      <input type="hidden" name="mode" value="{{ view.mode }}" />
       {% if view.start %}<input type="hidden" name="start" value="{{ view.start }}" /><input type="hidden" name="end" value="{{ view.end }}" />{% endif %}
       <div class="filter-top">
         <span class="filter-label">filter</span>
         <a class="button-link filter-cancel" href="{{ base_path() }}{{ view.url() }}" data-filter-cancel>cancel</a>
         <button type="submit" class="button-link filter-apply neu-press">apply</button>
       </div>
+      {% if view.transactions %}
+      <fieldset class="filter-field filter-accounts">
+        <legend>accounts</legend>
+        <ul class="filter-category-list">
+          {% for a in accounts %}
+          <li class="filter-category"><label><input type="checkbox" name="account" value="{{ a.id }}"{{ ' checked' if not view.account_ids or a.id in view.account_ids else '' }} /> <span>{% filter lower %}{{ a.name }}{% endfilter %}</span></label></li>
+          {% endfor %}
+        </ul>
+      </fieldset>
+      {% else %}
       <label class="filter-field">account
         <select name="account">
           {% for a in accounts %}
@@ -331,6 +344,7 @@
           {% endfor %}
         </select>
       </label>
+      {% endif %}
       <label class="filter-field">search
         <input type="search" name="q" value="{{ view.q }}" maxlength="200" placeholder="description, bill or note" />
       </label>
