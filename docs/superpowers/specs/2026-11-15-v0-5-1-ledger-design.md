@@ -482,4 +482,4 @@ stands.
 - An edit has no undo. Cancel discards it, and each value can be set back.
 - Card statement rows keep their description and status. They are not bills.
 - The note shows beside the description on one line, and fades with it.
-- When the form opens, focus lands on its header, so no list pops open over it.
+- When the form opens, focus lands on its header, so no list opens over it.
