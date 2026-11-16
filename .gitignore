@@ -52,3 +52,5 @@ htmlcov/
 METIS_APP_OVERVIEW.md
 _incoming
 Metis.command
+# DuckDB write logs sit beside the database and hold the same data.
+*.duckdb.wal

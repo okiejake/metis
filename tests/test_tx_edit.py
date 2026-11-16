@@ -239,3 +239,34 @@ def test_a_card_charge_is_never_made_a_transfer(client, db, user_id, accounts):
     response = save(client, charge, transfer_field="1", transfer="1")
     assert "err=1" in response.headers["location"]
     assert tx_row(db, charge)["is_transfer"] is False
+
+
+# --- The form's layout (#125) -------------------------------------------------------------
+
+
+def original_line(html):
+    return re.search(r'<div class="split-line split-original" data-split-original>(.*?)\n      </div>', html, re.S).group(1)
+
+
+def test_the_note_sits_beside_the_bill_on_the_first_line(client, store):
+    line = original_line(form(client, store["tx"]))
+    assert line.index('name="bill"') < line.index('name="note"') < line.index('name="original_amount"')
+
+
+def test_the_amount_cannot_be_edited_until_a_split_is_added(client, db, user_id, store):
+    assert re.search(r'name="original_amount"[^>]*readonly', form(client, store["tx"]))
+    db.save_transaction_splits(user_id, store["tx"], [{"category_id": store["home"], "amount": 30.00, "note": ""}])
+    assert not re.search(r'name="original_amount"[^>]*readonly', form(client, store["tx"]))
+
+
+def test_the_split_layout_is_the_only_view(client, store):
+    html = form(client, store["tx"])
+    assert "data-split-on" not in html
+    assert re.search(r'<a [^>]*data-split-add[^>]*>add split</a>', html)
+
+
+def test_the_chosen_category_shows_as_a_pill_with_its_color(client, db, user_id, store):
+    db.execute("UPDATE categories SET color = '#123456' WHERE id = ?", [store["home"]])
+    html = form(client, store["tx"])
+    assert re.search(r'<select name="category"[^>]*data-picker-pill', html)
+    assert re.search(rf'<option value="{store["home"]}"[^>]*data-color="#123456"', html)

@@ -2467,6 +2467,52 @@ body.amounts-hidden .amount-sensitive {
 .ledger-cell-action {
   font-size: 0.78rem;
 }
+/* Rows are grouped by date (#125): a thin row with the date in a pill. */
+.ledger-table .date-row td {
+  padding: 0.45rem 0.5rem 0.2rem;
+  border-bottom: 0;
+  background: transparent;
+}
+.ledger-table .date-row:hover {
+  background: transparent;
+}
+.date-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  padding: 0.1rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--primary-ink);
+  background: var(--surface-muted);
+}
+.ledger-table .ledger-amount,
+.ledger-table .ledger-balance {
+  text-align: right;
+}
+.month-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3rem 1.2rem;
+}
+.ledger-description .card-expand-toggle {
+  margin-right: 0.15rem;
+}
+/* The edit button shows on the row under the pointer, or holding focus.
+   Where there is no hover (a touch screen) it always shows. */
+@media (hover: hover) {
+  .ledger-row .row-edit {
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+  .ledger-row:hover .row-edit,
+  .ledger-row:focus-within .row-edit {
+    opacity: 1;
+  }
+}
 .ledger-category-link {
   text-decoration: none;
 }
@@ -2552,13 +2598,9 @@ body.amounts-hidden .amount-sensitive {
 .split-head,
 .split-line {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1.1fr) minmax(0, 1fr) 6.5rem 2rem;
   gap: 0.5rem;
   align-items: center;
-}
-[data-split-open] .split-head,
-[data-split-open] .split-line {
-  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1.1fr) 6.5rem minmax(0, 1fr) 2rem;
 }
 .split-head {
   font-size: 0.76rem;
@@ -2578,12 +2620,32 @@ body.amounts-hidden .amount-sensitive {
   width: 2rem;
   height: 2rem;
 }
-.tx-edit-form:not([data-split-open]) .split-amount,
-.tx-edit-form:not([data-split-open]) .split-note,
-.tx-edit-form:not([data-split-open]) .split-add,
-.tx-edit-form:not([data-split-open]) .split-off,
-.tx-edit-form[data-split-open] .split-on {
+.tx-edit-form:not([data-split-open]) .split-off {
   display: none;
+}
+/* Until there is a split, the first line's amount reads as plain text. */
+.split-amount input[readonly] {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+}
+/* The chosen category as a pill over the picker (data-picker-pill). */
+.picker-pill {
+  position: absolute;
+  left: 0.55rem;
+  top: 50%;
+  transform: translateY(-50%);
+  max-width: calc(100% - 1.1rem);
+  overflow: hidden;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.picker:not(.has-pill) .picker-pill {
+  display: none;
+}
+.picker.has-pill .picker-input {
+  color: transparent;
 }
 .split-bar {
   display: flex;
@@ -2632,18 +2694,18 @@ body.amounts-hidden .amount-sensitive {
   .split-head {
     display: none;
   }
-  /* A line takes two rows: category, bill and remove; then amount and note. */
-  [data-split-open] .split-line {
+  /* A line takes two rows: category, bill and remove; then note and amount. */
+  .split-line {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 2rem;
-    grid-template-areas: "category bill remove" "amount note note";
+    grid-template-areas: "category bill remove" "note amount amount";
     padding-bottom: 0.5rem;
     border-bottom: 1px solid var(--line);
   }
-  [data-split-open] .split-category { grid-area: category; }
-  [data-split-open] .split-bill { grid-area: bill; }
-  [data-split-open] .split-amount { grid-area: amount; }
-  [data-split-open] .split-note { grid-area: note; }
-  [data-split-open] .split-remove { grid-area: remove; }
+  .split-line .split-category { grid-area: category; }
+  .split-line .split-bill { grid-area: bill; }
+  .split-line .split-note { grid-area: note; }
+  .split-line .split-amount { grid-area: amount; }
+  .split-line .split-remove { grid-area: remove; }
   .split-notice {
     flex-basis: 100%;
     text-align: right;
@@ -2652,8 +2714,8 @@ body.amounts-hidden .amount-sensitive {
 .merchant-transfer {
   margin: 0 0 0.8rem;
 }
-/* On a phone each ledger row takes two lines: date, description and amount,
-   then bill, category, type and balance. */
+/* On a phone each ledger row takes two lines: description and amount, then
+   category, bill, type and balance. The date rows stay thin rows above them. */
 @media (max-width: 760px) {
   .ledger-table thead {
     display: none;
@@ -2675,8 +2737,8 @@ body.amounts-hidden .amount-sensitive {
     padding: 0;
     border: 0;
   }
-  /* First line: date, description, amount and the row's menu. An empty,
-     full-width item after them breaks the line, so bill, category, type and
+  /* First line: description, amount and the edit button. An empty,
+     full-width item after them breaks the line, so category, bill, type and
      balance always start the second. */
   .ledger-table tr.ledger-row:not(.month-summary-row)::after {
     content: "";
@@ -2690,14 +2752,12 @@ body.amounts-hidden .amount-sensitive {
     width: auto;
     max-width: 100%;
   }
-  .ledger-table .ledger-date { order: 1; flex: 0 0 auto; }
   .ledger-table .ledger-description { order: 2; flex: 1 1 0; min-width: 0; }
-  .ledger-table .ledger-payments { order: 3; flex: 0 0 auto; }
-  .ledger-table .ledger-charges { order: 4; flex: 0 0 auto; }
+  .ledger-table .ledger-amount { order: 3; flex: 0 0 auto; }
   .ledger-table .row-action-cell { order: 5; flex: 0 0 auto; width: auto; }
-  .ledger-table .ledger-account-cell { order: 7; flex: 0 1 auto; min-width: 0; }
-  .ledger-table .ledger-bill { order: 7; flex: 0 0 auto; }
-  .ledger-table .ledger-category { order: 8; flex: 0 1 auto; }
+  .ledger-table .ledger-category { order: 7; flex: 0 1 auto; }
+  .ledger-table .ledger-bill { order: 8; flex: 0 0 auto; }
+  .ledger-table .ledger-account-cell { order: 8; flex: 0 1 auto; min-width: 0; }
   .ledger-table .ledger-type { order: 9; flex: 0 0 auto; }
   .ledger-table .ledger-balance { order: 10; flex: 0 0 auto; margin-left: auto; }
   .ledger-table .category-pill {
@@ -2724,6 +2784,8 @@ body.amounts-hidden .amount-sensitive {
     padding: 0.55rem 0.5rem;
   }
   .ledger-table tr.month-summary-row > td,
+  .ledger-table tr.date-row,
+  .ledger-table tr.date-row > td,
   .ledger-table tr.forecast-divider-row,
   .ledger-table tr.forecast-divider-row > td,
   .ledger-table tr.card-detail-row:not(.hidden),

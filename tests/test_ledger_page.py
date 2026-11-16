@@ -59,7 +59,7 @@ def month(db, user_id, accounts):
 
 
 def test_every_account_has_the_same_columns(client, accounts, month):
-    expected = ["date", "description", "bill", "category", "type", "payments", "charges", "balance", ""]
+    expected = ["category", "bill", "type", "description", "amount", "balance", ""]
     assert header(page(client)) == expected
     assert header(page(client, account=accounts["Example Card"])) == expected
 
@@ -189,6 +189,41 @@ def test_a_split_row_shows_every_lines_category_and_bill(client, db, user_id, ac
     category = re.search(r'<td class="ledger-category">(.*?)</td>', row, re.S).group(1)
     assert re.findall(r'class="category-pill">.*?</span>(\w+)</span>', category) == ["home", "garden"]
     assert "example gym" in bill_cell(row)
+
+
+# --- Dates, amounts and month summaries (#125) --------------------------------------------
+
+
+def test_rows_are_grouped_under_a_thin_row_for_each_date(client, db, user_id, accounts, month):
+    checking_import(db, user_id, accounts, TODAY - timedelta(days=10), "EXAMPLE BAKERY", -6.00)
+    html = page(client)
+    day = (TODAY - timedelta(days=10)).isoformat()
+    assert len(re.findall(rf'<tr class="date-row">\s*<td colspan="\d+"><span class="date-pill">{day}</span>', html)) == 1
+    assert 'class="ledger-date"' not in html
+
+
+def test_one_amount_column_signs_money_out(client, db, user_id, accounts, month):
+    checking_import(db, user_id, accounts, TODAY - timedelta(days=8), "EXAMPLE EMPLOYER PAYROLL", 2000.00)
+    html = page(client)
+    grocer = re.search(r'<td class="amount-value ledger-amount([^"]*)"[^>]*>([^<]*)</td>', row_of(html, "EXAMPLE GROCER 0042"))
+    assert "negative" in grocer.group(1) and grocer.group(2).strip() == "-$40.00"
+    payroll = re.search(r'<td class="amount-value ledger-amount([^"]*)"[^>]*>([^<]*)</td>', row_of(html, "EXAMPLE EMPLOYER PAYROLL"))
+    assert "negative" not in payroll.group(1) and payroll.group(2).strip() == "$2,000.00"
+
+
+def test_a_month_summary_reads_its_month_count_credits_debits_and_net(client, db, user_id, accounts, month):
+    html = page(client)
+    summary = re.search(r'<tr class="ledger-row month-summary-row">(.*?)</tr>', html, re.S).group(1)
+    words = " ".join(re.sub(r"<[^>]+>", " ", summary).split())
+    assert re.fullmatch(r"[a-z]+ \d{4} summary transactions: \d+ credits: \$[\d,.]+ debits: \$[\d,.]+ net: -?\$[\d,.]+", words)
+
+
+def test_a_statements_expand_button_sits_beside_its_title(client, db, user_id, accounts, month):
+    add_imported(db, user_id, accounts["Example Card"], "Example Card", TODAY - timedelta(days=40), "ACME BOOKS", -20.00)
+    html = page(client)
+    cells = re.findall(r'<td class="ledger-description">(.*?)</td>', html, re.S)
+    statement = [cell for cell in cells if "js-card-toggle" in cell]
+    assert statement and re.search(r'js-card-toggle.*?</button>\s*<a href="[^"]*statement', statement[0], re.S)
 
 
 # --- Settling a row in place -------------------------------------------------------------------

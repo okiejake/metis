@@ -66,7 +66,7 @@ def test_the_ledger_opens_on_transactions_from_every_account_newest_first(client
 
 def test_transactions_name_each_rows_account_and_have_no_type_or_balance(client, accounts, spending):
     html = page(client)
-    assert header(html) == ["date", "account", "description", "bill", "category", "payments", "charges", ""]
+    assert header(html) == ["category", "bill", "account", "description", "amount", ""]
     books = re.search(r"<tr[^>]*>(?:(?!</tr>).)*ACME BOOKS(?:(?!</tr>).)*</tr>", html, re.S).group(0)
     assert re.search(r'<td class="ledger-account-cell">(?:<[^>]+>)*\s*example card', books)
 
@@ -107,7 +107,7 @@ def test_the_refreshed_table_keeps_the_mode(client, accounts, spending):
     assert "mode=transactions" in section
     table = client.get("/ledger/table", params={"mode": "transactions", "start": START.isoformat(),
                                                 "end": END.isoformat()}).text
-    assert header(table)[1] == "account"
+    assert header(table)[2] == "account"
 
 
 # --- cash flow --------------------------------------------------------------------------
@@ -115,13 +115,13 @@ def test_the_refreshed_table_keeps_the_mode(client, accounts, spending):
 
 def test_cash_flow_is_one_accounts_run_down(client, accounts, spending):
     html = page(client, mode="cash-flow")
-    assert header(html) == ["date", "description", "bill", "category", "type", "payments", "charges", "balance", ""]
+    assert header(html) == ["category", "bill", "type", "description", "amount", "balance", ""]
     assert descriptions(html) == ["EXAMPLE GROCER 0042"]
     assert "expected transaction" in html
 
 
 def test_an_unknown_mode_is_transactions(client, accounts, spending):
-    assert header(page(client, mode="sideways"))[1] == "account"
+    assert header(page(client, mode="sideways"))[2] == "account"
 
 
 # --- switching ----------------------------------------------------------------------------

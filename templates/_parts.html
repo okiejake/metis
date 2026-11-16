@@ -25,10 +25,10 @@
    submits the picker's form, as in a list row; in a form it only sets the
    field. #}
 {% macro _picker_option(category, selected) -%}
-<option value="{{ category.id }}" {{ 'selected' if category.id == selected else '' }}>{% filter lower %}{{ category.label or category.name }}{% endfilter %}</option>
+<option value="{{ category.id }}" {{ 'selected' if category.id == selected else '' }} data-color="{{ category.color or '' }}">{% filter lower %}{{ category.label or category.name }}{% endfilter %}</option>
 {%- endmacro %}
-{% macro category_picker(field, categories, selected=None, extras=False, transfer=True, submit=False, label="category") -%}
-<select name="{{ field }}" class="category-picker" data-category-picker{% if submit %} data-picker-submit{% endif %} aria-label="{{ label }}">
+{% macro category_picker(field, categories, selected=None, extras=False, transfer=True, submit=False, label="category", pill=False) -%}
+<select name="{{ field }}" class="category-picker" data-category-picker{% if submit %} data-picker-submit{% endif %}{% if pill %} data-picker-pill{% endif %} aria-label="{{ label }}">
   <option value="">no category</option>
   {% for top in categories|rejectattr('parent_id') %}
   {% set children = categories|selectattr('parent_id', 'equalto', top.id)|list %}
@@ -291,14 +291,14 @@
 </select>
 {%- endmacro %}
 
-{# One split line in the edit form: a category, a bill, an amount and a note,
+{# One split line in the edit form: a category, a bill, a note and an amount,
    and a button that takes the line off. #}
 {% macro split_line(line, categories, bills) -%}
 <div class="split-line" data-split-line>
-  <div class="split-cell split-category">{{ category_picker('part_category', categories, line.category_id, label="line category") }}</div>
+  <div class="split-cell split-category">{{ category_picker('part_category', categories, line.category_id, label="line category", pill=True) }}</div>
   <div class="split-cell split-bill">{{ bill_select('part_bill', bills, line.bill_id) }}</div>
-  <div class="split-cell split-amount"><input type="number" name="part_amount" step="0.01" min="0" value="{{ '%.2f'|format(line.amount) if line.amount else '' }}" placeholder="0.00" aria-label="line amount" data-split-amount /></div>
   <div class="split-cell split-note"><input type="text" name="part_note" value="{{ line.note or '' }}" maxlength="500" placeholder="note" aria-label="line note" /></div>
+  <div class="split-cell split-amount"><input type="number" name="part_amount" step="0.01" min="0" value="{{ '%.2f'|format(line.amount) if line.amount else '' }}" placeholder="0.00" aria-label="line amount" data-split-amount /></div>
   <button type="button" class="icon-button split-remove" data-split-remove aria-label="remove this line"><i data-lucide="x" class="menu-icon" aria-hidden="true"></i></button>
 </div>
 {%- endmacro %}

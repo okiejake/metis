@@ -8,6 +8,9 @@
 // - With data-picker-submit (a list row) choosing submits the form; otherwise
 //   choosing only sets the field.
 //
+// - With data-picker-pill, the chosen category shows as it does in the table, a
+//   pill with its color dot, until the box is focused to type.
+//
 // window.metisPicker.init(root) wires the pickers inside root; partial.js calls
 // it after it replaces a section. A script that sets the select's value fires
 // "picker:sync" on it, and the box shows the new choice.
@@ -82,6 +85,25 @@
     select.setAttribute('aria-hidden', 'true');
     select.after(box);
     if (nameField) { nameField.classList.add('hidden'); }
+
+    // The chosen category as a pill over the box, while the box isn't focused.
+    const badge = select.hasAttribute('data-picker-pill') ? document.createElement('span') : null;
+    if (badge) {
+      badge.className = 'category-pill picker-pill';
+      badge.setAttribute('aria-hidden', 'true');
+      box.appendChild(badge);
+    }
+    function showPill() {
+      if (!badge) { return; }
+      const option = select.selectedOptions[0];
+      const chosen = Boolean(option && option.value && option.value !== 'new') && document.activeElement !== input;
+      box.classList.toggle('has-pill', chosen);
+      if (!chosen) { return; }
+      const dot = document.createElement('span');
+      dot.className = 'category-dot';
+      dot.style.background = option.dataset.color || 'var(--muted)';
+      badge.replaceChildren(dot, document.createTextNode(option.textContent.trim()));
+    }
 
     const items = itemsOf(select);
     let shown = [];
@@ -160,6 +182,7 @@
         input.value = item.value ? item.text : '';
       }
       close(false);
+      showPill();
       select.dispatchEvent(new Event('change', { bubbles: true }));
       if (submits && form && select.value !== '') {
         if (typeof form.requestSubmit === 'function') { form.requestSubmit(); } else { form.submit(); }
@@ -167,8 +190,9 @@
     }
 
     input.value = currentText();
-    select.addEventListener('picker:sync', () => { input.value = currentText(); });
-    input.addEventListener('focus', () => { input.select(); open(); });
+    showPill();
+    select.addEventListener('picker:sync', () => { input.value = currentText(); showPill(); });
+    input.addEventListener('focus', () => { box.classList.remove('has-pill'); input.select(); open(); });
     input.addEventListener('input', () => { active = -1; open(); move(1); });
     input.addEventListener('keydown', (event) => {
       if (event.key === 'ArrowDown') { event.preventDefault(); if (list.classList.contains('hidden')) { open(); } move(1); }
@@ -191,7 +215,7 @@
       event.preventDefault();
       choose(shown[Number(li.dataset.index)]);
     });
-    input.addEventListener('blur', () => close(true));
+    input.addEventListener('blur', () => { close(true); showPill(); });
   }
 
   function init(root) {

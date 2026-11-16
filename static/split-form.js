@@ -1,12 +1,15 @@
 // The split lines in the edit form (templates/_tx_edit.html), wherever the form
 // sits: in the ledger's dialog or on its own page.
 //
-// - "split" adds the first line at half the transaction; the original line
-//   keeps the rest, so a split starts as two lines, half and half.
+// - The form has one layout. The first line's amount is the rest of the
+//   transaction, so it can't be edited until there is a split.
+// - The first "add split" adds a line at half the transaction; the original
+//   line keeps the rest, so a split starts as two lines, half and half. Each
+//   later one adds a blank line.
 // - The lines always add up to the transaction. Changing a line's amount
 //   changes the original's; changing the original's changes the final line's.
-// - "add line" adds a blank line, and each added line can be taken off. With
-//   none left, the transaction is no longer split. "un-split" takes them all off.
+// - Each added line can be taken off. With none left, the transaction is no
+//   longer split. "un-split" takes them all off.
 // - Picking a bill on a line sets the line's category to the bill's.
 // - Save waits until the split is valid, and the notice beside it says why.
 //
@@ -91,23 +94,27 @@
     return line;
   }
 
+  // Split or not: the first line's amount is editable only while split.
+  function mark(form, open) {
+    form.toggleAttribute('data-split-open', open);
+    amountOf(linesOf(form)[0]).readOnly = !open;
+  }
+
   function close(form) {
     form.querySelectorAll('[data-split-line]').forEach((line) => line.remove());
-    form.removeAttribute('data-split-open');
+    mark(form, false);
     settle(form);
   }
 
   document.addEventListener('click', (event) => {
     const form = formOf(event.target);
     if (!form) { return; }
-    if (event.target.closest('[data-split-on]')) {
+    if (event.target.closest('[data-split-add]')) {
       event.preventDefault();
-      form.setAttribute('data-split-open', '');
-      addLine(form, 'data-split-first');
-      settle(form);
-      check(form);
-    } else if (event.target.closest('[data-split-add]')) {
-      const line = addLine(form, 'data-split-blank');
+      const first = !form.hasAttribute('data-split-open');
+      mark(form, true);
+      const line = addLine(form, first ? 'data-split-first' : 'data-split-blank');
+      if (first) { settle(form); }
       check(form);
       const input = line.querySelector('.picker-input') || amountOf(line);
       if (input) { input.focus(); }
