@@ -44,7 +44,8 @@ def _ledger_context(user: Dict[str, Any], start: str, end: str, mode: str, accou
     if view.transactions:
         view, rows = _transaction_rows(user_id, view, accounts, window_start, window_end)
         flow: Dict[str, Any] = {"account": None, "fell_back": False, "rows": rows, "has_forecast": False,
-                                "current_balance": 0.0, "payments": 0.0, "charges": 0.0, "projected_balance": 0.0,
+                                "current_balance": 0.0, "transaction_count": 0, "payments": 0.0, "charges": 0.0,
+                                "projected_balance": 0.0,
                                 "forecast_start_iso": "", "first_actual_iso": "", "window_all_future": False}
     else:
         view, flow = _cash_flow(user_id, view, window_start, window_end)
@@ -113,6 +114,7 @@ def _cash_flow(user_id: int, view: "ledger.LedgerView", window_start: date,
         "has_forecast": any(row.get("row_type") != "month_summary" and row.get("type") != "actual"
                             and not row.get("due_not_posted") for row in rows),
         "current_balance": current_balance,
+        "transaction_count": len(transactions),
         "payments": payments,
         "charges": charges,
         "projected_balance": start_balance + payments - charges,

@@ -3,12 +3,6 @@
 {% block content %}
 <div class="page-bar ledger-bar">
   <div class="ledger-bar-left">
-    {# The two modes (#124): every account's transactions, or one account's cash flow. #}
-    <nav class="ledger-modes" aria-label="ledger mode">
-      {% for mode, label in [('transactions', 'transactions'), ('cash-flow', 'cash flow')] %}
-      <a class="ledger-mode neu-press{{ ' is-active' if view.mode == mode else '' }}" href="{{ base_path() }}{{ view.switch(mode) }}"{% if view.mode == mode %} aria-current="page"{% endif %}>{{ label }}</a>
-      {% endfor %}
-    </nav>
     {% if not view.transactions %}
     <span class="ledger-account">{% if account %}{{ account.name|lower }}{% else %}checking{% endif %}</span>
     {% endif %}
@@ -19,6 +13,13 @@
     <a class="button-link filter-clear" href="{{ base_path() }}{{ view.url(q='', category=[], merchant='') }}">clear</a>
     {% endif %}
   </div>
+  {# The two modes (#124): every account's transactions, or one account's
+     cash flow. One control in the middle of the bar, its halves joined. #}
+  <nav class="ledger-modes" aria-label="ledger mode">
+    {% for mode, label in [('transactions', 'transactions'), ('cash-flow', 'cash flow')] %}
+    <a class="ledger-mode{{ ' is-active' if view.mode == mode else '' }}" href="{{ base_path() }}{{ view.switch(mode) }}"{% if view.mode == mode %} aria-current="page"{% endif %}>{{ label }}</a>
+    {% endfor %}
+  </nav>
   <div class="ledger-bar-right">
     {{ parts.filter_dialog(view, accounts, categories) }}
     {% if has_forecast %}

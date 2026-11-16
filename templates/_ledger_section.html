@@ -12,7 +12,7 @@
 {% set filtered = view.filtered %}
 {% set transactions = view.transactions %}
 {% set run_down = not transactions and not filtered %}
-{% set columns = 7 if run_down else 6 %}
+{% set columns = 4 if run_down else 3 %}
 {# A link that opens a row's edit form: in the dialog over the table
    (static/tx-edit.js), or as a page without script. #}
 {% macro edit_link(row, cls) -%}
@@ -35,18 +35,30 @@
   {% endif %}
 
   {% if run_down %}
-  <div class="summary-grid compact-grid">
+  {# The same names as the month summaries: transactions, credits, debits and
+     net, between the balance now and the balance at the window's end. Each
+     card is as wide as what it holds. #}
+  {% set net = payments - charges %}
+  <div class="summary-grid compact-grid ledger-summary">
     <article class="card compact-card">
       <h3>current balance</h3>
       <p class="amount-value {{ 'negative' if current_balance < 0 else '' }}">${{ current_balance|currency }}</p>
     </article>
     <article class="card compact-card">
-      <h3>payments</h3>
+      <h3>transactions</h3>
+      <p class="amount-value">{{ transaction_count }}</p>
+    </article>
+    <article class="card compact-card">
+      <h3>credits</h3>
       <p class="amount-value positive">${{ payments|currency }}</p>
     </article>
     <article class="card compact-card">
-      <h3>charges</h3>
+      <h3>debits</h3>
       <p class="amount-value negative">${{ charges|currency }}</p>
+    </article>
+    <article class="card compact-card">
+      <h3>net</h3>
+      <p class="amount-value{{ ' negative' if net < 0 else '' }}">{{ '-' if net < 0 else '' }}${{ net|abs|currency }}</p>
     </article>
     <article class="card compact-card">
       <h3>projected balance</h3>
@@ -72,18 +84,10 @@
 
   {% if rows %}
   <div class="table-wrap">
+    {# No header row: each row is its description with its pills beside it
+       (type, or account in transactions, then category, then bill), each as
+       wide as its text, then the amount and the balance. #}
     <table class="ledger-table">
-      <thead>
-        <tr>
-          <th>category</th>
-          <th>bill</th>
-          <th>{{ 'account' if transactions else 'type' }}</th>
-          <th>description</th>
-          <th class="ledger-amount">amount</th>
-          {% if run_down %}<th class="ledger-balance">balance</th>{% endif %}
-          <th></th>
-        </tr>
-      </thead>
       <tbody>
         {% set ns = namespace(divider=false, day=none) %}
         {% for row in rows %}
@@ -118,38 +122,37 @@
         {% set actual = row.type == 'actual' %}
         {% set amount = row.income - row.expense %}
         <tr class="ledger-row {{ 'actual-row' if actual else 'forecast-row' }}{% if actual %} line-{{ row.line or 'none' }}{% endif %}{{ ' due-row' if row.due_not_posted else '' }}">
-          {# Text never wraps here: a long cell fades out at its edge. #}
-          <td class="ledger-category"><div class="fade">
-            {% if actual and not row.is_transfer and not (row.category_name or row.splits) %}
-            {% call edit_link(row, 'button-link ledger-cell-action') %}categorize{% endcall %}
-            {% elif actual and not row.is_transfer %}
-            {% call edit_link(row, 'ledger-category-link') %}{% if row.category_name %}{{ parts.category_pill(row.category_name, row.category_color) }}{% endif %}{% for part in row.splits or [] %}{{ parts.category_pill(part.category_name, part.category_color) }}{% endfor %}{% endcall %}
-            {% elif row.category_name %}{{ parts.category_pill(row.category_name, row.category_color) }}
-            {% endif %}
-          </div></td>
-          <td class="ledger-bill"><div class="fade">
-            {% if row.bill %}<span class="ledger-line-bill">{{ row.bill|lower }}</span>{% endif %}
-            {% for part in row.splits or [] if part.bill %}<span class="ledger-line-bill">{{ part.bill|lower }}</span>{% endfor %}
-            {% if row.unexpected %}<i data-lucide="triangle-alert" class="menu-icon unexpected-icon" role="img" aria-label="unexpected"></i>{% endif %}
-          </div></td>
-          {% if transactions %}
-          <td class="ledger-account-cell"><div class="fade">{{ row.account_name|lower }}</div></td>
-          {% else %}
-          <td class="ledger-type">
+          {# Text never wraps here: a long description fades out. The pill groups
+             take no box of their own, so an empty one adds no gap. #}
+          <td class="ledger-main"><div class="ledger-line">
+            <div class="ledger-description fade">
+              {% if row.statement %}
+              <button type="button" class="card-expand-toggle js-card-toggle" data-target="card-detail-{{ loop.index }}" aria-expanded="false" aria-label="show this statement's summary">›</button>
+              <a href="{{ stmt.statement_url(row.statement) }}">{{ row.description }}</a>
+              <span class="table-pill statement-pill">{{ row.statement.status_label|lower }}</span>
+              {% elif actual %}<span title="{{ row.description }}">{{ row.description }}</span>
+              {% else %}<span class="ledger-expected">expected transaction</span>{% endif %}
+              {% if row.note %}<span class="ledger-note" title="{{ row.note }}">{{ row.note }}</span>{% endif %}
+            </div>
+            {% if transactions %}
+            <span class="table-pill ledger-account-pill">{{ row.account_name|lower }}</span>
+            {% else %}
             <span class="table-pill type-{{ row.type }}">{{ row.type }}</span>
             {% if row.due_not_posted %}
             <span class="table-pill due-pill" title="due today — your imported data ends today, so this may simply not have posted yet. it still counts toward the projected balance.">due, not yet posted</span>
             {% endif %}
-          </td>
-          {% endif %}
-          <td class="ledger-description"><div class="fade">
-            {% if row.statement %}
-            <button type="button" class="card-expand-toggle js-card-toggle" data-target="card-detail-{{ loop.index }}" aria-expanded="false" aria-label="show this statement's summary">›</button>
-            <a href="{{ stmt.statement_url(row.statement) }}">{{ row.description }}</a>
-            <span class="table-pill statement-pill">{{ row.statement.status_label|lower }}</span>
-            {% elif actual %}<span title="{{ row.description }}">{{ row.description }}</span>
-            {% else %}<span class="ledger-expected">expected transaction</span>{% endif %}
-            {% if row.note %}<span class="ledger-note" title="{{ row.note }}">{{ row.note }}</span>{% endif %}
+            {% endif %}
+            <div class="ledger-category">
+              {% if actual and not row.is_transfer %}
+              {% call edit_link(row, 'ledger-category-link') %}{% if row.category_name or row.splits %}{% if row.category_name %}{{ parts.category_pill(row.category_name, row.category_color) }}{% endif %}{% for part in row.splits or [] %}{{ parts.category_pill(part.category_name, part.category_color) }}{% endfor %}{% else %}{{ parts.category_pill('uncategorized', none) }}{% endif %}{% endcall %}
+              {% elif row.category_name %}{{ parts.category_pill(row.category_name, row.category_color) }}
+              {% endif %}
+            </div>
+            <div class="ledger-bill">
+              {% if row.bill %}<span class="category-pill bill-pill">{{ row.bill|lower }}</span>{% endif %}
+              {% for part in row.splits or [] if part.bill %}<span class="category-pill bill-pill">{{ part.bill|lower }}</span>{% endfor %}
+              {% if row.unexpected %}<i data-lucide="triangle-alert" class="menu-icon unexpected-icon" role="img" aria-label="unexpected"></i>{% endif %}
+            </div>
           </div></td>
           <td class="amount-value ledger-amount{{ ' negative' if amount < 0 else '' }}" data-label="amount">{{ '-' if amount < 0 else '' }}${{ amount|abs|currency }}</td>
           {% if run_down %}

@@ -36,9 +36,15 @@ def page(client, **params):
     return client.get("/ledger", params=params).text
 
 
-def header(html):
-    thead = re.search(r'<table class="ledger-table">\s*<thead>(.*?)</thead>', html, re.S).group(1)
-    return [re.sub(r"<[^>]+>", "", cell).strip() for cell in re.findall(r"<th[^>]*>(.*?)</th>", thead, re.S)]
+def cells(row):
+    """A row's cells by class: the description and its pills, then the numbers."""
+    return [re.sub(r"\s.*", "", cls.replace("amount-value ", "")) for cls in re.findall(r'<td class="([^"]*)"', row)]
+
+
+def group(row, name):
+    """What a row shows in one of its pill groups: ledger-description,
+    ledger-category or ledger-bill."""
+    return re.search(rf'<div class="{name}[^"]*">(.*?)</div>', row, re.S).group(1)
 
 
 def checking_import(db, user_id, accounts, when, description, amount, **kwargs):
@@ -58,16 +64,33 @@ def month(db, user_id, accounts):
 # --- Columns and cards -----------------------------------------------------------------
 
 
-def test_every_account_has_the_same_columns(client, accounts, month):
-    expected = ["category", "bill", "type", "description", "amount", "balance", ""]
-    assert header(page(client)) == expected
-    assert header(page(client, account=accounts["Example Card"])) == expected
+def test_every_account_has_the_same_row_layout_and_no_header_row(client, db, user_id, accounts, month):
+    add_imported(db, user_id, accounts["Example Card"], "Example Card", TODAY - timedelta(days=3), "ACME BOOKS", -20.00)
+    for html, text in ((page(client), "EXAMPLE GROCER 0042"), (page(client, account=accounts["Example Card"]), "ACME BOOKS")):
+        assert "<thead" not in html
+        assert cells(row_of(html, text)) == ["ledger-main", "ledger-amount", "ledger-balance", "row-action-cell"]
+
+
+def test_description_then_type_category_and_bill_sit_side_by_side(client, db, user_id, accounts, month):
+    row = row_of(page(client), "EXAMPLE GROCER 0042")
+    order = [row.index(marker) for marker in ('class="ledger-description', 'class="table-pill type-actual',
+                                              'class="ledger-category', 'class="ledger-bill')]
+    assert order == sorted(order)
 
 
 def test_every_account_has_the_same_summary_cards(client, accounts, month):
     for html in (page(client), page(client, account=accounts["Example Card"])):
         cards = re.findall(r'<article class="card compact-card">\s*<h3>(.*?)</h3>', html)
-        assert cards == ["current balance", "payments", "charges", "projected balance"]
+        assert cards == ["current balance", "transactions", "credits", "debits", "net", "projected balance"]
+
+
+def test_the_summary_cards_count_and_total_what_the_month_summaries_do(client, db, user_id, accounts, month):
+    checking_import(db, user_id, accounts, TODAY - timedelta(days=8), "EXAMPLE EMPLOYER PAYROLL", 2000.00)
+    html = page(client)
+    value = lambda name: re.search(rf"<h3>{name}</h3>\s*<p[^>]*>([^<]*)</p>", html).group(1).strip()
+    summaries = re.findall(r"transactions: (\d+)", html)
+    assert int(value("transactions")) == sum(int(n) for n in summaries)
+    assert (value("credits"), value("debits"), value("net")) == ("$2,000.00", "$225.00", "$1,775.00")
 
 
 def test_the_page_names_the_account_it_shows(client, accounts, month):
@@ -86,15 +109,16 @@ def test_an_account_that_is_not_the_users_falls_back_to_the_default_checking_acc
 
 def test_a_filter_hides_the_balance_the_summary_cards_and_month_summaries(client, accounts, month):
     html = page(client, q="grocer")
-    assert "balance" not in header(html)
+    assert "ledger-balance" not in html
     assert 'class="card compact-card"' not in html
-    assert "month summary" not in html
+    assert "month-summary-row" not in html
     assert "EXAMPLE GROCER 0042" in html and "EXAMPLE COFFEE" not in html
 
 
-def test_choosing_another_account_keeps_the_balance_and_cards(client, accounts, month):
+def test_choosing_another_account_keeps_the_balance_and_cards(client, db, user_id, accounts, month):
+    add_imported(db, user_id, accounts["Example Card"], "Example Card", TODAY - timedelta(days=3), "ACME BOOKS", -20.00)
     html = page(client, account=accounts["Example Card"])
-    assert "balance" in header(html)
+    assert "ledger-balance" in html
     assert 'class="card compact-card"' in html
 
 
@@ -155,7 +179,7 @@ def row_of(html, text):
 
 
 def bill_cell(row):
-    return re.search(r'<td class="ledger-bill">(.*?)</td>', row, re.S).group(1)
+    return group(row, "ledger-bill")
 
 
 def text(html):
@@ -175,7 +199,7 @@ def test_an_unexpected_row_shows_a_warning_in_the_bill_column(client, db, accoun
 def test_a_forecast_row_names_its_bill_and_reads_expected_transaction(client, accounts, month):
     row = row_of(page(client), "acme utilities")
     assert text(bill_cell(row)) == ["acme", "utilities"]
-    description = re.search(r'<td class="ledger-description">(.*?)</td>', row, re.S).group(1)
+    description = group(row, "ledger-description")
     assert text(description) == ["expected", "transaction"] and 'class="ledger-expected"' in description
 
 
@@ -186,7 +210,7 @@ def test_a_split_row_shows_every_lines_category_and_bill(client, db, user_id, ac
     db.execute("UPDATE imported_transactions SET category_id = ? WHERE id = ?", [home, month["grocer"]])
     db.save_transaction_splits(user_id, month["grocer"], [{"category_id": garden, "amount": 15.00, "note": "", "bill_id": gym}])
     row = row_of(page(client), "EXAMPLE GROCER 0042")
-    category = re.search(r'<td class="ledger-category">(.*?)</td>', row, re.S).group(1)
+    category = group(row, "ledger-category")
     assert re.findall(r'class="category-pill">.*?</span>(\w+)</span>', category) == ["home", "garden"]
     assert "example gym" in bill_cell(row)
 
@@ -221,8 +245,8 @@ def test_a_month_summary_reads_its_month_count_credits_debits_and_net(client, db
 def test_a_statements_expand_button_sits_beside_its_title(client, db, user_id, accounts, month):
     add_imported(db, user_id, accounts["Example Card"], "Example Card", TODAY - timedelta(days=40), "ACME BOOKS", -20.00)
     html = page(client)
-    cells = re.findall(r'<td class="ledger-description">(.*?)</td>', html, re.S)
-    statement = [cell for cell in cells if "js-card-toggle" in cell]
+    found = re.findall(r'<div class="ledger-description[^"]*">(.*?)</div>', html, re.S)
+    statement = [cell for cell in found if "js-card-toggle" in cell]
     assert statement and re.search(r'js-card-toggle.*?</button>\s*<a href="[^"]*statement', statement[0], re.S)
 
 
@@ -236,10 +260,18 @@ def test_each_imported_row_has_one_edit_button_that_opens_the_form(client, accou
     assert "row-action-menu" not in row
 
 
-def test_an_uncategorized_rows_categorize_opens_the_form(client, accounts, month):
-    category = re.search(r'<td class="ledger-category">(.*?)</td>', row_of(page(client), "EXAMPLE GROCER 0042"),
-                         re.S).group(1)
-    assert f'data-edit-href="/transactions/{month["grocer"]}/edit?part=1"' in category and "categorize" in category
+def test_an_uncategorized_row_shows_an_uncategorized_pill_that_opens_the_form(client, accounts, month):
+    category = group(row_of(page(client), "EXAMPLE GROCER 0042"), "ledger-category")
+    assert f'data-edit-href="/transactions/{month["grocer"]}/edit?part=1"' in category
+    assert re.search(r'class="category-pill[^"]*">.*?uncategorized</span>', category, re.S)
+    assert "categorize" not in category.replace("uncategorized", "")
+
+
+def test_a_bill_is_a_pill_like_category_and_type(client, db, user_id, accounts, month):
+    bill = add_bill(db, user_id, "Example Gym", 30.00, TODAY - timedelta(days=37), account_id=accounts["Example Checking"])
+    gym = checking_import(db, user_id, accounts, TODAY - timedelta(days=7), "EXMPL FITNESS 99", -30.00)
+    reconcile(db, user_id, "bill", bill, gym)
+    assert re.search(r'<span class="category-pill bill-pill">example gym</span>', bill_cell(row_of(page(client), "EXMPL FITNESS 99")))
 
 
 def test_the_edit_dialog_sits_outside_the_table_so_opening_it_leaves_the_table_alone(client, accounts, month):

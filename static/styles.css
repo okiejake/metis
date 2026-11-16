@@ -2301,9 +2301,14 @@ body.amounts-hidden .amount-sensitive {
 /* Positioned with a layer of its own, so the filter opens over the ledger:
    .panel's backdrop-filter gives the section a layer too, and it comes later. */
 .ledger-bar {
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
   position: relative;
   z-index: 10;
+}
+.ledger-bar-right {
+  justify-content: flex-end;
 }
 .ledger-bar-left,
 .ledger-bar-right {
@@ -2315,16 +2320,43 @@ body.amounts-hidden .amount-sensitive {
 }
 /* The ledger's modes (#124), a pair of pressable segments like the date
    range's grain. */
+/* One pressed-in track with the two modes side by side; the chosen one is
+   raised out of it. */
 .ledger-modes {
+  justify-self: center;
   display: inline-flex;
-  gap: 0.35rem;
+  gap: 0;
+  padding: 0.25rem;
+  border-radius: 999px;
+  background: var(--neu-base);
+  box-shadow: inset 3px 3px 7px var(--neu-dark), inset -3px -3px 7px var(--neu-light);
 }
 .ledger-mode {
-  padding: 0.4rem 0.8rem;
-  border-radius: 0.7rem;
+  padding: 0.38rem 1rem;
+  border-radius: 999px;
   font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--neu-text);
   text-decoration: none;
   white-space: nowrap;
+  transition: box-shadow 150ms ease, color 150ms ease;
+}
+.ledger-mode.is-active {
+  background: var(--neu-base);
+  color: var(--neu-accent);
+  box-shadow: -3px -3px 7px var(--neu-light), 3px 3px 7px var(--neu-dark);
+}
+/* The ledger's summary cards keep to what they hold, from the left, and stay
+   put however wide the page grows. */
+.ledger-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 0.82rem;
+}
+.ledger-summary .compact-card {
+  flex: none;
+  text-align: left;
 }
 .filter-accounts {
   border: 0;
@@ -2426,16 +2458,51 @@ body.amounts-hidden .amount-sensitive {
     scroll-behavior: smooth;
   }
 }
-/* No text wraps in the ledger (#123). The description, bill and category
-   columns share what the others leave, and a long cell fades out at its edge.
-   The fade sits on an inner .fade box so the cell's own lines stay whole. */
+/* No text wraps in the ledger (#123), and no lines run between its rows.
+   A row is its description with its pills beside it (#125): type (or account),
+   category, then bill, each as wide as its text with the same gap between
+   them, not held to columns. The description takes what the numbers leave and
+   fades out when it doesn't fit. */
 .ledger-table th,
 .ledger-table td {
   white-space: nowrap;
 }
-.ledger-table .ledger-description { width: 44%; max-width: 0; }
-.ledger-table .ledger-bill { width: 16%; max-width: 0; }
-.ledger-table .ledger-category { width: 18%; max-width: 0; }
+.ledger-table td {
+  border-bottom: 0;
+}
+.ledger-table .ledger-main {
+  width: 100%;
+  max-width: 0;
+}
+.ledger-line {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+.ledger-line .ledger-description {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.ledger-line > .table-pill,
+.ledger-line .category-pill,
+.ledger-line .ledger-category-link,
+.ledger-line .unexpected-icon {
+  flex: none;
+}
+/* The groups take no box, so their pills sit in the row's own gaps and an
+   empty group adds none. */
+.ledger-line .ledger-category,
+.ledger-line .ledger-bill {
+  display: contents;
+}
+.ledger-category-link {
+  display: inline-flex;
+  gap: 0.6rem;
+}
+.bill-pill {
+  color: var(--primary-ink);
+}
 /* static/fade.js marks a .fade box data-clipped when its text is cut off. */
 .fade {
   overflow: hidden;
@@ -2454,10 +2521,6 @@ body.amounts-hidden .amount-sensitive {
   color: var(--muted);
   font-style: italic;
 }
-.ledger-line-bill + .ledger-line-bill::before {
-  content: "· ";
-  color: var(--muted);
-}
 .ledger-bill .unexpected-icon {
   color: var(--unexpected);
   width: 1rem;
@@ -2467,13 +2530,19 @@ body.amounts-hidden .amount-sensitive {
 .ledger-cell-action {
   font-size: 0.78rem;
 }
-/* Rows are grouped by date (#125): a thin row with the date in a pill. */
-.ledger-table .date-row td {
+/* Rows are grouped by date (#125): a thin row with the date in a pill. The
+   date, month summary and forecast rows are centered and don't light up under
+   the pointer. */
+.ledger-table tr.date-row td {
   padding: 0.45rem 0.5rem 0.2rem;
-  border-bottom: 0;
   background: transparent;
+  text-align: center;
 }
-.ledger-table .date-row:hover {
+.ledger-table tr.month-summary-row td,
+.ledger-table tr.forecast-divider-row td {
+  text-align: center;
+}
+.ledger-table tbody tr:is(.date-row, .month-summary-row, .forecast-divider-row, .card-detail-row):hover {
   background: transparent;
 }
 .date-pill {
@@ -2496,12 +2565,13 @@ body.amounts-hidden .amount-sensitive {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
+  justify-content: center;
   gap: 0.3rem 1.2rem;
 }
 .ledger-description .card-expand-toggle {
   margin-right: 0.15rem;
 }
-/* The edit button shows on the row under the pointer, or holding focus.
+/* The edit button shows on the row the pointer is over, or holding focus.
    Where there is no hover (a touch screen) it always shows. */
 @media (hover: hover) {
   .ledger-row .row-edit {
@@ -2714,12 +2784,9 @@ body.amounts-hidden .amount-sensitive {
 .merchant-transfer {
   margin: 0 0 0.8rem;
 }
-/* On a phone each ledger row takes two lines: description and amount, then
-   category, bill, type and balance. The date rows stay thin rows above them. */
+/* On a phone a ledger row is its description and pills, wrapping as needed,
+   beside the amount, then the balance. The date rows stay thin rows above. */
 @media (max-width: 760px) {
-  .ledger-table thead {
-    display: none;
-  }
   .ledger-table,
   .ledger-table tbody {
     display: block;
@@ -2737,29 +2804,23 @@ body.amounts-hidden .amount-sensitive {
     padding: 0;
     border: 0;
   }
-  /* First line: description, amount and the edit button. An empty,
-     full-width item after them breaks the line, so category, bill, type and
-     balance always start the second. */
+  /* First line: description and its pills, the amount and the edit button.
+     An empty, full-width item after them breaks the line, so the balance
+     starts the second. */
   .ledger-table tr.ledger-row:not(.month-summary-row)::after {
     content: "";
     order: 6;
     flex: 0 0 100%;
     height: 0;
   }
-  .ledger-table .ledger-description,
-  .ledger-table .ledger-bill,
-  .ledger-table .ledger-category {
-    width: auto;
-    max-width: 100%;
-  }
-  .ledger-table .ledger-description { order: 2; flex: 1 1 0; min-width: 0; }
+  .ledger-table .ledger-main { order: 2; flex: 1 1 0; min-width: 0; width: auto; max-width: 100%; }
   .ledger-table .ledger-amount { order: 3; flex: 0 0 auto; }
   .ledger-table .row-action-cell { order: 5; flex: 0 0 auto; width: auto; }
-  .ledger-table .ledger-category { order: 7; flex: 0 1 auto; }
-  .ledger-table .ledger-bill { order: 8; flex: 0 0 auto; }
-  .ledger-table .ledger-account-cell { order: 8; flex: 0 1 auto; min-width: 0; }
-  .ledger-table .ledger-type { order: 9; flex: 0 0 auto; }
   .ledger-table .ledger-balance { order: 10; flex: 0 0 auto; margin-left: auto; }
+  .ledger-line {
+    flex-wrap: wrap;
+    row-gap: 0.3rem;
+  }
   .ledger-table .category-pill {
     white-space: nowrap;
   }

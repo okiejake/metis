@@ -44,14 +44,13 @@ def page(client, **params):
     return client.get("/ledger", params={"start": START.isoformat(), "end": END.isoformat(), **params}).text
 
 
-def header(html):
-    thead = re.search(r'<table class="ledger-table[^"]*">\s*<thead>(.*?)</thead>', html, re.S).group(1)
-    return [re.sub(r"<[^>]+>", "", cell).strip() for cell in re.findall(r"<th[^>]*>(.*?)</th>", thead, re.S)]
+def has_balance(html):
+    return "ledger-balance" in html
 
 
 def descriptions(html):
     """The imported rows shown, top to bottom, by their description cell."""
-    cells = re.findall(r'<td class="ledger-description">(.*?)</td>', html, re.S)
+    cells = re.findall(r'<div class="ledger-description[^"]*">(.*?)</div>', html, re.S)
     return [found.group(0) for cell in cells if (found := re.search(r"EXAMPLE GROCER 0042|ACME BOOKS", cell))]
 
 
@@ -66,9 +65,9 @@ def test_the_ledger_opens_on_transactions_from_every_account_newest_first(client
 
 def test_transactions_name_each_rows_account_and_have_no_type_or_balance(client, accounts, spending):
     html = page(client)
-    assert header(html) == ["category", "bill", "account", "description", "amount", ""]
+    assert not has_balance(html) and "type-actual" not in html
     books = re.search(r"<tr[^>]*>(?:(?!</tr>).)*ACME BOOKS(?:(?!</tr>).)*</tr>", html, re.S).group(0)
-    assert re.search(r'<td class="ledger-account-cell">(?:<[^>]+>)*\s*example card', books)
+    assert re.search(r'<span class="table-pill ledger-account-pill">example card</span>', books)
 
 
 def test_transactions_hold_no_forecast_summary_cards_or_jump(client, accounts, spending):
@@ -107,7 +106,7 @@ def test_the_refreshed_table_keeps_the_mode(client, accounts, spending):
     assert "mode=transactions" in section
     table = client.get("/ledger/table", params={"mode": "transactions", "start": START.isoformat(),
                                                 "end": END.isoformat()}).text
-    assert header(table)[2] == "account"
+    assert "ledger-account-pill" in table
 
 
 # --- cash flow --------------------------------------------------------------------------
@@ -115,13 +114,13 @@ def test_the_refreshed_table_keeps_the_mode(client, accounts, spending):
 
 def test_cash_flow_is_one_accounts_run_down(client, accounts, spending):
     html = page(client, mode="cash-flow")
-    assert header(html) == ["category", "bill", "type", "description", "amount", "balance", ""]
+    assert has_balance(html) and "type-actual" in html and "ledger-account-pill" not in html
     assert descriptions(html) == ["EXAMPLE GROCER 0042"]
     assert "expected transaction" in html
 
 
 def test_an_unknown_mode_is_transactions(client, accounts, spending):
-    assert header(page(client, mode="sideways"))[2] == "account"
+    assert "ledger-account-pill" in page(client, mode="sideways")
 
 
 # --- switching ----------------------------------------------------------------------------

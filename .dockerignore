@@ -21,3 +21,4 @@ tests/
 *.command
 *.md
 tools/
+*.duckdb.wal
