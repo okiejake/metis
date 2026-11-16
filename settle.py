@@ -134,6 +134,35 @@ def clear_unexpected(user_id: int, tx_id: int) -> Optional[int]:
 RULE_KINDS = ("category", "bill")
 
 
+NOTE_LIMIT = 500
+
+
+def set_note(user_id: int, tx_id: int, note: str) -> None:
+    """A transaction's note, shown on its ledger row. Blank clears it."""
+    _transaction(user_id, tx_id)
+    cleaned = " ".join(str(note or "").split())[:NOTE_LIMIT]
+    db.execute("UPDATE imported_transactions SET note = ? WHERE id = ? AND user_id = ?",
+               [cleaned or None, tx_id, user_id])
+
+
+def set_transfer(user_id: int, tx_id: int, marked: bool) -> Optional[int]:
+    """Mark a transaction a transfer between the owner's accounts, or take the
+    mark off. A card charge is never a transfer. Returns the action id, which
+    undoes it, or None when it already read that way."""
+    if marked:
+        return set_charge(user_id, tx_id, "transfer")
+    _transaction(user_id, tx_id)
+    row = db.fetch_one("SELECT category_id, category_via, is_transfer, category_rule_id, transfer_rule_id "
+                       "FROM imported_transactions WHERE id = ? AND user_id = ?", [tx_id, user_id])
+    if not row[2]:
+        return None
+    before = {"tx_id": tx_id, "category_id": row[0], "category_via": row[1], "is_transfer": True,
+              "category_rule_id": row[3], "transfer_rule_id": row[4], "created_category_id": None}
+    db.execute("UPDATE imported_transactions SET is_transfer = FALSE, transfer_rule_id = NULL "
+               "WHERE id = ? AND user_id = ?", [tx_id, user_id])
+    return record_action(user_id, "charge", before)
+
+
 def rule_prompt(user_id: int, tx_id: int, kind: str, range_start: date) -> Optional[Dict[str, Any]]:
     """What the prompt opens with after a category is picked for one
     transaction, or it is matched to a bill. A category rule matches the name,

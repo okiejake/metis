@@ -1,179 +1,39 @@
 {% extends "base.html" %}
 {% import "_parts.html" as parts %}
-{% import "_statement_macros.html" as stmt %}
 {% block content %}
-<div class="page-bar">
-  <div class="intro-badge-stack">
-    {% if forecast_start_iso %}<span class="stat-chip">forecast from {{ forecast_start_iso }}</span>{% endif %}
+<div class="page-bar ledger-bar">
+  <div class="ledger-bar-left">
+    <span class="ledger-account">{% if account %}{{ account.name|lower }}{% else %}checking{% endif %}</span>
+    {% for chip in chips %}
+    <a class="filter-chip" href="{{ base_path() }}{{ chip.url }}" aria-label="remove this filter">{{ chip.label|lower }} ×</a>
+    {% endfor %}
+    {% if view.filtered %}
+    <a class="button-link filter-clear" href="{{ base_path() }}{{ view.url(q='', category=[], merchant='') }}">clear</a>
+    {% endif %}
+  </div>
+  <div class="ledger-bar-right">
+    {{ parts.filter_dialog(view, accounts, categories) }}
+    {% if has_forecast %}
+    <a class="button-link neu-press jump-to-forecast" href="#forecast-begins">jump to forecast</a>
+    {% endif %}
   </div>
 </div>
 
-<section class="summary-grid compact-grid">
-  <article class="card compact-card">
-    <h3>current checking balance</h3>
-    <p class="amount-value">${{ current_checking_balance|currency }}</p>
-  </article>
-  <article class="card compact-card">
-    <h3>total income</h3>
-    <p class="amount-value positive">${{ total_income|currency }}</p>
-  </article>
-  <article class="card compact-card">
-    <h3>total expenses</h3>
-    <p class="amount-value negative">${{ total_expense|currency }}</p>
-  </article>
-  <article class="card compact-card">
-    <h3>projected end balance</h3>
-    <p class="amount-value {{ 'negative' if projected_end_balance < 0 else '' }}">${{ projected_end_balance|currency }}</p>
-  </article>
-</section>
+{% include "_ledger_section.html" %}
 
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>ledger</h2>
-  </div>
-  {% if window_all_future and first_actual_iso %}
-  <div class="panel-hint">
-    showing forecast only — your actual checking data goes back to <strong>{{ first_actual_iso }}</strong>.
-    widen the range (ytd / rolling 6m) to see actuals blended with the forecast.
-  </div>
-  {% endif %}
-  {% if rows %}
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>date</th>
-          <th>description</th>
-          <th>category</th>
-          <th>source</th>
-          <th>income</th>
-          <th>expense</th>
-          <th>running balance</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {% set ns = namespace(forecast_divider_shown=false) %}
-        {% for row in rows %}
-        {% if not ns.forecast_divider_shown and row.row_type != 'month_summary' and row.source is defined and row.source != 'actual' and not row.due_not_posted %}
-        <tr class="forecast-divider-row">
-          <td colspan="8"><span class="forecast-divider-label">↓ forecast begins {{ forecast_start_iso }}</span></td>
-        </tr>
-        {% set ns.forecast_divider_shown = true %}
-        {% endif %}
-        {% if row.row_type == 'month_summary' %}
-        <tr class="ledger-row month-summary-row">
-          <td>{{ row.month_label }}</td>
-          <td><strong>month summary</strong> ({{ row.tx_count }} tx)</td>
-          <td>-</td>
-          <td>
-            net:
-            <span class="amount-value {{ 'negative' if row.month_net < 0 else 'positive' }}">
-              ${{ row.month_net|currency }}
-            </span>
-          </td>
-          <td class="amount-value">${{ row.income|currency }}</td>
-          <td class="amount-value negative">${{ row.expense|currency }}</td>
-          <td class="amount-value {{ 'negative' if row.running_balance < 0 else '' }}{% if row.date.isoformat() == today_iso %} today-balance{% endif %}">${{ row.running_balance|currency }}</td>
-          <td class="row-action-cell"></td>
-        </tr>
-        {% else %}
-        <tr class="ledger-row {{ 'actual-row' if row.source == 'actual' else 'forecast-row' }}{{ ' due-row' if row.due_not_posted else '' }}">
-          <td>
-            {% if row.source == 'card' and row.statement %}
-            <button type="button" class="card-expand-toggle js-card-toggle" data-target="card-detail-{{ loop.index }}" aria-expanded="false" aria-label="show this statement's summary">›</button>
-            {% endif %}
-            {{ row.date }}
-          </td>
-          <td>
-            {% if row.linked and row.raw_name and row.raw_name != row.description %}
-            <span class="has-linked-actual" title="actual: {{ row.raw_name }}">{{ row.description }}</span>
-            {% elif row.statement %}
-            <a href="{{ stmt.statement_url(row.statement) }}">{{ row.description }}</a>
-            <span class="card-note">closes {{ row.statement.close_date }}</span>
-            {% else %}{{ row.description }}{% endif %}
-          </td>
-          <td>
-            {% if row.category_name %}
-            {{ parts.category_pill(row.category_name, row.category_color) }}
-            {% else %}
-            -
-            {% endif %}
-          </td>
-          <td>
-            <span class="table-pill source-{{ row.source }}">{{ row.source }}</span>
-            {% if row.due_not_posted %}
-            <span class="table-pill due-pill" title="due today — your imported data ends today, so this may simply not have posted yet. it still counts toward the projected balance.">due, not yet posted</span>
-            {% endif %}
-          </td>
-          <td class="amount-value">{% if row.income > 0 %}${{ row.income|currency }}{% else %}-{% endif %}</td>
-          <td class="amount-value negative">{% if row.expense > 0 %}${{ row.expense|currency }}{% else %}-{% endif %}</td>
-          <td class="amount-value {{ 'negative' if row.running_balance < 0 else '' }}{% if row.date.isoformat() == today_iso %} today-balance{% endif %}">${{ row.running_balance|currency }}</td>
-          <td class="row-action-cell">
-            {% if row.source == 'one-time' %}
-            <details class="row-action-menu">
-              <summary class="row-action-trigger" aria-label="open transaction actions">
-                <i data-lucide="settings-2" class="menu-icon" aria-hidden="true"></i>
-              </summary>
-              <div class="row-action-dropdown">
-                <a href="{{ base_path() }}/one-time/{{ row.id }}/edit?next=/ledger" class="row-action-item">edit</a>
-                <form method="post" action="{{ base_path() }}/one-time/{{ row.id }}/delete?next=/ledger" class="row-action-item-form" onsubmit="return confirm('delete this one-time item?')">
-                  <button type="submit" class="row-action-item danger">delete</button>
-                </form>
-              </div>
-            </details>
-            {% endif %}
-          </td>
-        </tr>
-        {% endif %}
-
-        {% if row.row_type != 'month_summary' and row.source == 'card' and row.statement %}
-        <tr class="card-detail-row hidden" id="card-detail-{{ loop.index }}">
-          <td colspan="8">
-            <div class="card-detail-wrap">
-              {{ stmt.summary(row.statement) }}
-              <p class="card-detail-link"><a href="{{ stmt.statement_url(row.statement) }}">open the statement →</a></p>
-            </div>
-          </td>
-        </tr>
-        {% endif %}
-
-        {% endfor %}
-
-      </tbody>
-    </table>
-  </div>
-  {% else %}
-  <p class="empty-state">no transactions in this date range.</p>
-  {% endif %}
-</section>
-
+<script src="{{ base_path() }}/static/split-form.js?v=20261115a" defer></script>
+<script src="{{ base_path() }}/static/ledger-filter.js?v=20261115a" defer></script>
 <script>
-  // Expand/collapse the statement behind a card-payment row.
-  (() => {
-    document.querySelectorAll('.js-card-toggle').forEach((button) => {
-      button.addEventListener('click', () => {
-        const target = document.getElementById(button.dataset.target);
-        if (!target) {
-          return;
-        }
-        const isHidden = target.classList.toggle('hidden');
-        button.setAttribute('aria-expanded', String(!isHidden));
-        button.classList.toggle('is-open', !isHidden);
-      });
-    });
-  })();
+  // Expand/collapse the statement behind a card-payment row. Delegated, so it
+  // keeps working after a background action swaps the table.
+  document.addEventListener('click', (event) => {
+    const button = event.target.closest('.js-card-toggle');
+    if (!button) { return; }
+    const target = document.getElementById(button.dataset.target);
+    if (!target) { return; }
+    const isHidden = target.classList.toggle('hidden');
+    button.setAttribute('aria-expanded', String(!isHidden));
+    button.classList.toggle('is-open', !isHidden);
+  });
 </script>
-
-<style>
-  /* .card-expand-toggle lives in styles.css — the Budget page uses it too. */
-  .card-detail-wrap {
-    padding: 0.5rem 0.75rem 0.75rem 1.5rem;
-  }
-  .card-detail-link {
-    margin: 0.5rem 0 0;
-    font-size: 0.9rem;
-  }
-</style>
 {% endblock %}

@@ -1157,8 +1157,10 @@ button.danger,
   flex-wrap: wrap;
 }
 
+/* No table scrolls, at any width (#98): popups such as a row's menu open over
+   the table, and long text wraps inside its cell. */
 .table-wrap {
-  overflow-x: hidden;
+  overflow: visible;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 92%, transparent) 0%, color-mix(in srgb, var(--surface-muted) 92%, transparent) 100%);
@@ -1781,12 +1783,9 @@ body.amounts-hidden .amount-sensitive {
     width: min(1200px, 96vw);
   }
 
-  .table-wrap {
-    overflow-x: auto;
-  }
-
-  table {
-    min-width: 700px;
+  td,
+  th {
+    overflow-wrap: anywhere;
   }
 
   .panel {
@@ -2243,19 +2242,30 @@ body.amounts-hidden .amount-sensitive {
   font-family: inherit;
 }
 
-/* Blended ledger: actual vs forecast ------------------------------------ */
-.ledger-row.actual-row td:first-child {
+/* Ledger: one account at a time ----------------------------------------- */
+/* An imported row's line says where it stands: green when matched, red when
+   not settled yet, amber when marked unexpected, none for a transfer. */
+.ledger-row.line-matched td:first-child {
   border-left: 3px solid var(--success);
+}
+.ledger-row.line-unsettled td:first-child {
+  border-left: 3px solid var(--danger);
+}
+.ledger-row.line-unexpected td:first-child {
+  border-left: 3px solid var(--warning);
+}
+.ledger-row.line-none td:first-child {
+  border-left: 3px solid transparent;
 }
 .ledger-row.forecast-row td:first-child {
   border-left: 3px solid color-mix(in srgb, var(--accent) 55%, transparent);
 }
-.table-pill.source-actual {
+.table-pill.type-actual {
   border-color: color-mix(in srgb, var(--success) 45%, transparent);
   background: var(--success-soft);
   color: var(--success);
 }
-.table-pill.source-card {
+.table-pill.type-card {
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
   background: var(--surface-muted);
   color: var(--accent);
@@ -2281,6 +2291,199 @@ body.amounts-hidden .amount-sensitive {
   font-weight: 800;
   letter-spacing: 0.04em;
   color: var(--accent);
+}
+.ledger-bar {
+  justify-content: space-between;
+}
+.ledger-bar-left,
+.ledger-bar-right {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.ledger-account {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: var(--primary-ink);
+}
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  color: var(--primary-ink);
+  font-size: 0.76rem;
+  font-weight: 800;
+  padding: 0.3rem 0.6rem;
+  text-decoration: none;
+}
+.filter-popover {
+  position: relative;
+}
+.filter-popover > summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.filter-popover > summary::-webkit-details-marker {
+  display: none;
+}
+.filter-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.5rem);
+  width: min(360px, calc(100vw - 2rem));
+  padding: 1rem;
+  border-radius: 1.25rem;
+  z-index: 20;
+}
+.filter-form {
+  display: grid;
+  gap: 0.8rem;
+}
+.filter-top {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.filter-label {
+  font-weight: 800;
+  margin-right: auto;
+}
+.filter-field {
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+.filter-categories {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+.filter-category-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 14rem;
+  overflow-y: auto;
+  display: grid;
+  gap: 0.2rem;
+}
+.filter-category label {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 600;
+}
+.filter-category.is-child {
+  padding-left: 1.2rem;
+}
+#forecast-begins {
+  scroll-margin-top: 5rem;
+}
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+.ledger-note {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.ledger-cell-action {
+  font-size: 0.78rem;
+}
+.ledger-category-link {
+  text-decoration: none;
+}
+.statement-pill {
+  margin-left: 0.3rem;
+}
+.ledger-panel-row td {
+  background: var(--surface-muted);
+}
+.ledger-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+.ledger-panel .split-form {
+  flex: 1 1 28rem;
+}
+.merchant-transfer {
+  margin: 0 0 0.8rem;
+}
+/* On a phone each ledger row takes two lines: date, description and amount,
+   then bill, category, type and balance. */
+@media (max-width: 760px) {
+  .ledger-table thead {
+    display: none;
+  }
+  .ledger-table,
+  .ledger-table tbody {
+    display: block;
+  }
+  .ledger-table tr.ledger-row:not(.month-summary-row) {
+    display: grid;
+    grid-template-columns: auto 1fr auto auto auto;
+    grid-template-areas:
+      "date desc desc pay chg"
+      "bill cat type bal menu";
+    align-items: center;
+    column-gap: 0.6rem;
+    row-gap: 0.25rem;
+    padding: 0.55rem 0.5rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .ledger-table tr.ledger-row:not(.month-summary-row) > td {
+    display: block;
+    padding: 0;
+    border: 0;
+  }
+  .ledger-table .ledger-date { grid-area: date; }
+  .ledger-table .ledger-description { grid-area: desc; }
+  .ledger-table .ledger-payments { grid-area: pay; }
+  .ledger-table .ledger-charges { grid-area: chg; }
+  .ledger-table .ledger-bill { grid-area: bill; }
+  .ledger-table .ledger-category { grid-area: cat; }
+  .ledger-table .ledger-type { grid-area: type; }
+  .ledger-table .ledger-balance { grid-area: bal; }
+  .ledger-table .row-action-cell { grid-area: menu; }
+  .ledger-table .is-empty {
+    display: none;
+  }
+  .ledger-row.line-matched { border-left: 3px solid var(--success); }
+  .ledger-row.line-unsettled { border-left: 3px solid var(--danger); }
+  .ledger-row.line-unexpected { border-left: 3px solid var(--warning); }
+  .ledger-row.forecast-row { border-left: 3px solid color-mix(in srgb, var(--accent) 55%, transparent); }
+  .ledger-table tr.month-summary-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.75rem;
+    padding: 0.55rem 0.5rem;
+  }
+  .ledger-table tr.month-summary-row > td,
+  .ledger-table tr.forecast-divider-row,
+  .ledger-table tr.forecast-divider-row > td,
+  .ledger-table tr.ledger-panel-row,
+  .ledger-table tr.ledger-panel-row > td,
+  .ledger-table tr.card-detail-row:not(.hidden),
+  .ledger-table tr.card-detail-row > td {
+    display: block;
+    border: 0;
+  }
+  .row-action-trigger {
+    opacity: 1;
+    transform: none;
+  }
 }
 .panel-hint {
   margin: 0 0 1rem;

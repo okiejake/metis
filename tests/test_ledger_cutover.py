@@ -94,7 +94,7 @@ def test_reconciled_occurrence_on_cutover_date_is_not_double_counted(db, user_id
 
     todays_rows = rows_on(transactions, TODAY)
     assert len(todays_rows) == 1, "the settled occurrence was counted twice"
-    assert todays_rows[0]["source"] == "actual"
+    assert todays_rows[0]["type"] == "actual"
     assert not todays_rows[0].get("due_not_posted")
 
 

@@ -1,5 +1,5 @@
 """Settle one transaction (#103, #105, #106, #107): category, match, unmatch,
-one-time, unexpected and its clearing. Each returns to `next` on this site with
+one-time, unexpected and its clearing, a note, and the transfer mark. Each returns to `next` on this site with
 a message that carries an Undo. A category or a bill link also asks the page to
 open the rule prompt for that transaction.
 
@@ -57,6 +57,25 @@ def match(request: Request, user: CurrentUser, tx_id: int, bill_id: str = Form("
     except ValueError as exc:
         return _failed(next, exc)
     return _done(next, "matched", action, rule_tx=str(tx_id), rule_kind="bill")
+
+
+@router.post("/transactions/{tx_id}/note")
+def note(request: Request, user: CurrentUser, tx_id: int, note: str = Form(""), next: str = Form("/ledger")):
+    try:
+        settle.set_note(user["id"], tx_id, note)
+    except ValueError as exc:
+        return _failed(next or "/ledger", exc)
+    return redirect_with_message(next or "/ledger", "note saved")
+
+
+@router.post("/transactions/{tx_id}/transfer")
+def transfer(request: Request, user: CurrentUser, tx_id: int, transfer: str = Form("1"), next: str = Form("/ledger")):
+    marked = transfer != "0"
+    try:
+        action = settle.set_transfer(user["id"], tx_id, marked)
+    except ValueError as exc:
+        return _failed(next or "/ledger", exc)
+    return _done(next or "/ledger", "marked a transfer" if marked else "not a transfer", action)
 
 
 @router.post("/transactions/{tx_id}/unmatch")

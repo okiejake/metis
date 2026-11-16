@@ -59,8 +59,10 @@ def test_a_linked_item_stops_counting_in_the_forecast(db, user_id, checking):
 
     after = db.collect_blended_transactions(user_id, *window)
     assert len(before) == 1
-    # The actual stands in the ledger under the item's name; the forecast row is gone.
-    assert [row["source"] for row in after if row["description"] == "Car repair"] == ["actual"]
+    # The actual keeps the bank's text and names the item it settles; the forecast row is gone.
+    assert [(row["type"], row["description"]) for row in after if row["bill"] == "Car repair"] == [
+        ("actual", "ACME AUTO REPAIR")]
+    assert [row for row in after if row["description"] == "Car repair"] == []
     assert sum(row["expense"] for row in after) == 400.0
 
 
