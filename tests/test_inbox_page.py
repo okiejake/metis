@@ -181,8 +181,9 @@ def test_a_split_returns_to_inbox(client, db, user_id, accounts):
     category = db.create_category(user_id, "Fuel")
     tx = fuel(db, user_id, accounts, amount=-100.0)
 
-    response = client.post(f"/transactions/{tx}/split", data={
-        "category_id": str(category), "amount": "40", "note": "", "next": "/inbox#categories",
+    response = client.post(f"/transactions/{tx}/edit", data={
+        "part_category": str(category), "part_bill": "", "part_amount": "40", "part_note": "",
+        "category": "", "bill": "", "note": "", "next": "/inbox#categories",
     }, follow_redirects=False)
 
     assert response.headers["location"].startswith("/inbox?")

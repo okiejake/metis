@@ -37,17 +37,28 @@
 
   async function replace(section, response) {
     if (!response.ok) { throw new Error(`status ${response.status}`); }
+    return swap(section, await response.text());
+  }
+
+  // Put the section in `html` in place of `section`.
+  function swap(section, html) {
     const holder = document.createElement('div');
-    holder.innerHTML = await response.text();
+    holder.innerHTML = html;
     const fresh = holder.querySelector('[data-section]');
     if (!fresh || fresh.id !== section.id) { throw new Error('no section in the response'); }
     document.querySelectorAll('main > .flash').forEach((flash) => flash.remove());
     section.replaceWith(fresh);
     if (window.metisPicker) { window.metisPicker.init(fresh); }
     if (window.lucide && typeof window.lucide.createIcons === 'function') { window.lucide.createIcons(); }
+    document.dispatchEvent(new CustomEvent('metis:content', { detail: fresh }));
     const focusable = fresh.querySelector('[data-rule-prompt] input[name="pattern"]');
     if (focusable) { focusable.focus(); }
     return fresh;
+  }
+
+  // A form's next: the section's address and its current state.
+  function nextOf(section) {
+    return `${section.dataset.sectionNext}?${state(section)}`;
   }
 
   function refresh(section, changes) {
@@ -65,7 +76,7 @@
     if (!section) { return; }
     event.preventDefault();
     const data = new FormData(form, event.submitter || undefined);
-    data.set('next', `${section.dataset.sectionNext}?${state(section)}`);
+    data.set('next', nextOf(section));
     section.classList.add('is-busy');
     try {
       await replace(section, await fetch(form.action, { method: 'POST', body: data, credentials: 'same-origin' }));
@@ -133,6 +144,9 @@
       if (showing && field) { field.focus(); }
     }
   });
+
+  // For the ledger's edit dialog (tx-edit.js), which sits outside the section.
+  window.metisSections = { swap, nextOf };
 
   function setOpen(row, open) {
     row.classList.toggle('is-open', open);

@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{# The edit form on a page of its own: without script, and from the split
+   address. The ledger shows the same form in its dialog. #}
+{% block content %}
+<section class="panel tx-edit-page">
+  {% include "_tx_edit.html" %}
+</section>
+<script src="{{ base_path() }}/static/split-form.js?v=20261116a" defer></script>
+{% endblock %}

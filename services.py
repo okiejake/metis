@@ -559,17 +559,7 @@ SCHEMA = (
         created_at TIMESTAMP NOT NULL DEFAULT NOW()
     )
     """,
-    """
-    CREATE TABLE IF NOT EXISTS transaction_splits (
-        id BIGINT PRIMARY KEY DEFAULT nextval('transaction_splits_id_seq'),
-        user_id BIGINT NOT NULL,
-        imported_transaction_id BIGINT NOT NULL,
-        category_id BIGINT NOT NULL,
-        amount DOUBLE NOT NULL,
-        note TEXT,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW()
-    )
-    """,
+    migrations.TRANSACTION_SPLITS_TABLE.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS"),
     """
     CREATE TABLE IF NOT EXISTS category_rules (
         id BIGINT PRIMARY KEY DEFAULT nextval('category_rules_id_seq'),
@@ -586,19 +576,8 @@ SCHEMA = (
     """,
     # payment_pattern is how a payment to this card appears on the funding
     # account's statement. Per account, so no issuer name lives in the code.
-    """
-    CREATE TABLE IF NOT EXISTS accounts (
-        id BIGINT PRIMARY KEY DEFAULT nextval('accounts_id_seq'),
-        user_id BIGINT NOT NULL,
-        name TEXT NOT NULL,
-        account_type TEXT NOT NULL,
-        statement_day INTEGER,
-        due_day INTEGER,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        payment_pattern TEXT,
-        default_template_id BIGINT
-    )
-    """,
+    # paid_from_account_id: the checking account that pays a card's statements.
+    migrations.ACCOUNTS_TABLE.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS"),
     # Templates stand alone, shared by any number of accounts; an account
     # points at its default one.
     """
@@ -1620,12 +1599,14 @@ def generate_bill_transactions(
             {
                 "date": due["date"],
                 "description": bill["name"],
-                "source": bill_item_type(bill),
+                "type": bill_item_type(bill),
+                "bill": bill["name"],
                 "income": amount if kind == "income" else 0.0,
                 "expense": amount if kind == "expense" else 0.0,
                 "delta": amount if kind == "income" else -amount,
                 "kind": kind,
                 "id": bill["id"],
+                "category_id": bill.get("category_id"),
                 "category_name": bill.get("category_name") or "",
                 "category_color": bill.get("category_color") or "",
                 "account_id": bill.get("account_id"),
@@ -1716,12 +1697,14 @@ def load_one_time_transactions(user_id: int, window_start: date, window_end: dat
             {
                 "date": item["expected_date"],
                 "description": item["name"],
-                "source": "one-time",
+                "type": "one-time",
+                "bill": item["name"],
                 "income": amount if kind == "income" else 0.0,
                 "expense": amount if kind == "expense" else 0.0,
                 "delta": amount if kind == "income" else -amount,
                 "kind": kind,
                 "id": item["id"],
+                "category_id": item.get("category_id"),
                 "category_name": item["category_name"],
                 "category_color": item["category_color"],
                 "account_id": item.get("account_id"),
@@ -1845,7 +1828,8 @@ def account_cycle_status(account: Dict[str, Any], today: Optional[date] = None) 
     return {"next_close": close, "next_due": due}
 
 
-ACCOUNT_COLUMNS = "id, name, account_type, statement_day, due_day, payment_pattern, default_template_id"
+ACCOUNT_COLUMNS = ("id, name, account_type, statement_day, due_day, payment_pattern, default_template_id, "
+                   "paid_from_account_id")
 
 
 def load_accounts(user_id: int) -> List[Dict[str, Any]]:
@@ -1864,6 +1848,25 @@ def load_account_by_id(user_id: int, account_id: int) -> Optional[Dict[str, Any]
 
 def load_accounts_map(user_id: int) -> Dict[int, Dict[str, Any]]:
     return {int(account["id"]): account for account in load_accounts(user_id)}
+
+
+def default_checking_account(user_id: int) -> Optional[Dict[str, Any]]:
+    """The user's checking account with the lowest id: the ledger's default
+    account, and the one that pays any card with no paid-from of its own."""
+    rows = query_all(f"SELECT {ACCOUNT_COLUMNS} FROM accounts WHERE user_id = ? AND account_type = 'checking' "
+                     "ORDER BY id LIMIT 1", [user_id])
+    return rows[0] if rows else None
+
+
+def paying_account(user_id: int, card: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The checking account that pays a card's statements: the one it names, or
+    the default checking account when it names none (or one that is gone)."""
+    named = card.get("paid_from_account_id")
+    if named:
+        account = load_account_by_id(user_id, int(named))
+        if account and account.get("account_type") == "checking":
+            return account
+    return default_checking_account(user_id)
 
 
 def parse_optional_account_id(user_id: int, value: str) -> Optional[int]:
@@ -1898,72 +1901,109 @@ def _apply_cash_flow_deferral(
     return direct
 
 
-def checking_account_names(user_id: int) -> List[str]:
-    """Names of the user's checking-type accounts, used as a name fallback for
-    imported rows not yet anchored by account_id. Falls back to seeded 'Checking'."""
-    names = [a["name"] for a in load_accounts(user_id) if a.get("account_type") == "checking"]
-    return names or ["Checking"]
+def _account_scope_sql(account: Optional[Dict[str, Any]], prefix: str = "") -> tuple[str, List[Any]]:
+    """SQL predicate + params selecting one account's imported rows by
+    account_id, with a name fallback for rows not yet anchored (account_id
+    NULL). With no account at all (a user with no checking account yet), the
+    rows imported under the seeded name 'Checking'. `prefix` qualifies the
+    imported_transactions columns (e.g. "i.")."""
+    if account is None:
+        return f"({prefix}account_id IS NULL AND {prefix}account = ?)", ["Checking"]
+    return (f"({prefix}account_id = ? OR ({prefix}account_id IS NULL AND {prefix}account = ?))",
+            [int(account["id"]), account["name"]])
 
 
-def checking_account_ids(user_id: int) -> List[int]:
-    """Ids of the user's checking-type accounts — the stable, rename-proof key
-    for selecting checking rows out of imported_transactions."""
-    return [int(a["id"]) for a in load_accounts(user_id) if a.get("account_type") == "checking"]
+def _same_account(a: Optional[Dict[str, Any]], b: Optional[Dict[str, Any]]) -> bool:
+    if a is None or b is None:
+        return a is None and b is None
+    return int(a["id"]) == int(b["id"])
 
 
-def _checking_scope_sql(user_id: int, prefix: str = "") -> tuple[str, List[Any]]:
-    """SQL predicate + params selecting a user's checking imported rows by
-    account_id, with a name fallback for rows not yet anchored (account_id NULL).
-    `prefix` is the column qualifier for the imported_transactions row (e.g. "i.")."""
-    ids = checking_account_ids(user_id)
-    names = checking_account_names(user_id)
-    clauses: List[str] = []
-    params: List[Any] = []
-    if ids:
-        clauses.append(f"{prefix}account_id IN ({', '.join('?' for _ in ids)})")
-        params.extend(ids)
-    clauses.append(
-        f"({prefix}account_id IS NULL AND {prefix}account IN ({', '.join('?' for _ in names)}))"
-    )
-    params.extend(names)
-    return "(" + " OR ".join(clauses) + ")", params
+def is_default_checking(user_id: int, account: Optional[Dict[str, Any]]) -> bool:
+    """Whether this is the account the starting balance and unassigned
+    expected items belong to. No account at all stands in for it."""
+    return _same_account(account, default_checking_account(user_id))
 
 
-def _card_scope_sql(card: Dict[str, Any], prefix: str = "") -> tuple[str, List[Any]]:
-    """SQL predicate + params selecting one card's imported rows by account_id,
-    with a name fallback for rows not yet anchored (account_id NULL)."""
-    clause = (
-        f"({prefix}account_id = ? OR ({prefix}account_id IS NULL AND {prefix}account = ?))"
-    )
-    return clause, [int(card["id"]), card["name"]]
+def _account_date(user_id: int, account: Optional[Dict[str, Any]], aggregate: str) -> Optional[date]:
+    clause, params = _account_scope_sql(account)
+    row = fetch_one(f"SELECT {aggregate}(tx_date) FROM imported_transactions WHERE user_id = ? AND {clause}",
+                    [user_id, *params])
+    return _as_date(row[0]) if row and row[0] is not None else None
+
+
+def account_cutover(user_id: int, account: Optional[Dict[str, Any]]) -> Optional[date]:
+    """The latest date imported for an account: its actuals run to here, and
+    its forecast starts from here."""
+    return _account_date(user_id, account, "MAX")
 
 
 def latest_checking_actual_date(user_id: int) -> Optional[date]:
-    clause, params = _checking_scope_sql(user_id)
-    row = fetch_one(f"SELECT MAX(tx_date) FROM imported_transactions WHERE user_id = ? AND {clause}", [user_id, *params])
-    value = row[0] if row else None
-    if isinstance(value, datetime):
-        value = value.date()
-    return value
+    return account_cutover(user_id, default_checking_account(user_id))
+
+
+def account_first_date(user_id: int, account: Optional[Dict[str, Any]]) -> Optional[date]:
+    """The earliest date imported for an account."""
+    return _account_date(user_id, account, "MIN")
 
 
 def first_checking_actual_date(user_id: int) -> Optional[date]:
-    clause, params = _checking_scope_sql(user_id)
-    row = fetch_one(f"SELECT MIN(tx_date) FROM imported_transactions WHERE user_id = ? AND {clause}", [user_id, *params])
-    value = row[0] if row else None
-    if isinstance(value, datetime):
-        value = value.date()
-    return value
+    return account_first_date(user_id, default_checking_account(user_id))
 
 
-def load_actual_checking_transactions(user_id: int, window_start: date, window_end: date) -> List[Dict[str, Any]]:
-    """Real checking-account transactions (imported) mapped to the ledger row
-    schema. Amounts are signed (negative = money out). Card payments count."""
-    scope_clause, scope_params = _checking_scope_sql(user_id, "i.")
+def _ledger_line(is_transfer: bool, linked: bool, unexpected: bool) -> Optional[str]:
+    """The line on an imported row: matched, marked unexpected, or not settled
+    yet. A transfer, which card payments are, gets none."""
+    if is_transfer:
+        return None
+    if linked:
+        return "matched"
+    if unexpected:
+        return "unexpected"
+    return "unsettled"
+
+
+def _splits_for(user_id: int, tx_ids: List[int]) -> Dict[int, List[Dict[str, Any]]]:
+    """Split parts for several transactions at once, oldest first."""
+    if not tx_ids:
+        return {}
+    placeholders = ", ".join("?" for _ in tx_ids)
     rows = query_all(f"""
-                SELECT i.id, i.tx_date, i.description, i.merchant, i.amount,
+                SELECT ts.imported_transaction_id AS tx_id, ts.category_id, ts.amount, ts.bill_id, b.name AS bill,
+                       {category_label("c")} AS category_name, c.color AS category_color
+                FROM transaction_splits ts
+                LEFT JOIN bills b ON b.id = ts.bill_id AND b.user_id = ts.user_id
+                {category_join("c", "ts.category_id", "ts.user_id", "")}
+                WHERE ts.user_id = ? AND ts.imported_transaction_id IN ({placeholders})
+                ORDER BY ts.id
+                """, [user_id, *tx_ids])
+    found: Dict[int, List[Dict[str, Any]]] = {}
+    for row in rows:
+        found.setdefault(int(row["tx_id"]), []).append({
+            "category_id": int(row["category_id"]),
+            "category_name": row.get("category_name") or "",
+            "category_color": safe_hex_color(row.get("category_color")),
+            "amount": round(float(row["amount"]), 2),
+            "bill_id": int(row["bill_id"]) if row.get("bill_id") is not None else None,
+            "bill": row.get("bill") or "",
+        })
+    return found
+
+
+def load_actual_transactions(
+    user_id: int, account: Optional[Dict[str, Any]], window_start: date, window_end: date
+) -> List[Dict[str, Any]]:
+    """One account's imported transactions mapped to the ledger row schema.
+    Amounts are signed (negative = money out). `description` is the bank's text
+    as imported; `bill` names the bill, income or one-time item it is matched
+    to. A matched row takes that item's category unless it has none."""
+    scope_clause, scope_params = _account_scope_sql(account, "i.")
+    rows = query_all(f"""
+                SELECT i.id, i.tx_date, i.description, i.merchant, i.amount, i.is_transfer, i.unexpected, i.note,
                        COALESCE(b.name, ot.name) AS expected_name,
+                       ec.id AS expected_category_id,
                        {category_label("ec")} AS expected_category_name, ec.color AS expected_category_color,
+                       ic.id AS import_category_id,
                        {category_label("ic")} AS import_category_name, ic.color AS import_category_color
                 FROM imported_transactions i
                 LEFT JOIN expected_reconciliations r
@@ -1978,63 +2018,70 @@ def load_actual_checking_transactions(user_id: int, window_start: date, window_e
                   AND i.tx_date >= ? AND i.tx_date <= ?
                 ORDER BY i.tx_date, i.id
                 """, [user_id, *scope_params, window_start, window_end])
+    splits = _splits_for(user_id, [int(row["id"]) for row in rows])
 
     transactions: List[Dict[str, Any]] = []
     for row in rows:
-        tx_date = row["tx_date"]
-        if isinstance(tx_date, datetime):
-            tx_date = tx_date.date()
         amount = float(row["amount"])
-        raw_name = row.get("merchant") or row.get("description") or ""
         expected_name = row.get("expected_name")
         linked = bool(expected_name)
-        if linked:
-            display = expected_name
-            category_name = row.get("expected_category_name") or row.get("import_category_name") or ""
-            category_color = row.get("expected_category_color") or row.get("import_category_color")
-        else:
-            display = raw_name
-            category_name = row.get("import_category_name") or ""
-            category_color = row.get("import_category_color")
+        prefix = "expected" if linked and row.get("expected_category_id") is not None else "import"
+        category_id = row.get(f"{prefix}_category_id")
+        is_transfer, unexpected = bool(row["is_transfer"]), bool(row["unexpected"])
         transactions.append(
             {
-                "date": tx_date,
-                "description": display,
-                "raw_name": raw_name,
+                "date": _as_date(row["tx_date"]),
+                "description": row.get("description") or row.get("merchant") or "",
+                "merchant": row.get("merchant") or row.get("description") or "",
+                "bill": expected_name or "",
                 "linked": linked,
-                "source": "actual",
+                "type": "actual",
                 "income": amount if amount > 0 else 0.0,
                 "expense": -amount if amount < 0 else 0.0,
                 "delta": amount,
                 "kind": "income" if amount > 0 else "expense",
                 "id": row["id"],
-                "category_name": category_name,
-                "category_color": safe_hex_color(category_color),
+                "category_id": int(category_id) if category_id is not None else None,
+                "category_name": row.get(f"{prefix}_category_name") or "",
+                "category_color": safe_hex_color(row.get(f"{prefix}_category_color")),
+                "is_transfer": is_transfer,
+                "unexpected": unexpected,
+                "note": row.get("note") or "",
+                "splits": splits.get(int(row["id"]), []),
+                "line": _ledger_line(is_transfer, linked, unexpected),
+                "account_id": int(account["id"]) if account else None,
             }
         )
     return transactions
 
 
-def checking_actual_balance_before(user_id: int, cutoff_date: date, opening_balance: float) -> float:
-    """opening_balance + sum of checking actual deltas strictly before cutoff_date.
-    Gives the correct running-balance seed for any window start."""
-    clause, params = _checking_scope_sql(user_id)
+def load_actual_checking_transactions(user_id: int, window_start: date, window_end: date) -> List[Dict[str, Any]]:
+    """The default checking account's imported transactions as ledger rows."""
+    return load_actual_transactions(user_id, default_checking_account(user_id), window_start, window_end)
+
+
+def _account_total_before(user_id: int, account: Optional[Dict[str, Any]], cutoff_date: date) -> float:
+    clause, params = _account_scope_sql(account)
     row = fetch_one(f"""
             SELECT COALESCE(SUM(amount), 0) FROM imported_transactions
             WHERE user_id = ? AND {clause} AND tx_date < ?
             """, [user_id, *params, cutoff_date])
-    return float(opening_balance) + float(row[0] if row else 0.0)
+    return float(row[0] if row else 0.0)
 
 
-def card_actual_cutover(user_id: int, card: Dict[str, Any]) -> Optional[date]:
-    """Latest imported transaction date for a specific card account (by account_id,
-    with a name fallback for rows not yet anchored)."""
-    clause, params = _card_scope_sql(card)
-    row = fetch_one(f"SELECT MAX(tx_date) FROM imported_transactions WHERE user_id = ? AND {clause}", [user_id, *params])
-    value = row[0] if row else None
-    if isinstance(value, datetime):
-        value = value.date()
-    return value
+def account_balance_before(user_id: int, account: Optional[Dict[str, Any]], cutoff_date: date) -> float:
+    """An account's balance at the start of cutoff_date: the default checking
+    account starts from the starting balance setting, any other from zero, and
+    every imported row before the date counts. A card's is negative while money
+    is owed: charges are stored negative and payments positive."""
+    opening = get_setting_float(user_id, "starting_balance", 0.0) if is_default_checking(user_id, account) else 0.0
+    return opening + _account_total_before(user_id, account, cutoff_date)
+
+
+def checking_actual_balance_before(user_id: int, cutoff_date: date, opening_balance: float) -> float:
+    """opening_balance + the default checking account's imported rows strictly
+    before cutoff_date: the running-balance seed for any window start."""
+    return float(opening_balance) + _account_total_before(user_id, default_checking_account(user_id), cutoff_date)
 
 
 def _card_expected_charges(
@@ -2135,7 +2182,7 @@ def _as_date(value: Any) -> date:
 
 def _card_rows(user_id: int, card: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Every imported row on a card, oldest first, with its category."""
-    clause, params = _card_scope_sql(card, "i.")
+    clause, params = _account_scope_sql(card, "i.")
     rows = query_all(f"""
             SELECT i.id, i.tx_date, i.description, i.merchant, i.amount, i.is_transfer,
                    {category_label("c")} AS category_name, c.color AS category_color
@@ -2173,7 +2220,7 @@ def sync_card_statements(user_id: int, card: Dict[str, Any], today: Optional[dat
     if not card_cycle_configured(card):
         return
     today = today or date.today()
-    clause, params = _card_scope_sql(card)
+    clause, params = _account_scope_sql(card)
     row = fetch_one(
         f"SELECT MIN(tx_date) FROM imported_transactions WHERE user_id = ? AND {clause}",
         [user_id, *params],
@@ -2420,6 +2467,28 @@ def update_card_statement(
     )
 
 
+def _statement_row(card: Dict[str, Any], statement: Dict[str, Any], incoming: bool = False) -> Dict[str, Any]:
+    """A statement on a ledger, on its due date, for what is left to pay on it:
+    going out of the account that pays it, or coming in on the card itself."""
+    amount = statement["remaining"]
+    return {
+        "date": statement["due_date"],
+        "description": statement["label"],
+        "bill": "",
+        "type": "card",
+        "income": amount if incoming else 0.0,
+        "expense": 0.0 if incoming else amount,
+        "delta": amount if incoming else -amount,
+        "kind": "income" if incoming else "expense",
+        "category_id": None,
+        "category_name": "",
+        "category_color": "",
+        "account_id": int(card["id"]),
+        "statement": statement,
+        "line": None,
+    }
+
+
 def forecast_card_payments(
     user_id: int,
     window_start: date,
@@ -2427,8 +2496,8 @@ def forecast_card_payments(
     cutover: Optional[date],
     today: Optional[date] = None,
 ) -> List[Dict[str, Any]]:
-    """One ledger row per card statement still to be paid, on its due date: what
-    the statement closed at, less what has been paid toward it since.
+    """One row per card statement still to be paid, on its due date: what the
+    statement closed at, less what has been paid toward it since.
 
     Only statements due after the checking `cutover` appear — the checking
     actuals already show anything paid before then. Statements before the window
@@ -2437,26 +2506,32 @@ def forecast_card_payments(
     payments: List[Dict[str, Any]] = []
     for card in load_accounts(user_id):
         for statement in build_card_statements(user_id, card, window_end, cutover, today=today):
-            if not statement["billed"]:
-                continue
-            if not (window_start <= statement["due_date"] <= window_end):
-                continue
-            payments.append(
-                {
-                    "date": statement["due_date"],
-                    "description": statement["label"],
-                    "source": "card",
-                    "income": 0.0,
-                    "expense": statement["remaining"],
-                    "delta": -statement["remaining"],
-                    "kind": "expense",
-                    "category_name": "",
-                    "category_color": "",
-                    "account_id": int(card["id"]),
-                    "statement": statement,
-                }
-            )
+            if statement["billed"] and window_start <= statement["due_date"] <= window_end:
+                payments.append(_statement_row(card, statement))
     return payments
+
+
+def statement_rows(
+    user_id: int,
+    payer: Optional[Dict[str, Any]],
+    window_start: date,
+    window_end: date,
+    cutover: Optional[date],
+    today: Optional[date] = None,
+) -> List[Dict[str, Any]]:
+    """Every statement due inside the window and after the paying account's
+    `cutover`, for each card `payer` pays, whatever is left to pay on it. One
+    paid in full shows for nothing, so it is never counted twice; the account's
+    actual payment rows already cover any due on or before the cutover."""
+    rows: List[Dict[str, Any]] = []
+    for card in load_accounts(user_id):
+        if card.get("account_type") != "credit_card" or not _same_account(paying_account(user_id, card), payer):
+            continue
+        for statement in build_card_statements(user_id, card, window_end, cutover, today=today):
+            due = statement["due_date"]
+            if window_start <= due <= window_end and (cutover is None or due > cutover):
+                rows.append(_statement_row(card, statement))
+    return rows
 
 
 def match_card_payments(user_id: int) -> List[Dict[str, Any]]:
@@ -2614,23 +2689,34 @@ def income_total(user_id: int, window_start: date, window_end: date) -> float:
 def _item_actuals(user_id: int, window_start: date, window_end: date) -> Dict[tuple, float]:
     """What the actuals linked to each expected transaction add up to in the
     window, as a positive amount: (source_type, source_id) -> amount. Split
-    parts are taken off, since money moved to another category is no longer
-    this item's."""
+    parts are taken off, since money moved to another line is no longer this
+    item's, and a bill on a split line counts that line."""
     rows = fetch_all("""
             WITH allocated AS (
                 SELECT imported_transaction_id AS tx_id, COALESCE(SUM(amount), 0) AS part_total
                 FROM transaction_splits WHERE user_id = ? GROUP BY 1
+            ),
+            linked AS (
+                SELECT r.source_type, r.source_id,
+                       SIGN(i.amount) * (ABS(i.amount) - COALESCE(a.part_total, 0)) AS amount
+                FROM imported_transactions i
+                JOIN expected_reconciliations r
+                       ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
+                LEFT JOIN allocated a ON a.tx_id = i.id
+                WHERE i.user_id = ? AND NOT i.is_transfer
+                  AND i.tx_date >= ? AND i.tx_date <= ?
+                UNION ALL
+                SELECT 'bill', ts.bill_id, SIGN(i.amount) * ts.amount
+                FROM transaction_splits ts
+                JOIN imported_transactions i
+                       ON i.id = ts.imported_transaction_id AND i.user_id = ts.user_id
+                WHERE ts.user_id = ? AND ts.bill_id IS NOT NULL AND NOT i.is_transfer
+                  AND i.tx_date >= ? AND i.tx_date <= ?
             )
-            SELECT r.source_type, r.source_id,
-                   COALESCE(SUM(SIGN(i.amount) * (ABS(i.amount) - COALESCE(a.part_total, 0))), 0) AS total
-            FROM imported_transactions i
-            JOIN expected_reconciliations r
-                   ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
-            LEFT JOIN allocated a ON a.tx_id = i.id
-            WHERE i.user_id = ? AND NOT i.is_transfer
-              AND i.tx_date >= ? AND i.tx_date <= ?
+            SELECT source_type, source_id, COALESCE(SUM(amount), 0) AS total
+            FROM linked
             GROUP BY 1, 2
-            """, [user_id, user_id, window_start, window_end])
+            """, [user_id, user_id, window_start, window_end, user_id, window_start, window_end])
     return {(source_type, int(source_id)): round(abs(float(total)), 2) for source_type, source_id, total in rows}
 
 
@@ -2804,6 +2890,13 @@ def build_budget_summary(user_id: int, window_start: date, window_end: date,
     }
 
 
+def uncategorized_transaction_ids(user_id: int, window_start: date, window_end: date) -> set:
+    """The transactions budget lists as uncategorized: spending with no
+    category left on it, as spending_parts counts it."""
+    return {int(part["tx_id"]) for part in spending_parts(user_id, window_start, window_end)
+            if part["category_id"] is None}
+
+
 def unsettled_transactions(user_id: int, window_start: date, window_end: date) -> Dict[Any, List[Dict[str, Any]]]:
     """What budget lists as not settled yet in the window, newest first, keyed
     by where it is listed:
@@ -2872,70 +2965,17 @@ def page_of(rows: List[Any], page: int, size: int = LIST_PAGE_SIZE) -> Dict[str,
     return {"rows": rows[(page - 1) * size: page * size], "page": page, "pages": pages, "total": len(rows)}
 
 
-def collect_blended_transactions(user_id: int, window_start: date, window_end: date) -> List[Dict[str, Any]]:
-    """Actual checking transactions up to the latest CSV date, then the expected
-    forecast after it — one coherent, non-double-counted cash timeline.
-
-    The cutover date itself belongs to both halves. An import taken that day is
-    only as complete as the bank was at the time, so a bill due that day may
-    simply not have posted yet. Treating the day as pure actuals would silently
-    drop it from the ledger, so expected occurrences dated on the cutover that no
-    actual has settled are kept and flagged `due_not_posted`. Earlier dates get no
-    such benefit of the doubt: the same import covered them in full."""
-    cutover = latest_checking_actual_date(user_id)
-
-    transactions: List[Dict[str, Any]] = []
-    if cutover is not None:
-        actual_end = min(window_end, cutover)
-        if window_start <= actual_end:
-            transactions.extend(load_actual_checking_transactions(user_id, window_start, actual_end))
-        # Begin the forecast *on* the cutover. Occurrences that day which an actual
-        # already settled are dropped by `paid_through` below, so only genuinely
-        # unposted ones survive.
-        forecast_start = max(window_start, cutover)
-        # Card payments keep the old boundary — forecast_card_payments settles a
-        # whole cycle at once and already skips any due on or before the cutover.
-        card_forecast_start = max(window_start, cutover + timedelta(days=1))
-    else:
-        forecast_start = window_start
-        card_forecast_start = window_start
-
-    if forecast_start <= window_end:
-        expected = collect_window_transactions(
-            user_id, forecast_start, window_end, paid_through=cutover
-        )
-        if cutover is not None:
-            for tx in expected:
-                if tx["date"] == cutover:
-                    tx["due_not_posted"] = True
-        transactions.extend(expected)
-    if card_forecast_start <= window_end:
-        transactions.extend(
-            forecast_card_payments(user_id, card_forecast_start, window_end, cutover)
-        )
-
-    transactions.sort(
-        key=lambda tx: (
-            tx["date"],
-            0 if tx["kind"] == "income" else 1,
-            tx["description"].lower(),
-            tx.get("id", 0),
-        )
-    )
-    return transactions
+def _ledger_sort_key(tx: Dict[str, Any]):
+    return (tx["date"], 0 if tx["kind"] == "income" else 1, tx["description"].lower(), tx.get("id", 0))
 
 
-def collect_window_transactions(
-    user_id: int,
-    window_start: date,
-    window_end: date,
-    paid_through: Optional[date] = None,
+def _expected_rows(
+    user_id: int, window_start: date, window_end: date, paid_through: Optional[date] = None
 ) -> List[Dict[str, Any]]:
-    """Expected (bill and one-time) rows for a window. `paid_through` is the
-    actuals cutover: due dates already settled by an actual on/before it are
-    dropped, so a bill paid ahead of its due date is not counted twice."""
-    accounts = load_accounts_map(user_id)
-
+    """Expected (bill and one-time) rows for a window, every account's.
+    `paid_through` is the actuals cutover: due dates already settled by an
+    actual on/before it are dropped, so a bill paid ahead of its due date is not
+    counted twice."""
     raw: List[Dict[str, Any]] = []
     active_bills = load_active_bills(user_id)
     overrides_by_id = load_amount_overrides_for_bills([bill["id"] for bill in active_bills])
@@ -2957,18 +2997,102 @@ def collect_window_transactions(
         if settled_one_time:
             one_time_rows = [row for row in one_time_rows if int(row["id"]) not in settled_one_time]
     raw.extend(one_time_rows)
+    return [row for row in raw if window_start <= row["date"] <= window_end]
 
-    transactions = _apply_cash_flow_deferral(raw, accounts, window_start, window_end)
 
-    transactions.sort(
-        key=lambda tx: (
-            tx["date"],
-            0 if tx["kind"] == "income" else 1,
-            tx["description"].lower(),
-            tx.get("id", 0),
-        )
-    )
-    return transactions
+def collect_window_transactions(
+    user_id: int,
+    window_start: date,
+    window_end: date,
+    paid_through: Optional[date] = None,
+) -> List[Dict[str, Any]]:
+    """Expected rows for a window on every account but cards, whose charges
+    are counted through their statements instead."""
+    transactions = _apply_cash_flow_deferral(_expected_rows(user_id, window_start, window_end, paid_through),
+                                             load_accounts_map(user_id), window_start, window_end)
+    return sorted(transactions, key=_ledger_sort_key)
+
+
+def _checking_forecast(
+    user_id: int, account: Optional[Dict[str, Any]], window_start: date, window_end: date,
+    cutover: Optional[date], today: Optional[date],
+) -> List[Dict[str, Any]]:
+    """A checking account's forecast: its bills, income and one-time items
+    (and those with no account, on the default one), then a row for each
+    statement of every card it pays.
+
+    The cutover date itself belongs to both halves. An import taken that day is
+    only as complete as the bank was at the time, so a bill due that day may
+    simply not have posted yet. Expected occurrences dated on the cutover that
+    no actual has settled are kept and flagged `due_not_posted`. Earlier dates
+    get no such benefit of the doubt: the same import covered them in full."""
+    default = is_default_checking(user_id, account)
+    own_id = int(account["id"]) if account else None
+
+    def belongs(row: Dict[str, Any]) -> bool:
+        return row.get("account_id") == own_id if row.get("account_id") else default
+
+    forecast_start = max(window_start, cutover) if cutover else window_start
+    # Card statements keep the old boundary — a statement settles a whole cycle
+    # at once and is skipped when due on or before the cutover.
+    card_start = max(window_start, cutover + timedelta(days=1)) if cutover else window_start
+    rows: List[Dict[str, Any]] = []
+    if forecast_start <= window_end:
+        for row in _expected_rows(user_id, forecast_start, window_end, paid_through=cutover):
+            if belongs(row):
+                if cutover is not None and row["date"] == cutover:
+                    row["due_not_posted"] = True
+                rows.append(row)
+    if card_start <= window_end:
+        rows.extend(statement_rows(user_id, account, card_start, window_end, cutover, today=today))
+    return rows
+
+
+def _card_forecast(
+    user_id: int, card: Dict[str, Any], window_start: date, window_end: date,
+    cutover: Optional[date], today: Optional[date],
+) -> List[Dict[str, Any]]:
+    """A card's forecast after its last import: its expected charges, and on
+    each due date the statement payment coming in from the account that pays
+    it. Both are what build_card_statements counts, so the card's ledger and its
+    statements agree."""
+    start = max(window_start, cutover + timedelta(days=1)) if cutover else window_start
+    if start > window_end:
+        return []
+    rows = [row for row in _expected_rows(user_id, start, window_end) if row.get("account_id") == int(card["id"])]
+    payer = paying_account(user_id, card)
+    for statement in build_card_statements(user_id, card, window_end, account_cutover(user_id, payer), today=today):
+        if statement["billed"] and start <= statement["due_date"] <= window_end:
+            rows.append(_statement_row(card, statement, incoming=True))
+    return rows
+
+
+def collect_account_transactions(
+    user_id: int,
+    account: Optional[Dict[str, Any]],
+    window_start: date,
+    window_end: date,
+    today: Optional[date] = None,
+) -> List[Dict[str, Any]]:
+    """One account's ledger for a window: its imported rows up to its cutover
+    (the latest date imported for it), then its forecast — one coherent,
+    non-double-counted timeline. `account` None stands for a user with no
+    checking account yet."""
+    cutover = account_cutover(user_id, account)
+    transactions: List[Dict[str, Any]] = []
+    if cutover is not None and window_start <= min(window_end, cutover):
+        transactions.extend(load_actual_transactions(user_id, account, window_start, min(window_end, cutover)))
+    if account is not None and account.get("account_type") == "credit_card":
+        transactions.extend(_card_forecast(user_id, account, window_start, window_end, cutover, today))
+    else:
+        transactions.extend(_checking_forecast(user_id, account, window_start, window_end, cutover, today))
+    return sorted(transactions, key=_ledger_sort_key)
+
+
+def collect_blended_transactions(user_id: int, window_start: date, window_end: date) -> List[Dict[str, Any]]:
+    """The default checking account's ledger: what the dashboard and the
+    first-negative warning read."""
+    return collect_account_transactions(user_id, default_checking_account(user_id), window_start, window_end)
 
 
 def first_projected_negative(
@@ -4022,21 +4146,34 @@ def unlink_reconciliation(user_id: int, recon_id: int) -> None:
 def _load_reconciliation_rows(
     user_id: int, source_type: str, source_id: Optional[int] = None
 ) -> List[Dict[str, Any]]:
-    """Linked actuals for one source type, optionally narrowed to a single item."""
-    sql = """
+    """Linked actuals for one source type, optionally narrowed to a single item.
+    A bill also lists each split line that carries it, at the line's amount, as
+    matched_via 'split' with a negative recon_id: it is unlinked from the
+    transaction's split, not here."""
+    item_clause = " AND r.source_id = ?" if source_id is not None else ""
+    params: List[Any] = [user_id, source_type] + ([source_id] if source_id is not None else [])
+    sql = f"""
                 SELECT r.source_id, r.id AS recon_id, r.matched_via, r.imported_transaction_id,
                        i.account, i.tx_date, i.description, i.merchant, i.amount, i.flow
                 FROM expected_reconciliations r
                 JOIN imported_transactions i
                   ON i.id = r.imported_transaction_id AND i.user_id = r.user_id
-                WHERE r.user_id = ? AND r.source_type = ?
+                WHERE r.user_id = ? AND r.source_type = ?{item_clause}
                 """
-    params: List[Any] = [user_id, source_type]
-    if source_id is not None:
-        sql += " AND r.source_id = ?"
-        params.append(source_id)
+    if source_type == "bill":
+        line_clause = " AND ts.bill_id = ?" if source_id is not None else ""
+        sql += f"""
+                UNION ALL
+                SELECT ts.bill_id, -ts.id, 'split', ts.imported_transaction_id,
+                       i.account, i.tx_date, i.description, i.merchant, SIGN(i.amount) * ts.amount, i.flow
+                FROM transaction_splits ts
+                JOIN imported_transactions i
+                  ON i.id = ts.imported_transaction_id AND i.user_id = ts.user_id
+                WHERE ts.user_id = ? AND ts.bill_id IS NOT NULL{line_clause}
+                """
+        params += [user_id] + ([source_id] if source_id is not None else [])
 
-    rows = query_all(sql + " ORDER BY i.tx_date DESC", params)
+    rows = query_all(sql + " ORDER BY tx_date DESC", params)
     for row in rows:
         if isinstance(row["tx_date"], datetime):
             row["tx_date"] = row["tx_date"].date()
@@ -4149,11 +4286,14 @@ def load_imported_transaction_by_id(user_id: int, tx_id: int) -> Optional[Dict[s
     rows = query_all(f"""
                 SELECT i.id, i.tx_date, i.description, i.merchant, i.amount, i.account, i.account_id,
                        i.is_transfer, i.category_id, i.category_via, i.category_rule_id, i.transfer_rule_id,
-                       i.unexpected, i.note,
+                       i.unexpected, i.note, acct.account_type,
+                       COALESCE(ec.id, ic.id) AS effective_category_id,
                        COALESCE({category_label("ec")}, {category_label("ic")}) AS category_name,
                        COALESCE(ec.color, ic.color) AS category_color,
-                       COALESCE(b.name, ot.name) AS expected_name
+                       COALESCE(b.name, ot.name) AS expected_name,
+                       r.source_type AS linked_type, r.source_id AS linked_id
                 FROM imported_transactions i
+                LEFT JOIN accounts acct ON acct.id = i.account_id AND acct.user_id = i.user_id
                 LEFT JOIN expected_reconciliations r
                        ON r.imported_transaction_id = i.id AND r.user_id = i.user_id
                 LEFT JOIN bills b
@@ -4177,9 +4317,10 @@ def load_imported_transaction_by_id(user_id: int, tx_id: int) -> Optional[Dict[s
 def load_transaction_splits(user_id: int, tx_id: int) -> List[Dict[str, Any]]:
     """Split parts for one transaction, oldest first."""
     rows = query_all(f"""
-                SELECT ts.id, ts.category_id, ts.amount, ts.note,
+                SELECT ts.id, ts.category_id, ts.amount, ts.note, ts.bill_id, b.name AS bill,
                        {category_label("c")} AS category_name, c.color AS category_color
                 FROM transaction_splits ts
+                LEFT JOIN bills b ON b.id = ts.bill_id AND b.user_id = ts.user_id
                 {category_join("c", "ts.category_id", "ts.user_id", "")}
                 WHERE ts.user_id = ? AND ts.imported_transaction_id = ?
                 ORDER BY ts.id
@@ -4187,6 +4328,8 @@ def load_transaction_splits(user_id: int, tx_id: int) -> List[Dict[str, Any]]:
     for row in rows:
         row["amount"] = round(float(row["amount"]), 2)
         row["category_color"] = safe_hex_color(row.get("category_color"))
+        row["bill_id"] = int(row["bill_id"]) if row.get("bill_id") is not None else None
+        row["bill"] = row.get("bill") or ""
     return rows
 
 
@@ -4203,8 +4346,9 @@ def save_transaction_splits(
     user_id: int, tx_id: int, parts: List[Dict[str, Any]]
 ) -> float:
     """Replace a transaction's split parts wholesale. `parts` is a list of
-    {category_id, amount, note}; blank/zero amounts are dropped so an emptied row
-    in the editor simply removes that part. Returns the resulting remainder."""
+    {category_id, amount, note, bill_id}; bill_id may be left out or empty.
+    Blank/zero amounts are dropped so an emptied row in the editor simply
+    removes that part. Returns the resulting remainder."""
     transaction = load_imported_transaction_by_id(user_id, tx_id)
     if not transaction:
         raise ValueError("Transaction not found")
@@ -4218,7 +4362,11 @@ def save_transaction_splits(
         category_id = int(part["category_id"])
         if not load_category_by_id(user_id, category_id):
             raise ValueError("Category not found")
-        cleaned.append({"category_id": category_id, "amount": amount, "note": (part.get("note") or "").strip()})
+        bill_id = int(part["bill_id"]) if part.get("bill_id") else None
+        if bill_id is not None and not load_bill_by_id(user_id, bill_id):
+            raise ValueError("Bill not found")
+        cleaned.append({"category_id": category_id, "amount": amount, "note": (part.get("note") or "").strip(),
+                        "bill_id": bill_id})
 
     allocated = round(sum(part["amount"] for part in cleaned), 2)
     if allocated > magnitude + 0.005:
@@ -4235,10 +4383,10 @@ def save_transaction_splits(
         for part in cleaned:
             conn.execute(
                 """
-                INSERT INTO transaction_splits (user_id, imported_transaction_id, category_id, amount, note)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO transaction_splits (user_id, imported_transaction_id, category_id, amount, note, bill_id)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                [user_id, tx_id, part["category_id"], part["amount"], part["note"] or None],
+                [user_id, tx_id, part["category_id"], part["amount"], part["note"] or None, part["bill_id"]],
             )
     return round(magnitude - allocated, 2)
 

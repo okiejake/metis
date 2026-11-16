@@ -33,6 +33,8 @@
   --warning: color-mix(in srgb, var(--steel-blue) 70%, var(--green));
   --warning-soft: color-mix(in srgb, var(--steel-blue) 12%, var(--platinum));
   --today: #e8890c;
+  /* Marked unexpected: the bill column's warning and the row's line. */
+  --unexpected: #c2560c;
 
   /* Neumorphism (docs/design/neumorphism.md): soft frame, flat data. */
   --neu-base: #E8E8E8;
@@ -397,7 +399,8 @@ body.is-ready .container > *:nth-child(4) {
   color: var(--neu-text);
 }
 
-.range-dialog::backdrop {
+.range-dialog::backdrop,
+.tx-edit-dialog::backdrop {
   background: color-mix(in srgb, var(--neu-dark) 55%, transparent);
   backdrop-filter: blur(3px);
 }
@@ -1157,8 +1160,10 @@ button.danger,
   flex-wrap: wrap;
 }
 
+/* No table scrolls, at any width (#98): popups such as a row's menu open over
+   the table, and long text wraps inside its cell. */
 .table-wrap {
-  overflow-x: hidden;
+  overflow: visible;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 92%, transparent) 0%, color-mix(in srgb, var(--surface-muted) 92%, transparent) 100%);
@@ -1781,12 +1786,9 @@ body.amounts-hidden .amount-sensitive {
     width: min(1200px, 96vw);
   }
 
-  .table-wrap {
-    overflow-x: auto;
-  }
-
-  table {
-    min-width: 700px;
+  td,
+  th {
+    overflow-wrap: break-word;
   }
 
   .panel {
@@ -1821,6 +1823,7 @@ body.amounts-hidden .amount-sensitive {
 
 :root[data-theme="dark"] {
   color-scheme: dark;
+  --unexpected: #f59e4b;
 
   --neu-base: #2A2D32;
   --neu-blue: #3A4A5A;
@@ -2243,19 +2246,30 @@ body.amounts-hidden .amount-sensitive {
   font-family: inherit;
 }
 
-/* Blended ledger: actual vs forecast ------------------------------------ */
-.ledger-row.actual-row td:first-child {
+/* Ledger: one account at a time ----------------------------------------- */
+/* An imported row's line says where it stands: green when matched, red when
+   not settled yet, amber when marked unexpected, none for a transfer. */
+.ledger-row.line-matched td:first-child {
   border-left: 3px solid var(--success);
+}
+.ledger-row.line-unsettled td:first-child {
+  border-left: 3px solid var(--danger);
+}
+.ledger-row.line-unexpected td:first-child {
+  border-left: 3px solid var(--unexpected);
+}
+.ledger-row.line-none td:first-child {
+  border-left: 3px solid transparent;
 }
 .ledger-row.forecast-row td:first-child {
   border-left: 3px solid color-mix(in srgb, var(--accent) 55%, transparent);
 }
-.table-pill.source-actual {
+.table-pill.type-actual {
   border-color: color-mix(in srgb, var(--success) 45%, transparent);
   background: var(--success-soft);
   color: var(--success);
 }
-.table-pill.source-card {
+.table-pill.type-card {
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
   background: var(--surface-muted);
   color: var(--accent);
@@ -2281,6 +2295,425 @@ body.amounts-hidden .amount-sensitive {
   font-weight: 800;
   letter-spacing: 0.04em;
   color: var(--accent);
+}
+/* Positioned with a layer of its own, so the filter opens over the ledger:
+   .panel's backdrop-filter gives the section a layer too, and it comes later. */
+.ledger-bar {
+  justify-content: space-between;
+  position: relative;
+  z-index: 10;
+}
+.ledger-bar-left,
+.ledger-bar-right {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.ledger-account {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: var(--primary-ink);
+}
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  color: var(--primary-ink);
+  font-size: 0.76rem;
+  font-weight: 800;
+  padding: 0.3rem 0.6rem;
+  text-decoration: none;
+}
+.filter-popover {
+  position: relative;
+}
+.filter-popover > summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.filter-popover > summary::-webkit-details-marker {
+  display: none;
+}
+.filter-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.5rem);
+  width: min(360px, calc(100vw - 2rem));
+  padding: 1rem;
+  border-radius: 1.25rem;
+  z-index: 20;
+}
+.filter-form {
+  display: grid;
+  gap: 0.8rem;
+}
+.filter-top {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.filter-label {
+  font-weight: 800;
+  margin-right: auto;
+}
+.filter-field {
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+.filter-categories {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+.filter-category-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 14rem;
+  overflow-y: auto;
+  display: grid;
+  gap: 0.2rem;
+}
+.filter-category label {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.45rem;
+  font-weight: 600;
+}
+.filter-category input[type="checkbox"] {
+  width: auto;
+  flex: 0 0 auto;
+  margin: 0;
+}
+.filter-category.is-child {
+  padding-left: 1.2rem;
+}
+#forecast-begins {
+  scroll-margin-top: 5rem;
+}
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+/* No text wraps in the ledger (#123). The description, bill and category
+   columns share what the others leave, and a long cell fades out at its edge.
+   The fade sits on an inner .fade box so the cell's own lines stay whole. */
+.ledger-table th,
+.ledger-table td {
+  white-space: nowrap;
+}
+.ledger-table .ledger-description { width: 44%; max-width: 0; }
+.ledger-table .ledger-bill { width: 16%; max-width: 0; }
+.ledger-table .ledger-category { width: 18%; max-width: 0; }
+/* static/fade.js marks a .fade box data-clipped when its text is cut off. */
+.fade {
+  overflow: hidden;
+  white-space: nowrap;
+}
+.fade[data-clipped] {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent);
+}
+.ledger-note {
+  margin-left: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.ledger-expected {
+  color: var(--muted);
+  font-style: italic;
+}
+.ledger-line-bill + .ledger-line-bill::before {
+  content: "· ";
+  color: var(--muted);
+}
+.ledger-bill .unexpected-icon {
+  color: var(--unexpected);
+  width: 1rem;
+  height: 1rem;
+  vertical-align: -0.18em;
+}
+.ledger-cell-action {
+  font-size: 0.78rem;
+}
+.ledger-category-link {
+  text-decoration: none;
+}
+.statement-pill {
+  margin-left: 0.3rem;
+}
+.row-edit {
+  display: inline-grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+}
+/* An action's message floats over the page instead of pushing the table down,
+   then fades. */
+.ledger-section > .flash {
+  position: fixed;
+  left: 50%;
+  bottom: 1.5rem;
+  z-index: 50;
+  transform: translateX(-50%);
+  max-width: calc(100vw - 2rem);
+  box-shadow: var(--shadow-md);
+  animation: toast-out 0.4s ease 6s forwards;
+}
+@keyframes toast-out {
+  to { opacity: 0; visibility: hidden; }
+}
+
+/* The edit form (#123): over the ledger in a dialog, or on its own page. */
+.tx-edit-dialog {
+  width: min(820px, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  padding: 1.1rem 1.2rem 1rem;
+  border: 0;
+  border-radius: 1.5rem;
+  color: var(--neu-text);
+  overflow-y: auto;
+}
+.tx-edit {
+  display: grid;
+  gap: 0.9rem;
+}
+.tx-edit-head:focus {
+  outline: none;
+}
+.tx-edit-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  min-width: 0;
+}
+.tx-edit-date {
+  color: var(--muted);
+  font-size: 0.84rem;
+  white-space: nowrap;
+}
+.tx-edit-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--neu-heading);
+}
+.tx-edit-amount {
+  white-space: nowrap;
+  font-weight: 800;
+}
+.tx-edit-message {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--success);
+}
+.tx-edit-message.is-error {
+  color: var(--over);
+}
+.tx-edit-form {
+  display: grid;
+  gap: 0.8rem;
+}
+.split-lines {
+  display: grid;
+  gap: 0.45rem;
+}
+.split-head,
+.split-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: center;
+}
+[data-split-open] .split-head,
+[data-split-open] .split-line {
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1.1fr) 6.5rem minmax(0, 1fr) 2rem;
+}
+.split-head {
+  font-size: 0.76rem;
+  font-weight: 800;
+  color: var(--muted);
+}
+.split-cell .picker,
+.split-cell select,
+.split-cell input {
+  width: 100%;
+  min-width: 0;
+}
+.split-amount input {
+  text-align: right;
+}
+.split-remove {
+  width: 2rem;
+  height: 2rem;
+}
+.tx-edit-form:not([data-split-open]) .split-amount,
+.tx-edit-form:not([data-split-open]) .split-note,
+.tx-edit-form:not([data-split-open]) .split-add,
+.tx-edit-form:not([data-split-open]) .split-off,
+.tx-edit-form[data-split-open] .split-on {
+  display: none;
+}
+.split-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.tx-edit-field {
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+.tx-edit-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 600;
+}
+.tx-edit-check input {
+  width: auto;
+  margin: 0;
+}
+.tx-edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+.split-notice {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.tx-edit-save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.tx-edit .rule-prompt {
+  margin: 0;
+}
+@media (max-width: 760px) {
+  .tx-edit-dialog {
+    width: calc(100vw - 1rem);
+    padding: 0.9rem 0.8rem;
+  }
+  .split-head {
+    display: none;
+  }
+  /* A line takes two rows: category, bill and remove; then amount and note. */
+  [data-split-open] .split-line {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 2rem;
+    grid-template-areas: "category bill remove" "amount note note";
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--line);
+  }
+  [data-split-open] .split-category { grid-area: category; }
+  [data-split-open] .split-bill { grid-area: bill; }
+  [data-split-open] .split-amount { grid-area: amount; }
+  [data-split-open] .split-note { grid-area: note; }
+  [data-split-open] .split-remove { grid-area: remove; }
+  .split-notice {
+    flex-basis: 100%;
+    text-align: right;
+  }
+}
+.merchant-transfer {
+  margin: 0 0 0.8rem;
+}
+/* On a phone each ledger row takes two lines: date, description and amount,
+   then bill, category, type and balance. */
+@media (max-width: 760px) {
+  .ledger-table thead {
+    display: none;
+  }
+  .ledger-table,
+  .ledger-table tbody {
+    display: block;
+  }
+  .ledger-table tr.ledger-row:not(.month-summary-row) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.3rem 0.6rem;
+    padding: 0.55rem 0.5rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .ledger-table tr.ledger-row:not(.month-summary-row) > td {
+    display: block;
+    padding: 0;
+    border: 0;
+  }
+  /* First line: date, description, amount and the row's menu. An empty,
+     full-width item after them breaks the line, so bill, category, type and
+     balance always start the second. */
+  .ledger-table tr.ledger-row:not(.month-summary-row)::after {
+    content: "";
+    order: 6;
+    flex: 0 0 100%;
+    height: 0;
+  }
+  .ledger-table .ledger-description,
+  .ledger-table .ledger-bill,
+  .ledger-table .ledger-category {
+    width: auto;
+    max-width: 100%;
+  }
+  .ledger-table .ledger-date { order: 1; flex: 0 0 auto; }
+  .ledger-table .ledger-description { order: 2; flex: 1 1 0; min-width: 0; }
+  .ledger-table .ledger-payments { order: 3; flex: 0 0 auto; }
+  .ledger-table .ledger-charges { order: 4; flex: 0 0 auto; }
+  .ledger-table .row-action-cell { order: 5; flex: 0 0 auto; width: auto; }
+  .ledger-table .ledger-bill { order: 7; flex: 0 0 auto; }
+  .ledger-table .ledger-category { order: 8; flex: 0 1 auto; }
+  .ledger-table .ledger-type { order: 9; flex: 0 0 auto; }
+  .ledger-table .ledger-balance { order: 10; flex: 0 0 auto; margin-left: auto; }
+  .ledger-table .category-pill {
+    white-space: nowrap;
+  }
+  .ledger-table tr.ledger-row > td.is-empty {
+    display: none;
+  }
+  .ledger-table {
+    font-size: 0.84rem;
+  }
+  .ledger-table .table-pill,
+  .ledger-table .category-pill {
+    font-size: 0.72rem;
+  }
+  .ledger-row.line-matched { border-left: 3px solid var(--success); }
+  .ledger-row.line-unsettled { border-left: 3px solid var(--danger); }
+  .ledger-row.line-unexpected { border-left: 3px solid var(--unexpected); }
+  .ledger-row.forecast-row { border-left: 3px solid color-mix(in srgb, var(--accent) 55%, transparent); }
+  .ledger-table tr.month-summary-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.75rem;
+    padding: 0.55rem 0.5rem;
+  }
+  .ledger-table tr.month-summary-row > td,
+  .ledger-table tr.forecast-divider-row,
+  .ledger-table tr.forecast-divider-row > td,
+  .ledger-table tr.card-detail-row:not(.hidden),
+  .ledger-table tr.card-detail-row > td {
+    display: block;
+    border: 0;
+  }
+  .row-action-trigger {
+    opacity: 1;
+    transform: none;
+  }
 }
 .panel-hint {
   margin: 0 0 1rem;

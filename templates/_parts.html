@@ -272,3 +272,81 @@
 <button type="button" class="button-link" data-import-account="{{ account.id }}"
         data-import-name="{{ account.name }}" data-import-template="{{ account.default_template_id or '' }}">import</button>
 {%- endmacro %}
+
+{# A transaction's bill field: none, or a bill of its kind (nearest amount
+   first). With extras, also one-time and unexpected, which only the original
+   line can take. Each bill carries its category, which the line's category
+   follows when the bill is picked (static/split-form.js). #}
+{% macro bill_select(field, bills, selected="", extras=False) -%}
+{% set selected = (selected if selected is not none else "")|string %}
+<select name="{{ field }}" aria-label="bill" data-bill-select>
+  <option value="">no bill</option>
+  {% for bill in bills %}
+  <option value="{{ bill.id }}" data-category="{{ bill.category_id or '' }}"{{ ' selected' if bill.id|string == selected else '' }}>{% filter lower %}{{ bill.name }}{% endfilter %}</option>
+  {% endfor %}
+  {% if extras %}
+  <option value="one_time"{{ ' selected' if selected == 'one_time' else '' }}>one-time</option>
+  <option value="unexpected"{{ ' selected' if selected == 'unexpected' else '' }}>unexpected</option>
+  {% endif %}
+</select>
+{%- endmacro %}
+
+{# One split line in the edit form: a category, a bill, an amount and a note,
+   and a button that takes the line off. #}
+{% macro split_line(line, categories, bills) -%}
+<div class="split-line" data-split-line>
+  <div class="split-cell split-category">{{ category_picker('part_category', categories, line.category_id, label="line category") }}</div>
+  <div class="split-cell split-bill">{{ bill_select('part_bill', bills, line.bill_id) }}</div>
+  <div class="split-cell split-amount"><input type="number" name="part_amount" step="0.01" min="0" value="{{ '%.2f'|format(line.amount) if line.amount else '' }}" placeholder="0.00" aria-label="line amount" data-split-amount /></div>
+  <div class="split-cell split-note"><input type="text" name="part_note" value="{{ line.note or '' }}" maxlength="500" placeholder="note" aria-label="line note" /></div>
+  <button type="button" class="icon-button split-remove" data-split-remove aria-label="remove this line"><i data-lucide="x" class="menu-icon" aria-hidden="true"></i></button>
+</div>
+{%- endmacro %}
+
+{% macro _filter_option(category, view, child=False) -%}
+<li class="filter-category{{ ' is-child' if child else '' }}" data-category-name="{{ (category.label or category.name)|lower }}">
+  <label><input type="checkbox" name="category" value="{{ category.id }}"{{ ' checked' if category.id|string in view.categories else '' }} /> <span>{% filter lower %}{{ category.name }}{% endfilter %}</span></label>
+</li>
+{%- endmacro %}
+
+{# The ledger's filter: the account, a search of descriptions, bills and notes,
+   and categories ("all" first, then uncategorized, then each one). Apply
+   submits it once, as an address. static/ledger-filter.js narrows the category
+   list as you type and keeps "all" apart from the other picks. #}
+{% macro filter_dialog(view, accounts, categories) -%}
+<details class="filter-popover">
+  <summary class="button-link neu-press filter-button"><i data-lucide="filter" class="menu-icon" aria-hidden="true"></i> filter</summary>
+  <div class="filter-panel neu-raised">
+    <form method="get" action="{{ base_path() }}/ledger" class="filter-form">
+      {% if view.start %}<input type="hidden" name="start" value="{{ view.start }}" /><input type="hidden" name="end" value="{{ view.end }}" />{% endif %}
+      <div class="filter-top">
+        <span class="filter-label">filter</span>
+        <a class="button-link filter-cancel" href="{{ base_path() }}{{ view.url() }}" data-filter-cancel>cancel</a>
+        <button type="submit" class="button-link filter-apply neu-press">apply</button>
+      </div>
+      <label class="filter-field">account
+        <select name="account">
+          {% for a in accounts %}
+          <option value="{{ a.id }}"{{ ' selected' if a.id == view.account_id else '' }}>{% filter lower %}{{ a.name }}{% endfilter %}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="filter-field">search
+        <input type="search" name="q" value="{{ view.q }}" maxlength="200" placeholder="description, bill or note" />
+      </label>
+      <fieldset class="filter-field filter-categories">
+        <legend>categories</legend>
+        <input type="search" class="filter-category-search" placeholder="search categories" aria-label="search categories" data-category-search />
+        <ul class="filter-category-list" data-category-list>
+          <li class="filter-category"><label><input type="checkbox" name="category" value="all"{{ ' checked' if not view.categories else '' }} data-category-all /> <span>all</span></label></li>
+          <li class="filter-category" data-category-name="uncategorized"><label><input type="checkbox" name="category" value="uncategorized"{{ ' checked' if 'uncategorized' in view.categories else '' }} /> <span>uncategorized</span></label></li>
+          {% for top in categories|rejectattr('parent_id') %}
+          {{ _filter_option(top, view) }}
+          {% for child in categories|selectattr('parent_id', 'equalto', top.id) %}{{ _filter_option(child, view, True) }}{% endfor %}
+          {% endfor %}
+        </ul>
+      </fieldset>
+    </form>
+  </div>
+</details>
+{%- endmacro %}

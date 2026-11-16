@@ -1,0 +1,60 @@
+{% import "_parts.html" as parts %}
+{# The edit form (#123): everything about one imported transaction. The first
+   line is the transaction's own category and bill; split lines each take a
+   category, a bill and an amount, and the first line keeps the rest. Step 2,
+   after a category or a bill match, is the rule. The ledger shows this in its
+   dialog (static/tx-edit.js); tx_edit.html puts it on a page. #}
+<div class="tx-edit" data-tx-edit>
+  {# Focus lands here when the form opens, so no list opens over it. #}
+  <header class="tx-edit-head" tabindex="-1" autofocus>
+    <span class="tx-edit-date">{{ tx.tx_date }}</span>
+    <strong class="tx-edit-name fade">{{ tx.description }}</strong>
+    <span class="tx-edit-amount amount-value {{ 'positive' if tx.amount > 0 else 'negative' }}">${{ tx.magnitude|currency }}</span>
+  </header>
+  {% if part and message %}<p class="tx-edit-message{{ ' is-error' if is_error else '' }}" role="status">{{ message }}</p>{% endif %}
+
+  {% if rule_prompt %}
+  {{ parts.rule_prompt(rule_prompt, next_path, next_path) }}
+  {% else %}
+  <form method="post" action="{{ base_path() }}/transactions/{{ tx.id }}/edit" class="tx-edit-form"
+        data-split-form data-total="{{ '%.2f'|format(tx.magnitude) }}"{% if lines %} data-split-open{% endif %}>
+    <input type="hidden" name="next" value="{{ next_path }}" />
+    {% if part %}<input type="hidden" name="part" value="1" />{% endif %}
+
+    <div class="split-lines" data-split-rows>
+      <div class="split-head" aria-hidden="true">
+        <span>category</span><span>bill</span><span class="split-amount">amount</span><span class="split-note">note</span>
+      </div>
+      <div class="split-line split-original" data-split-original>
+        <div class="split-cell split-category">{{ parts.category_picker('category', categories, tx.effective_category_id, extras=True, transfer=False) }}</div>
+        <div class="split-cell split-bill">{{ parts.bill_select('bill', bills, choice, extras=True) }}</div>
+        <div class="split-cell split-amount"><input type="number" name="original_amount" step="0.01" min="0" value="{{ '%.2f'|format(original_amount) }}" aria-label="amount" data-split-amount /></div>
+      </div>
+      {% for line in lines %}{{ parts.split_line(line, categories, bills) }}{% endfor %}
+    </div>
+    <template data-split-first>{{ parts.split_line({'amount': half}, categories, bills) }}</template>
+    <template data-split-blank>{{ parts.split_line({}, categories, bills) }}</template>
+
+    <div class="split-bar">
+      <a class="button-link split-on" href="{{ base_path() }}{{ split_url }}" data-split-on>split</a>
+      <button type="button" class="button-link split-add" data-split-add>add line</button>
+      <button type="submit" class="button-link split-off" name="unsplit" value="1" data-split-off>un-split</button>
+      <a class="button-link" href="{{ base_path() }}{{ new_bill_url }}">new bill</a>
+    </div>
+
+    <label class="tx-edit-field">note
+      <input type="text" name="note" value="{{ tx.note or '' }}" maxlength="500" />
+    </label>
+    {% if not is_card %}
+    <input type="hidden" name="transfer_field" value="1" />
+    <label class="tx-edit-check"><input type="checkbox" name="transfer" value="1"{{ ' checked' if tx.is_transfer else '' }} /> transfer</label>
+    {% endif %}
+
+    <div class="tx-edit-actions">
+      <span class="split-notice" data-split-notice aria-live="polite"></span>
+      <a class="button-link" href="{{ base_path() }}{{ next_path }}" data-tx-edit-close>cancel</a>
+      <button type="submit" class="button-link neu-press tx-edit-save" data-split-save>save</button>
+    </div>
+  </form>
+  {% endif %}
+</div>

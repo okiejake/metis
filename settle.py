@@ -134,6 +134,35 @@ def clear_unexpected(user_id: int, tx_id: int) -> Optional[int]:
 RULE_KINDS = ("category", "bill")
 
 
+NOTE_LIMIT = 500
+
+
+def set_note(user_id: int, tx_id: int, note: str) -> None:
+    """A transaction's note, shown on its ledger row. Blank clears it."""
+    _transaction(user_id, tx_id)
+    cleaned = " ".join(str(note or "").split())[:NOTE_LIMIT]
+    db.execute("UPDATE imported_transactions SET note = ? WHERE id = ? AND user_id = ?",
+               [cleaned or None, tx_id, user_id])
+
+
+def set_transfer(user_id: int, tx_id: int, marked: bool) -> Optional[int]:
+    """Mark a transaction a transfer between the owner's accounts, or take the
+    mark off. A card charge is never a transfer. Returns the action id, which
+    undoes it, or None when it already read that way."""
+    if marked:
+        return set_charge(user_id, tx_id, "transfer")
+    _transaction(user_id, tx_id)
+    row = db.fetch_one("SELECT category_id, category_via, is_transfer, category_rule_id, transfer_rule_id "
+                       "FROM imported_transactions WHERE id = ? AND user_id = ?", [tx_id, user_id])
+    if not row[2]:
+        return None
+    before = {"tx_id": tx_id, "category_id": row[0], "category_via": row[1], "is_transfer": True,
+              "category_rule_id": row[3], "transfer_rule_id": row[4], "created_category_id": None}
+    db.execute("UPDATE imported_transactions SET is_transfer = FALSE, transfer_rule_id = NULL "
+               "WHERE id = ? AND user_id = ?", [tx_id, user_id])
+    return record_action(user_id, "charge", before)
+
+
 def rule_prompt(user_id: int, tx_id: int, kind: str, range_start: date) -> Optional[Dict[str, Any]]:
     """What the prompt opens with after a category is picked for one
     transaction, or it is matched to a bill. A category rule matches the name,
@@ -184,3 +213,107 @@ def preview_count(user_id: int, kind: str, tx_id: Optional[int], pattern: str, a
             user_id, f"AND NOT i.is_transfer AND NOT i.unexpected AND {sign} AND i.id NOT IN "
                      "(SELECT imported_transaction_id FROM expected_reconciliations WHERE user_id = ?)", [user_id])
     return sum(1 for row in rows if int(row["id"]) != (tx_id or 0) and db._rule_matches(rule, row))
+
+
+# --- The edit form (#123) -----------------------------------------------------------
+#
+# One form settles a transaction: its category and bill (the original line),
+# the note, the transfer mark, and any split lines, each with a category, a bill
+# and an amount. The original line keeps what no other line takes. The ledger
+# opens it over the table; the split address opens it on its lines.
+
+ONE_TIME = "one_time"
+UNEXPECTED = "unexpected"
+
+
+def bill_choice(tx: Dict[str, Any]) -> str:
+    """What the form's bill field reads for a transaction: a bill's id,
+    "one_time", "unexpected", or "" for none. tx is
+    load_imported_transaction_by_id's."""
+    if tx.get("linked_type") == "bill":
+        return str(int(tx["linked_id"]))
+    if tx.get("linked_type") == "one_time":
+        return ONE_TIME
+    return UNEXPECTED if tx.get("unexpected") else ""
+
+
+def set_bill(user_id: int, tx_id: int, choice: str) -> bool:
+    """Make the transaction's bill field read `choice`. Returns True when it is
+    newly matched to a bill, which is when its rule is worth offering."""
+    tx = _transaction(user_id, tx_id)
+    choice = str(choice or "").strip()
+    current = bill_choice(tx)
+    if choice == current:
+        return False
+    if not (choice.isdigit() or choice in ("", ONE_TIME, UNEXPECTED)):
+        raise ValueError("choose a bill")
+    if current not in ("", UNEXPECTED):
+        unmatch(user_id, tx_id)
+    if choice.isdigit():
+        match(user_id, tx_id, int(choice))
+        return True
+    if choice == ONE_TIME:
+        make_one_time(user_id, tx_id)
+    elif choice == UNEXPECTED:
+        mark_unexpected(user_id, tx_id)
+    elif current == UNEXPECTED:
+        clear_unexpected(user_id, tx_id)
+    return False
+
+
+def split_lines(user_id: int, tx: Dict[str, Any], categories: List[str], bills: List[str], amounts: List[str],
+                notes: List[str]) -> List[Dict[str, Any]]:
+    """The split lines a form posted, checked: each has an amount above zero
+    and a category (its bill's, when only a bill was picked), and together they
+    come to no more than the transaction. A line left wholly blank is
+    dropped."""
+    lines: List[Dict[str, Any]] = []
+    for index, raw_amount in enumerate(amounts):
+        category = str(categories[index] if index < len(categories) else "").strip()
+        bill = str(bills[index] if index < len(bills) else "").strip()
+        raw_amount = str(raw_amount or "").strip()
+        if not (raw_amount or category or bill):
+            continue
+        try:
+            amount = round(float(raw_amount), 2)
+        except ValueError:
+            raise ValueError("every line needs an amount") from None
+        if amount <= 0:
+            raise ValueError("every line needs an amount")
+        if bill and not bill.isdigit():
+            raise ValueError("bill not found")
+        if not category and bill:
+            found = db.load_bill_by_id(user_id, int(bill))
+            category = str(found["category_id"]) if found and found.get("category_id") else ""
+        if not category.isdigit():
+            raise ValueError("choose a category for each line")
+        lines.append({"category_id": int(category), "bill_id": int(bill) if bill else None, "amount": amount,
+                      "note": str(notes[index] if index < len(notes) else "")})
+    if round(sum(line["amount"] for line in lines), 2) > float(tx["magnitude"]) + 0.005:
+        raise ValueError("the lines add up to more than the transaction")
+    return lines
+
+
+def edit(user_id: int, tx_id: int, category: str, new_category_name: str, bill: str, note: str,
+         transfer: Optional[bool], lines: List[Dict[str, Any]]) -> Optional[str]:
+    """Save the edit form. `transfer` is None where the form has no transfer
+    mark (a card). `lines` are split_lines' (empty takes a split off). Returns
+    the rule worth offering next: "bill" when newly matched to a bill,
+    "category" when given a new category, else None."""
+    tx = _transaction(user_id, tx_id)
+    if transfer is not None:
+        set_transfer(user_id, tx_id, transfer)
+    rule = "bill" if set_bill(user_id, tx_id, bill) else None
+    category = str(category or "").strip()
+    if category and category != str(tx.get("effective_category_id") or ""):
+        if assign_category(user_id, tx_id, category, new_category_name) is not None and rule is None:
+            rule = "category"
+    set_note(user_id, tx_id, note)
+    db.save_transaction_splits(user_id, tx_id, lines)
+    return rule
+
+
+def half(magnitude: float) -> float:
+    """The new line's share when a transaction is first split: half, rounded
+    down to the cent, so the original line keeps any odd cent."""
+    return int(round(magnitude * 100) // 2) / 100
