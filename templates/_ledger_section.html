@@ -36,14 +36,10 @@
 
   {% if run_down %}
   {# The same names as the month summaries: transactions, credits, debits and
-     net, between the balance now and the balance at the window's end. Each
-     card is as wide as what it holds. #}
+     net, then the balance at the window's end; the balance now sits at the far
+     right. Each card is as wide as what it holds. #}
   {% set net = payments - charges %}
   <div class="summary-grid compact-grid ledger-summary">
-    <article class="card compact-card">
-      <h3>current balance</h3>
-      <p class="amount-value {{ 'negative' if current_balance < 0 else '' }}">${{ current_balance|currency }}</p>
-    </article>
     <article class="card compact-card">
       <h3>transactions</h3>
       <p class="amount-value">{{ transaction_count }}</p>
@@ -63,6 +59,10 @@
     <article class="card compact-card">
       <h3>projected balance</h3>
       <p class="amount-value {{ 'negative' if projected_balance < 0 else '' }}">${{ projected_balance|currency }}</p>
+    </article>
+    <article class="card compact-card current-balance-card">
+      <h3>current balance</h3>
+      <p class="amount-value {{ 'negative' if current_balance < 0 else '' }}">${{ current_balance|currency }}</p>
     </article>
   </div>
   {% endif %}
@@ -130,7 +130,9 @@
               <button type="button" class="card-expand-toggle js-card-toggle" data-target="card-detail-{{ loop.index }}" aria-expanded="false" aria-label="show this statement's summary">›</button>
               <a href="{{ stmt.statement_url(row.statement) }}">{{ row.description }}</a>
               <span class="table-pill statement-pill">{{ row.statement.status_label|lower }}</span>
-              {% elif actual %}<span title="{{ row.description }}">{{ row.description }}</span>
+              {# Only what the row can show is sent: about 45 characters fit
+                 before the fade, and the edit form shows it whole. #}
+              {% elif actual %}<span>{{ row.description[:50] }}</span>
               {% else %}<span class="ledger-expected">expected transaction</span>{% endif %}
               {% if row.note %}<span class="ledger-note" title="{{ row.note }}">{{ row.note }}</span>{% endif %}
             </div>

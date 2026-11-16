@@ -63,3 +63,18 @@ def test_the_ledger_summary_cards_keep_to_their_content_from_the_left():
 def test_the_mode_toggle_is_centered_and_its_segments_touch():
     assert re.search(r"justify-self:\s*center", " ".join(rules(".ledger-modes")))
     assert re.search(r"gap:\s*0", " ".join(rules(".ledger-modes")))
+
+
+def test_the_description_box_is_a_fixed_width_so_the_pills_line_up():
+    assert re.search(r"flex:\s*0 1 45ch", " ".join(rules(".ledger-line .ledger-description")))
+
+
+def test_the_description_is_indented_by_the_edit_buttons_space():
+    edge = re.search(r"--ledger-edge:\s*([\d.]+rem)", CSS)
+    assert edge
+    assert re.search(r"padding-left:\s*var\(--ledger-edge\)", " ".join(rules(".ledger-table .ledger-main")))
+    assert re.search(r"width:\s*var\(--ledger-edge\)", " ".join(rules(".ledger-table .row-action-cell")))
+
+
+def test_current_balance_sits_at_the_far_right_of_the_cards():
+    assert re.search(r"margin-left:\s*auto", " ".join(rules(".ledger-summary .current-balance-card")))

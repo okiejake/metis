@@ -2358,6 +2358,9 @@ body.amounts-hidden .amount-sensitive {
   flex: none;
   text-align: left;
 }
+.ledger-summary .current-balance-card {
+  margin-left: auto;
+}
 .filter-accounts {
   border: 0;
   margin: 0;
@@ -2467,12 +2470,21 @@ body.amounts-hidden .amount-sensitive {
 .ledger-table td {
   white-space: nowrap;
 }
+.ledger-table {
+  /* The edit button's space on the right, matched by the description's indent
+     on the left. */
+  --ledger-edge: 3rem;
+}
 .ledger-table td {
   border-bottom: 0;
 }
 .ledger-table .ledger-main {
   width: 100%;
   max-width: 0;
+  padding-left: var(--ledger-edge);
+}
+.ledger-table .row-action-cell {
+  width: var(--ledger-edge);
 }
 .ledger-line {
   display: flex;
@@ -2480,8 +2492,10 @@ body.amounts-hidden .amount-sensitive {
   gap: 0.6rem;
   min-width: 0;
 }
+/* About 45 characters of description, then the fade; the pills start where
+   it ends, so they line up from row to row. */
 .ledger-line .ledger-description {
-  flex: 0 1 auto;
+  flex: 0 1 45ch;
   min-width: 0;
 }
 .ledger-line > .table-pill,

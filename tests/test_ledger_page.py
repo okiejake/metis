@@ -80,8 +80,8 @@ def test_description_then_type_category_and_bill_sit_side_by_side(client, db, us
 
 def test_every_account_has_the_same_summary_cards(client, accounts, month):
     for html in (page(client), page(client, account=accounts["Example Card"])):
-        cards = re.findall(r'<article class="card compact-card">\s*<h3>(.*?)</h3>', html)
-        assert cards == ["current balance", "transactions", "credits", "debits", "net", "projected balance"]
+        cards = re.findall(r'<article class="card compact-card[^"]*">\s*<h3>(.*?)</h3>', html)
+        assert cards == ["transactions", "credits", "debits", "net", "projected balance", "current balance"]
 
 
 def test_the_summary_cards_count_and_total_what_the_month_summaries_do(client, db, user_id, accounts, month):
@@ -167,6 +167,13 @@ def test_an_imported_row_shows_the_bill_it_is_matched_to(client, db, user_id, ac
     reconcile(db, user_id, "bill", bill, gym)
     row = re.search(r"<tr[^>]*>(?:(?!</tr>).)*EXMPL FITNESS 99(?:(?!</tr>).)*</tr>", page(client), re.S).group(0)
     assert text(bill_cell(row)) == ["example", "gym"]
+
+
+def test_a_description_is_sent_only_as_far_as_the_row_shows_it(client, db, user_id, accounts, month):
+    long = "EXAMPLE " + "VERY LONG MERCHANT NAME " * 4
+    checking_import(db, user_id, accounts, TODAY - timedelta(days=9), long, -12.00)
+    html = page(client)
+    assert long[:50] in html and long[:51] not in html
 
 
 def test_a_rows_note_shows_beside_its_description(client, db, user_id, accounts, month):
